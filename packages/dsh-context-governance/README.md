@@ -4,7 +4,7 @@
 
 > 版本：**以 `package.json` 为唯一来源**（本文与代码都不再重复版本号；启动行/审计里的 version 由运行时读取）。
 > 当前进度：**T2–T8 + M1.2 + T2′ 离线完成**——记忆文件与契约、`mem_write`/`mem_query`、压缩适配与保护校验、压缩前固化与回注、`/cg status` 与审计正式化、故障注入/轮转/只读降级、S1–S6 验收场景 + 真实自动/手动压缩双样本回放 + 回注自愈 + 成本归属审计（T8）；M1.2 增加 `capability@apply/@ready`、`tokenMeter` 延迟获取、usage 兜底与 `cost-v1.1` 来源字段；T2′ 增加宿主 `compaction/prune` 观测与 `cost-v1.2` 成本视图（不折叠、不落盘）；**M2 0.2.0 策略层**——四层配置合成（内置/profile/插件/项目 `.cg-policy.json`/会话）、`/cg policy show`、`/cg set` 会话覆盖、`/cg status` 的 `policy`/`policy-invalid`/`pressure` 行、项目文件按不可信输入加固（A+C 口径）；**M2 0.2.1 窗口/校验层**——宿主 `contextPressure.contextWindow` 观察、dynamic native 同源、conservative 校验、`/cg status` 的 `window:` 双显，**本版不触发任何压缩**；**全部测试通过（数量见 `node --test` 输出）**。
-> 真机：已安装（junction 指向源码目录）；最近一次真机验证记录见 `memory/ARTIFACTS.md`，待验收项见 `STATUS.md`（本文不写具体版本/数字）。S3 新会话 header 默认关闭，需用户拍板后再开。
+> 真机：已安装（junction 指向源码目录）；最近一次真机验证记录见 `memory/ARTIFACTS.md`，待验收项见 `STATUS.md`（本文不写具体版本/数字）。**M3 T2（0.3.1）起新会话 header 默认开启**（`/cg header off` 或配置 `memoryHeader.enabled=false` 可关）。
 > 安装方式：`docs/插件安装升级-Runbook.md`（`file:` 声明 + junction + bundle；不用 pnpm）。本机已按该方式安装（junction 指向源码），其它机器按 Runbook 操作。
 
 ## 为什么不是“又一个记忆插件”
@@ -115,9 +115,11 @@ config:
   reinjection:
     maxFailures: 3                    # 连续回注失败阈值（1–20）
   memoryHeader:
-    enabled: false                    # S3：新会话注入偏好/决定 header（opt-in，默认关）
-    maxEntries: 5
-    maxChars: 600
+    enabled: true                     # M3 T2（0.3.1）：新会话 header 默认开；/cg header off 或此键可关
+    maxLines: 8                       # ≤8 行；配额 todo2/progress2/decision2/anchor1/preference1
+    maxChars: 800
+    oldAgeDays: 14                    # >14 天仍注入，标 [Old] 排末尾
+    oldLimit: 30                      # 旧条目上限
   policy:                             # M2 / 0.2.0 策略层
     profile: ""                       # batch | coding | research | review（空 = 不打标）
     windowTokens: 1000000             # 窗口；native 上限据此计算
