@@ -263,3 +263,12 @@ P2-1（扫描）与 P3-2/P3-3（cleanup）修复有效；6 条降级口径未漂
 - 两条都是**示意串被判成待复核**，属**白名单未覆盖**，**不是真实凭据**；扫描器只取命中串前 4 字符 + `***` 展示，所以明细里看起来像 `pass***`。
 - 处理：**不改证据文件**；`--strict` 只在 blocker > 0 时退出 1（`scripts/compliance-scan.mjs:231`），review 不阻断发布；发布前人工确认这两行即可。
 - backlog（可选）：对“列举凭据模式的文档行”或“无凭据确认”这类自证句加窄白名单；或在文档里用代码块/转义分隔，避免形似赋值。
+
+### 9.5 `mem_write` 的 expire 不写 `audit.jsonl`（审计不是全覆盖）
+
+- **代码核**：`src/memory/*.js` 里**没有任何 audit 写入**（grep 0 处）；`MemoryStore.expire()` 只改条目状态并落 `topics/*.md`，`audit.jsonl` 没有对应行；`create/update/supersede` 同理。
+- `audit.jsonl` 覆盖的是**插件运行事件**（压缩、保护、回注、header 注入等）与**脚本动作**（`memory-cleanup`），**不覆盖逐条记忆的状态变更**。
+- **影响**：不能拿 audit 判断“某条记忆有没有被清理/过期”——会得出“没清理过”的错误结论。
+- **正确证据口径**：清理证据 = `MEMORY.md` 索引计数（`active/proposed/expired`）+ `mem_query` 查到的条目状态；audit 只对 `memory-cleanup` 这类脚本动作有行。
+- **发布说明口径**：「审计不是全覆盖：它记录插件运行事件与清理脚本动作，不记录逐条记忆的状态变更。」
+- 实测（当前 live）：`active=10`（全部 fact）、`proposed=21`、`expired=12`、`superseded=0`；`buildMemoryHeader=null`；`header-injected` 共 **8** 条（5 旧 + 3 T3）——与 T3 收口「13 → 10、expired 12（窗口 9 + T3 3）」一致。
