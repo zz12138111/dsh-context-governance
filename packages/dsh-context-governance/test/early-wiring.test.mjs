@@ -70,7 +70,9 @@ test('0.2.2 接线：armed=true + 压力在位 → early-decision + early-forced
   };
   const { ctx } = makeCtx({ engine });
   const audit = makeAudit();
-  const wiring = wireEarlyCompaction({ ctx, getGuard: () => guard, getPolicy: () => POLICY, audit, getArmed: () => true, now: () => 0 });
+  const logs = [];
+  const logger = { info: (line) => logs.push(['info', line]), warn: (line) => logs.push(['warn', line]) };
+  const wiring = wireEarlyCompaction({ ctx, getGuard: () => guard, getPolicy: () => POLICY, audit, logger, getArmed: () => true, now: () => 0 });
   await wiring.check({ id: 's1' });
   assert.equal(engine.calls, 1);
   assert.deepEqual(audit.entries.map((entry) => entry.event), ['early-decision', 'early-forced']);
@@ -83,6 +85,10 @@ test('0.2.2 接线：armed=true + 压力在位 → early-decision + early-forced
   assert.equal(forced.delayMs, EARLY_DELAY_MS);
   assert.equal(wiring.getLast().event, 'early-forced');
   assert.equal(wiring.getLast().accepted, true);
+  const info = logs.find(([level, line]) => level === 'info' && line.includes('early compaction forced'));
+  assert.ok(info, 'T2 首触提示：必须写一行 logger info');
+  assert.match(info[1], /effective=0\.\d{3} threshold=0\.\d{2} compactionId=new protection=failed/);
+  assert.equal(info[1].includes('latest-user-message'), false, 'logger 不得带失败项/正文');
 });
 
 test('0.2.2 接线：accepted 但无新报告 → protection=null（不得回退 ok）', async () => {

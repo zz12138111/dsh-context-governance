@@ -175,14 +175,22 @@ export function wireEarlyCompaction(options = {}) {
         ? fresh.failures.map((failure) => failure.name)
         : [],
       reinjected: result.accepted === true ? (fresh?.reinjected ?? null) : null,
+      compactionId: fresh?.compactionId ?? null,
       reason: result.reason ?? null,
       delayMs: EARLY_DELAY_MS,
       effective,
       threshold: at,
       native,
     };
-    if (result.accepted === true) audit?.append?.('early-forced', fields);
-    else if (result.reason === 'busy') audit?.append?.('early-aborted', fields);
+    if (result.accepted === true) {
+      audit?.append?.('early-forced', fields);
+      // T2 首触提示（不做弹窗）：logger 一行 info，只含数值/来源，不含正文。
+      logger?.info?.(
+        `[context-governance] early compaction forced effective=${Number(effective).toFixed(3)} ` +
+        `threshold=${Number(at).toFixed(2)} compactionId=${String(fresh?.compactionId ?? '')} ` +
+        `protection=${String(fields.protection ?? 'unknown')}`,
+      );
+    } else if (result.reason === 'busy') audit?.append?.('early-aborted', fields);
     else audit?.append?.('early-failed', fields);
     record({
       event: result.accepted === true ? 'early-forced' : (result.reason === 'busy' ? 'early-aborted' : 'early-failed'),
