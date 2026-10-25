@@ -114,23 +114,37 @@ node --test "test/*.test.mjs"          # 290/290 pass
 - **P3-1**：`runMaintenance` 的同步 busy 文案 `already has active work` 仍未被 `isBusyCompactionError` 识别 → 会映射 `failed` 而非 `busy`。
 - **P3-2**：`getEngine()` 仍在 `try` 外，访问器抛错会外泄给调用方。
 
-## 8. 下一轮复核清单（0.2.2 范围内，00 已定 2026-10-26）
+## 8. 下一轮复核清单（0.2.2，按开发四步，00 已放行 2026-10-26）
 
-> 用途：0.2.2 实现交付后，逐项给“通过/不通过”；不替用户判“能不能开 armed”。
+> 用途：开发四步交付后逐项给“通过/不通过”；不替用户判“能不能开 armed”。
 >
-> **复核基线（哈希链，00 2026-10-26 对齐）**：`c143793` → `a35a8a1`（7 files）→ `94b17a3`（2）→ `c470e89`（1）→ `5694028`（1）。四笔全在 `analysis/`，产品代码仍为 `c9807b6`。此后开发另有 `b707f3d`/`e79f629`（STATUS）、`25268bc`（P3-1 修复）——按本清单验。
+> **复核基线（哈希链，00 对齐）**：`c143793` → `a35a8a1`（7）→ `94b17a3`（2）→ `c470e89`（1）→ `5694028`（1），四笔全在 `analysis/`。此后 `b707f3d`/`e79f629`（STATUS）、**`25268bc`（P3-1 修复：`early.js` + test）**——产品代码基线已不是 `c9807b6`。
+>
+> **边界（00 定）**：四步全程 `armed=false`；**第 5 步接线必须等这四项复核通过后另报**，复核结论里要明确确认这条。
 
-| # | 项 | 复核判据 | 证据要求 |
+### 8.1 四步对照
+
+| 步 | 开发交付 | 复核判据 | 证据要求 |
 |---|---|---|---|
-| 1 | **P3-1 busy 识别** | 对 G2-B 真实文案（`name=ManualCompactionError`、`code='busy'`、message=`manual compaction requires an idle agent with no waking queued work`）`isBusyCompactionError` 返回 true；`attempt` → `reason=busy`（不是 `failed`） | 单测 fixture 用原文案；根因 = `code==='BUSY'` 大小写不匹配（真实小写 `busy`） |
-| 2 | **ok 三字段口径** | `early-forced` 审计含 `compaction=committed\|skipped\|failed` + `protection=ok\|failed` + `failures[]` + `reinjected`；stats 拆 `compactionFailures`/`protectionFailures`；status 用 `protection=` 或 legend；`attempt()` 返回改 `accepted` | 审计样例 + 单测：protection failed 且回注成功 → 仍算可用、不重试 |
-| 3 | **保护失败日志落点** | `runtime.js:1112` 的 “compaction protection failed” 必须出现在可检索日志（governance.log 或宿主 logger 明确落点），armed 后能观测 | 隔离实例复现一次 protection failed，给出日志文件 + 行号 |
-| 4 | **audit 增记注入量** | `header-injected` 增 **`injected=0\|1`**（或 `messagesBefore/After`）+ header hash；**不要只记原始数组长度**——`header.js` 是 `[header, ...messages]`，总长 = 基线 + 1（`t7-scenarios` 测试：基线 1 条 system → 总长 2）；T3 记到 1 是因为当时基线为空 | 真机或单测原始证据，不再靠自述；`count=N` 仍表示条目行数 |
+| ① P3-1 | `String(code).toLowerCase()==='busy'` + `ManualCompactionError && /\bidle\b/i` | 对 G2-B 原文案（`code='busy'`、idle-required message）→ `true`；`attempt` → `reason=busy` | 单测 fixture 用原文；同时覆盖同步文案 `already has active work`（旧路径，别漏） |
+| ② 契约变更 | `runtime.js` stats 拆 `compactionFailures`/`protectionFailures`；`cg-status.js` 出 `protection=`+legend；`early.js` 返回值 `ok`→`accepted` | 见 8.2 三条硬验证（调用点全改 / 不计入压缩失败 / 不触发升级） | **必须用单测证明**，不接受“只看了代码” |
+| ③ logger 落点 | 定性 `#logger` 是否宿主 `ctx.logger`；保护失败是否同时写 `diagnostics.logFile` | 给出**定性结论**：若 `#logger`=宿主 logger，则“不进 governance.log”是**设计**还是**缺陷**，落文档 | 对照开发 commit 的「原来 X → 现在 Y」；隔离实例触发一次 protection failed，给文件+行 |
+| ④ audit 增记 | `messagesLength` + `textHash`（sha256 前 8） | `messagesLength` 语义 = 注入量（0/1），不是数组总长（`[header, ...messages]` → 总长=基线+1）；`textHash` 不可反推、正文未进其它字段 | 单测固定输入断言 hash；审 audit 全部字段无正文；给可公开性结论（见 8.3） |
 
-**三条验收判据（00 采纳）**：
+### 8.2 第 2 步的三条硬验证（防“看着分了、实际还在升级”）
 
-1. P3-1 fixture 用 G2-B 真实文案；
-2. 单测覆盖“保护失败 + 回注成功 → 仍算可用、不重试”；
-3. 文案不得把 protection 失败渲染成“压缩失败”。
+1. **调用点全改**：`grep -rn "\.ok\b" packages/dsh-context-governance/src` + 所有 `attempt(` 调用点（含测试）；漏一处 = 静默 `undefined`。单测断言返回对象只有 `accepted`，且全量 `node --test` 全绿。
+2. **`protectionFailures` 真不折算压缩失败**：构造 protection failed，断言 `stats.compactionFailures` **不变**、`stats.protectionFailures` +1；若保留旧 `stats.failures`，必须明确它不再被压缩路径使用。
+3. **`protection=failed` 不触发重试/关开关**：用 spy 断言 `compactNow` 只调一次、`armed` 保持 `true`、无 backoff/disable 调用；再补一条“`compaction=failed` 才升级”的反向用例。
 
-**复核时同时确认**：`armed` 仍未打开（开关归用户决策）；P3-1 未修完不得 armed；0.2.2 交付记录里 `ok=false` 的语义与本节一致。
+### 8.3 第 4 步 `textHash` 的可公开性判断
+
+- sha256 前 8 位 = **32 bit**：不可反推原文，但**可作“确认”**——若 header 文本来自低熵记忆标题，持有候选文本者可验证猜测。发布物若要公开 audit，建议**加盐/HMAC** 或明确“hash 仅内部去重，不随发布物公开”。
+- 需确认：audit 记录里除 `textHash` 外无 header 正文、无 `header.text`、无条目标题拼接；`messagesLength` 只记数量。
+- 碰撞：32 bit 对“同会话内去重”够用，不应用于全局唯一标识。
+
+### 8.4 已有判据（沿用）
+
+**三条验收判据（00 采纳）**：① P3-1 fixture 用 G2-B 真实文案；② 单测覆盖“保护失败 + 回注成功 → 仍算可用、不重试”；③ 文案不得把 protection 失败渲染成“压缩失败”。
+
+**复核时同时确认**：`armed=false` 全程成立；第 5 步未开；0.2.2 交付记录里 `ok=false` 语义与本节一致。
