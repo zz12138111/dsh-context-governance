@@ -1,6 +1,6 @@
 /**
  * M1.2（REQ-20261025-03）：能力探测双行 + tokenMeter 延迟获取 + usage 兜底 +
- * cost-v1.1 来源字段 + /cg status 成本行。
+ * cost-v1.1 来源字段（v1.2 增 prune） + /cg status 成本行。
  *
  * 只读单测：不改宿主、不写真实记忆；所有会话为合成事件。
  */
@@ -158,6 +158,21 @@ test('M1.2 tokenMeter：无 inject 时按需读取也能拿到晚注册服务', 
   });
 });
 
+test('P3-1 ctx.inject 返回 Fiber：stop 调 fiber.dispose()，不把返回值当函数调用', async () => {
+  await withStore(async (store) => {
+    const ctx = makeCtx();
+    let disposed = 0;
+    ctx.inject = (_names, callback) => {
+      callback({ tokenMeter: meterFor(10) });
+      return { dispose() { disposed += 1; return Promise.resolve(); } };
+    };
+    const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.3', store, logger: ctx.logger });
+    guard.start();
+    guard.stop();
+    assert.equal(disposed, 1);
+  });
+});
+
 test('M1.2 usage 兜底：meters 缺失时 tokensBefore/After 来自 assistant/message.usage', async () => {
   await withStore(async (store) => {
     const ctx = makeCtx();
@@ -203,7 +218,10 @@ test('M1.2 两路都缺：null + none，不伪造；stop 冲刷未等到 after �
     assert.equal(cost.tokensAfter, null);
     assert.equal(cost.tokensBeforeSource, 'none');
     assert.equal(cost.tokensAfterSource, 'none');
-    assert.equal(cost.auditVersion, 'cost-v1.1');
+    assert.equal(cost.auditVersion, 'cost-v1.2');
+    assert.equal(cost.tokensPruned, null);
+    assert.equal(cost.pruneCount, 0);
+    assert.deepEqual(cost.pruneTools, []);
   });
 });
 

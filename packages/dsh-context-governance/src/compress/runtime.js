@@ -126,10 +126,14 @@ export class CompressionGuard {
   #protectionSuspended = false;
   #skipProtectionThisCycle = false;
   #tokenMeter = null;
-  #meterDispose = null;
+  #meterFiber = null;
   #lastUsage = new Map();
   #pendingCosts = new Map();
   #lastCost = null;
+  #toolNames = new Map();
+  #pendingPrune = null;
+  #unassignedPrunes = new Map();
+  #pruneSeen = new Set();
   #readyFired = false;
   #onFirstEvent = null;
   #projectName = '';
@@ -339,13 +343,22 @@ export class CompressionGuard {
     this.#unsubscribe = null;
     this.#started = false;
     try {
-      this.#meterDispose?.();
+      // ctx.inject 返回 cordis Fiber（不是 dispose 函数）；调用 fiber.dispose()，
+      // 不是把返回值当函数调用。父 fiber 仍兜底。
+      const fiber = this.#meterFiber;
+      if (fiber !== null && typeof fiber?.dispose === 'function') {
+        const result = fiber.dispose();
+        if (result !== null && typeof result?.catch === 'function') void result.catch(() => {});
+      }
     } catch {
       /* meter 注入清理失败不阻断卸载 */
     }
-    this.#meterDispose = null;
+    this.#meterFiber = null;
     // M1.2：还没等到 after usage 的成本行，用 null + none 显式落盘，不静默丢。
     this.#flushPendingCosts();
+    // T2′：未等到替换/未归属周期的 prune，按 unknown + outside 落盘。
+    if (this.#pendingPrune !== null) this.#completePrune(null);
+    this.#flushAllUnassignedOutside();
     // T6：卸载时还没 end 的周期显式留痕（不静默丢弃）。
     for (const [pendingId, pendingState] of this.#pending) {
       this.#stats.abandonedCycles += 1;
@@ -478,7 +491,7 @@ export class CompressionGuard {
   #tryInjectTokenMeter() {
     if (typeof this.#ctx?.inject !== 'function') return;
     try {
-      this.#meterDispose = this.#ctx.inject(['tokenMeter'], (scope) => {
+      this.#meterFiber = this.#ctx.inject(['tokenMeter'], (scope) => {
         try {
           const meter = scope?.tokenMeter
             ?? (typeof scope?.get === 'function' ? scope.get('tokenMeter') : null)
@@ -489,7 +502,7 @@ export class CompressionGuard {
         }
       });
     } catch {
-      this.#meterDispose = null;
+      this.#meterFiber = null;
     }
   }
 
@@ -516,6 +529,142 @@ export class CompressionGuard {
   #sessionKey(session) {
     const id = session?.id ?? session?.header?.id;
     return typeof id === 'string' && id !== '' ? id : null;
+  }
+
+  #pruneSessionKey(session) {
+    return this.#sessionKey(session) ?? 'unknown';
+  }
+
+  /** 宿主 pruner 的替换事件是否引用了当前等待中的 prune 原事件。 */
+  #isPruneReplacement(event, pending) {
+    if (pending === null || event?.type !== 'tool/result') return false;
+    const source = Array.isArray(event.sourceEventSeqs) ? event.sourceEventSeqs : [];
+    if (source.length === 0) return false;
+    const { shadowedStart, shadowedEnd } = pending.obs;
+    return (shadowedStart !== null && source.includes(shadowedStart))
+      || (shadowedEnd !== null && source.includes(shadowedEnd));
+  }
+
+  #findActiveCycle(sessionId) {
+    let found = null;
+    for (const state of this.#pending.values()) {
+      if (state.sessionId === sessionId) found = state;
+    }
+    return found;
+  }
+
+  #auditPrune(observation, cycle) {
+    this.#auditEvent('prune-observed', {
+      sessionId: observation.sessionId,
+      seq: observation.seq,
+      shadowedStart: observation.shadowedStart,
+      shadowedEnd: observation.shadowedEnd,
+      shadowedTokenCount: observation.shadowedTokenCount,
+      tool: observation.tool,
+      replacementSeq: observation.replacementSeq,
+      cycle,
+    });
+  }
+
+  /** 上一条 prune 的替换事件到了/没来：补齐元数据并按周期归属落审计。 */
+  #completePrune(replacementEvent) {
+    const pending = this.#pendingPrune;
+    if (pending === null) return;
+    this.#pendingPrune = null;
+    const { obs, session } = pending;
+    if (replacementEvent !== null) {
+      obs.replacementSeq = replacementEvent.seq ?? null;
+      // 只读元数据 callId，不读工具结果正文。
+      const callId = replacementEvent?.data?.message?.source?.callId
+        ?? replacementEvent?.data?.message?.toolCallId
+        ?? null;
+      if (typeof callId === 'string' && callId !== '') {
+        obs.tool = this.#toolNames.get(callId) ?? 'unknown';
+      }
+    }
+    const active = this.#findActiveCycle(obs.sessionId);
+    if (active !== null && active.summaryEvent === null) {
+      obs.cycle = 'current';
+      if (!Array.isArray(active.prunes)) active.prunes = [];
+      active.prunes.push(obs);
+      this.#auditPrune(obs, 'current');
+    } else if (active !== null) {
+      // 已经过 summary，属于“本次 summary 之后”，只进会话累计。
+      obs.cycle = 'outside';
+      this.#auditPrune(obs, 'outside');
+    } else {
+      // prune 发生在 compaction/start 之前（宿主常态）：先挂起，start/summary 时归 current。
+      const key = obs.sessionId ?? 'unknown';
+      if (!this.#unassignedPrunes.has(key)) this.#unassignedPrunes.set(key, []);
+      this.#unassignedPrunes.get(key).push(obs);
+    }
+  }
+
+  #attachPrunesToState(state, session) {
+    const key = this.#pruneSessionKey(session);
+    const list = this.#unassignedPrunes.get(key);
+    if (list === undefined) return;
+    this.#unassignedPrunes.delete(key);
+    if (!Array.isArray(state.prunes)) state.prunes = [];
+    for (const obs of list) {
+      obs.cycle = 'current';
+      state.prunes.push(obs);
+      this.#auditPrune(obs, 'current');
+    }
+  }
+
+  #flushUnassignedOutside(session) {
+    const key = this.#pruneSessionKey(session);
+    const list = this.#unassignedPrunes.get(key);
+    if (list === undefined) return;
+    this.#unassignedPrunes.delete(key);
+    for (const obs of list) {
+      obs.cycle = 'outside';
+      this.#auditPrune(obs, 'outside');
+    }
+  }
+
+  #flushAllUnassignedOutside() {
+    for (const [key, list] of [...this.#unassignedPrunes.entries()]) {
+      this.#unassignedPrunes.delete(key);
+      for (const obs of list) {
+        obs.cycle = 'outside';
+        this.#auditPrune(obs, 'outside');
+      }
+    }
+  }
+
+  #observePrune(session, event) {
+    // 上一条 prune 还没等到替换事件：先按 unknown 落盘，再开始新的一条。
+    if (this.#pendingPrune !== null) this.#completePrune(null);
+    const data = event?.data ?? {};
+    const range = data.shadowedRange;
+    let shadowedStart = Number.isFinite(range?.start) ? range.start : null;
+    let shadowedEnd = Number.isFinite(range?.end) ? range.end : null;
+    if (shadowedStart === null && Array.isArray(data.shadowedSeqs)) {
+      const seqs = data.shadowedSeqs.filter((seq) => Number.isFinite(seq));
+      if (seqs.length > 0) {
+        shadowedStart = Math.min(...seqs);
+        shadowedEnd = Math.max(...seqs);
+      }
+    }
+    const sessionId = this.#sessionKey(session);
+    const dedupeKey = `${sessionId ?? 'unknown'}:${shadowedStart ?? 'n'}:${shadowedEnd ?? 'n'}:${shadowedStart === null ? event?.seq ?? 'n' : ''}`;
+    if (this.#pruneSeen.has(dedupeKey)) return;
+    this.#pruneSeen.add(dedupeKey);
+    this.#pendingPrune = {
+      obs: {
+        sessionId,
+        seq: event?.seq ?? null,
+        shadowedStart,
+        shadowedEnd,
+        shadowedTokenCount: Number.isFinite(data.shadowedTokenCount) ? data.shadowedTokenCount : null,
+        tool: 'unknown',
+        replacementSeq: null,
+        cycle: null,
+      },
+      session,
+    };
   }
 
   /** 从 assistant/message 的 usage 取上下文侧用量：input + cacheRead + cacheWrite。 */
@@ -631,6 +780,23 @@ export class CompressionGuard {
       && typeof cost.backendUsage === 'object'
       && Object.keys(cost.backendUsage).length > 0;
     const governanceEstimated = state.reinjection?.status === 'injected';
+    const prunes = Array.isArray(state.prunes) ? state.prunes : [];
+    let prunedSum = 0;
+    let prunedMeasured = 0;
+    const pruneToolCounts = new Map();
+    for (const observation of prunes) {
+      if (Number.isFinite(observation.shadowedTokenCount)) {
+        prunedSum += observation.shadowedTokenCount;
+        prunedMeasured += 1;
+      }
+      const tool = typeof observation.tool === 'string' && observation.tool !== '' ? observation.tool : 'unknown';
+      pruneToolCounts.set(tool, (pruneToolCounts.get(tool) ?? 0) + 1);
+    }
+    const tokensPruned = prunedMeasured > 0 ? prunedSum : null;
+    const pruneTools = [...pruneToolCounts.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .slice(0, 5)
+      .map(([name, count]) => `${name}:${count}`);
     const occurredAt = cost.occurredAt ?? this.#now().toISOString();
     this.#auditEvent('compaction-cost', {
       sessionId: state.sessionId,
@@ -652,10 +818,13 @@ export class CompressionGuard {
       injectedEntries: cost.injectedEntries,
       tokensDropped: cost.tokensDropped,
       backendUsage: cost.backendUsage,
+      tokensPruned,
+      pruneCount: prunes.length,
+      pruneTools,
       backendCostSource: backendMeasured ? 'measured' : 'unknown',
       governanceCostSource: governanceEstimated ? 'estimated' : 'unknown',
       estimateMethod: governanceEstimated ? 'chars/4' : 'none',
-      auditVersion: 'cost-v1.1',
+      auditVersion: 'cost-v1.2',
     });
     this.#lastCost = {
       sessionId: state.sessionId,
@@ -666,6 +835,9 @@ export class CompressionGuard {
       tokensBeforeSource: cost.tokensBeforeSource,
       tokensAfterSource: cost.tokensAfterSource,
       occurredAt,
+      tokensPruned,
+      pruneCount: prunes.length,
+      pruneTools,
     };
   }
 
@@ -1055,8 +1227,27 @@ export class CompressionGuard {
         return;
       }
       this.#stats.events += 1;
+      // T2′：替换事件必须紧跟在 compaction/prune 之后；若下一条不是它，
+      // 先把尚未完成的那条按 unknown 落盘，再处理当前事件。
+      const eventSessionId = this.#sessionKey(session);
+      if (this.#pendingPrune !== null && this.#pendingPrune.obs.sessionId === eventSessionId) {
+        if (this.#isPruneReplacement(event, this.#pendingPrune)) this.#completePrune(event);
+        else this.#completePrune(null);
+      }
       const id = event?.data?.compactionId ?? null;
       switch (event?.type) {
+        case 'tool/call': {
+          const callId = event?.data?.callId;
+          const toolName = event?.data?.name;
+          if (typeof callId === 'string' && callId !== '' && typeof toolName === 'string' && toolName !== '') {
+            this.#toolNames.set(callId, toolName);
+          }
+          return;
+        }
+        case 'compaction/prune': {
+          this.#observePrune(session, event);
+          return;
+        }
         case 'assistant/message': {
           this.#recordUsage(session, event);
           this.#captureCostAfter(session, event);
@@ -1143,9 +1334,11 @@ export class CompressionGuard {
             protectionWrite: 'not-attempted',
             reinjectionScheduled: false,
             report: null,
+            prunes: [],
             cost: this.#newCost(event.data?.sourceCommandId != null ? 'manual' : 'auto', session),
           };
           this.#pending.set(id, state);
+          this.#attachPrunesToState(state, session);
           this.#protectBeforeSummary(session, state, id);
           return;
         }
@@ -1171,9 +1364,11 @@ export class CompressionGuard {
               protectionWrite: 'late-start',
               reinjectionScheduled: false,
               report: null,
+              prunes: [],
               cost: this.#newCost(event.data?.sourceCommandId != null ? 'manual' : 'auto', session),
             };
             this.#pending.set(id, state);
+            this.#attachPrunesToState(state, session);
             this.#stats.lateSnapshots += 1;
             this.#auditEvent('protection-write-skipped', {
               sessionId: state.sessionId,
@@ -1314,6 +1509,11 @@ export class CompressionGuard {
               this.#logger?.warn?.(`[context-governance] cost audit failed: ${String(error?.message ?? error)}`);
             }
           });
+          return;
+        }
+        case 'turn/end': {
+          // 到回合边界仍没有对应 compaction → 这些 prune 只进会话累计。
+          this.#flushUnassignedOutside(session);
           return;
         }
         default:

@@ -8,6 +8,20 @@
 export const CG_COMMAND_NAME = 'cg';
 export const CG_COMMAND_DEFINITION_ID = 'dsh-context-governance/cg';
 
+function costLine(status) {
+  const cost = status?.lastCost ?? null;
+  if (cost === null) return 'last-cost: none';
+  const pruned = cost.tokensPruned === null || cost.tokensPruned === undefined
+    ? (cost.pruneCount > 0 ? 'unknown' : '0')
+    : cost.tokensPruned;
+  const tools = Array.isArray(cost.pruneTools) && cost.pruneTools.length > 0
+    ? cost.pruneTools.join(',')
+    : '-';
+  return `last-cost: before=${cost.tokensBefore ?? '-'}(${cost.tokensBeforeSource ?? 'none'}) ` +
+    `after=${cost.tokensAfter ?? '-'}(${cost.tokensAfterSource ?? 'none'}) ` +
+    `trigger=${cost.trigger ?? '-'} pruned=${pruned} tools=${tools}`;
+}
+
 function statusText({ store, guard, audit, now }) {
   const lines = [];
   const status = guard?.status ?? null;
@@ -59,15 +73,7 @@ function statusText({ store, guard, audit, now }) {
       ? `suspended(${status.protection.reinjectionFailureStreak ?? 0}/${status.protection.maxReinjectionFailures ?? '-'})`
       : `enabled(streak=${status.protection.reinjectionFailureStreak ?? 0},maxFailures=${status.protection.maxReinjectionFailures ?? '-'})`;
     const cost = status.lastCost ?? null;
-    if (cost === null) {
-      lines.push('last-cost: none');
-    } else {
-      lines.push(
-        `last-cost: before=${cost.tokensBefore ?? '-'}(${cost.tokensBeforeSource ?? 'none'}) ` +
-        `after=${cost.tokensAfter ?? '-'}(${cost.tokensAfterSource ?? 'none'}) ` +
-        `trigger=${cost.trigger ?? '-'}`,
-      );
-    }
+    lines.push(cost === null ? 'last-cost: none' : costLine(status));
     lines.push(
       `protection: writes=${status.stats.protectionWrites} writeFailures=${status.stats.protectionWriteFailures} ` +
       `reinjections=${status.stats.reinjections} injectionFailures=${status.stats.reinjectionFailures} ` +
@@ -126,14 +132,27 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
   return {
     definitionId: CG_COMMAND_DEFINITION_ID,
     name: CG_COMMAND_NAME,
-    description: '上下文治理状态：后端/能力、记忆、上次压缩与回注、写盘 p50/p95、审计',
-    input: { hint: 'status' },
+    description: '上下文治理状态：后端/能力、记忆、上次压缩与回注、prune 成本、写盘 p50/p95、审计',
+    input: { hint: 'status | last-cost' },
     handler: async (invocation = {}) => {
       const raw = String(invocation.rawInput ?? '').trim();
+      if (raw === 'last-cost') {
+        try {
+          return {
+            kind: 'success',
+            text: ['context-governance last-cost', costLine(currentGuard()?.status ?? null)].join('\n'),
+          };
+        } catch (error) {
+          return {
+            kind: 'error',
+            text: `[context-governance] status failed: ${String(error?.message ?? error).slice(0, 300)}`,
+          };
+        }
+      }
       if (raw !== '' && raw !== 'status') {
         return {
           kind: 'error',
-          text: 'Usage: /cg status   (未指定参数时等价于 /cg status)',
+          text: 'Usage: /cg status [last-cost]   (未指定参数时等价于 /cg status)',
         };
       }
       try {

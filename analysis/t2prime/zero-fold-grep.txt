@@ -1,0 +1,2 @@
+command: Get-ChildItem packages/dsh-context-governance -Recurse -File | Select-String -Pattern 'cg-fold|fold\.|spill|cg_read|\bfold\b' result: 0 match(es)
+no matches (生产代码零折叠)

@@ -1,0 +1,18 @@
+context-governance status
+time: 2026-10-25T12:27:45.721Z
+compression: mode=observe-only adapter=unknown perception=event event-api=on events=7 summary=readable/five-section host=0.2.1-rc.3 backend=unknown
+capabilities: control=unknown hooks=best-effort/event protectionRole=validator
+degraded: none
+conflicts: unknown-provider(warning), self-check-failed(error), backend-version-unverified(warning)
+write-latency: n=0 p50=- p95=- max=-
+last-compaction: id=cmp-samp manual=false ok=false shadowed=3 checkpoint=102 failures=tool-pairing
+last-reinjection: not-recorded
+last-cost: before=30(tokenMeter) after=20(tokenMeter) trigger=auto pruned=4797 tools=read:1
+protection: writes=0 writeFailures=0 reinjections=0 injectionFailures=0 pendingJournals=0 reinjection=enabled(streak=0,maxFailures=3)
+scope: project=- only-project=off capture-title=on ignored-foreign=0/0 unattributed=0
+memory: project=sample-project root=C:\Users\19091\AppData\Local\Temp\cg-mem-C0BLNx active=0 proposed=0 total=0 pendingJournals=0
+audit: file=C:\Users\19091\AppData\Local\Temp\cg-mem-C0BLNx\audit.jsonl max=8388608 size=1105 rotations=0 recentFailures=none (this-process)
+
+--- /cg status last-cost ---
+context-governance last-cost
+last-cost: before=30(tokenMeter) after=20(tokenMeter) trigger=auto pruned=4797 tools=read:1

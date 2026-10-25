@@ -211,3 +211,10 @@
 - 选择：能力探测 apply 记 `capability@apply`、首个会话事件后记 `capability@ready`（诊断行 + audit，只记类型）；`tokenMeter` 不加硬 inject，`ctx.inject(['tokenMeter'], cb)` 可选注入 + 按需 `ctx.tokenMeter ?? ctx.get('tokenMeter')`（成功才缓存）；`assistant/message.usage` 按会话缓存，`tokensBefore/After` 优先 meter、退回 usage、全缺 `null`+`none`；新增 `tokensBeforeSource`/`tokensAfterSource`/`tokensBeforeParts`/`tokensAfterParts`，`auditVersion=cost-v1.1`，只增字段；`/cg status` 显示 `last-cost`。
 - 影响：真机重启后应能给出非 null 成本水位与来源；`ctx.compaction` 结论为“可获取（ready 时）”，不改压缩后端/回注；两路都缺仍不伪造。
 - 关联：`src/capabilities.js`、`src/diagnostics.js`、`src/audit.js`、`src/index.js`、`src/compress/runtime.js`、`src/commands/cg-status.js`、`test/m1.2-cost.test.mjs`、`test/t8-cost.test.mjs`、`docs/T8-回注自愈与成本归属.md`；状态：active。
+
+## DEC-PLUGIN-20261025-29 [tech] T2′：只观测宿主 prune，不折叠/spill；cost-v1.2
+
+- 背景：用户拍板 T2=A（收口）——宿主 pruner 已在压缩点覆盖全部 >8k，白名单可折上限约 15.3%，`pwsh`+`read` 占 71.0% 且不折；早折净收益未证。
+- 选择：生产代码不折/不写 spill/不提供 fold 开关；只读 `compaction/prune` + 紧随替换 `tool/result`，写 `prune-observed`（工具名按 `callId` 反查 `tool/call`，查不到 `unknown`；同 range 去重；`cycle=current/outside`）；`compaction-cost` 增 `tokensPruned`（measured，无 prune 为 null）/`pruneCount`/`pruneTools`（top5），`auditVersion=cost-v1.2`；`/cg status` 与 `last-cost` 显示 `pruned`/`tools`。
+- 影响：只增加可见性，不改模型可见内容；无 pruner 时 `pruneCount=0` + `tokensPruned=null`，不伪造；P3-1 改为 `fiber.dispose()`；P3-6 读方按 `cost-v1` 前缀匹配。
+- 关联：`src/compress/runtime.js`、`src/audit.js`、`src/commands/cg-status.js`、`test/prune-observed.test.mjs`、`docs/T5-状态命令与审计.md`、`docs/T8-回注自愈与成本归属.md` §7；状态：active。
