@@ -78,6 +78,8 @@ export const AUDIT_FIELD_WHITELIST = Object.freeze({
   backendUsage: 'usage',
   backendCostSource: 'text',
   backendInferred: 'boolean',
+  backendKind: 'text',
+  backendLabel: 'text',
   governanceCostSource: 'text',
   estimateMethod: 'text',
   auditVersion: 'text',

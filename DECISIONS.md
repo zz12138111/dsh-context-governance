@@ -246,3 +246,10 @@
 - 选择：`inferBackendFromStyles` 按 `classifySummaryText` 形态推断（free-form→host-basic、five-section→context-zip、混合→mixed/unverified、无观察→unknown），**只进展示/归因**：`/cg status` 显示 `inferred=…`，新增 `adapter-inferred` 审计；`compaction-cost` 仅在实测 kind 为 `none/unknown` 时用推断 label，新增 `backendInferred`，`auditVersion=cost-v1.3`（只增字段）。
 - 影响：功能路径（保护/回注/降级/成本计算）不读推断（单测「相反推断下选择器输出不变」）；迁移真实 kind 已知时不覆盖（保持 measured）；隔离实例复验 `host-basic (inferred)`。
 - 关联：`src/compress/adapters.js`、`src/compress/runtime.js`、`src/commands/cg-status.js`、`src/audit.js`、`test/m1.3-inference.test.mjs`、`docs/T3`/`T5`/`T8`、`analysis/req-20261025-06/`；状态：active。
+
+## DEC-PLUGIN-20261025-34 [tech] 0.1.16：控制字符闸 + cost 字段拆分（cost-v1.4）
+
+- 背景：0.1.15 复核 P3 —— `README.md` 含 0x08/0x07（`\b`/`\a` 被写入路径转义）；`compaction-cost.backend` 在 0.1.15 被写成展示串（`host-basic (inferred)`），破坏枚举语义。
+- 选择：清 README 控制字符并加防复发测试（包内 `.md/.js/.mjs/.json/.yml` 禁 C0/DEL，命中列文件+偏移；自证注入→fail）；`compaction-cost` 拆 `backendKind`（枚举，与 `backend` 同值）+ `backendLabel`（展示串）+ `backendInferred`（仅实测 kind 为 none/unknown 且推断补位时 true，mixed 也算补位）；`backend` 恢复只写枚举；`auditVersion=cost-v1.4`（只增字段，`backend` 语义回退）；`/cg status` 改用 `backend-label=`。
+- 影响：下游按枚举聚合仍读 `backend`；读展示串改读 `backendLabel`；功能逻辑未改。
+- 关联：`src/compress/runtime.js`、`src/commands/cg-status.js`、`src/audit.js`、`test/no-control-chars.test.mjs`、`test/m1.3-inference.test.mjs`、`docs/T5`/`T8`、`README.md`；状态：active。

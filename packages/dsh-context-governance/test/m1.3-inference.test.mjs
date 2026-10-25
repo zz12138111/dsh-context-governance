@@ -158,9 +158,12 @@ test('0.1.15 原生形态：free-form → host-basic (inferred)，成本/审计�
     assert.equal(inferred[0].inferred, true);
     assert.deepEqual(inferred[0].kinds, ['free-form']);
     const cost = audit.find((entry) => entry.event === 'compaction-cost');
-    assert.equal(cost.backend, 'host-basic (inferred)');
+    assert.equal(cost.backend, 'host-basic');
+    assert.equal(cost.backendKind, 'host-basic');
+    assert.equal(cost.backendLabel, 'host-basic (inferred)');
     assert.equal(cost.backendInferred, true);
-    assert.equal(cost.auditVersion, 'cost-v1.3');
+    assert.equal(/[\s(]/.test(String(cost.backend)), false, 'backend 必须是枚举（不含空格/括号）');
+    assert.equal(cost.auditVersion, 'cost-v1.4');
   });
 });
 
@@ -185,7 +188,9 @@ test('0.1.15 五段式：five-section → context-zip (inferred)，功能统计�
     assert.equal(guard.status.adapter.inference.label, 'context-zip (inferred)');
     const audit = await readAudit(rootDir);
     const cost = audit.find((entry) => entry.event === 'compaction-cost');
-    assert.equal(cost.backend, 'context-zip (inferred)');
+    assert.equal(cost.backend, 'context-zip');
+    assert.equal(cost.backendKind, 'context-zip');
+    assert.equal(cost.backendLabel, 'context-zip (inferred)');
     assert.equal(cost.backendInferred, true);
     // 功能面（保护/回注条数、mode）与形态无关
     assert.equal(guard.status.mode, 'event-level');
@@ -222,8 +227,10 @@ test('0.1.15 混合：同组两种形态 → mixed (unverified)，不得标 infe
     assert.equal(guard.status.adapter.inference.inferred, false);
     const audit = await readAudit(rootDir);
     const cost = audit.find((entry) => entry.event === 'compaction-cost' && entry.compactionId === 'cmp-two');
-    assert.equal(cost.backend, 'mixed (unverified)');
-    assert.equal(cost.backendInferred, false);
+    assert.equal(cost.backend, 'unknown');
+    assert.equal(cost.backendKind, 'unknown');
+    assert.equal(cost.backendLabel, 'mixed (unverified)');
+    assert.equal(cost.backendInferred, true);
   });
 });
 
@@ -269,5 +276,22 @@ test('0.1.15 /cg status 标注 inferred（不冒充实测）', async () => {
   });
   const result = await command.handler({ rawInput: 'status' });
   assert.equal(result.kind, 'success');
-  assert.match(result.text, /adapter=none inferred=host-basic \(inferred\)/);
+  assert.match(result.text, /adapter=none backend-label=host-basic \(inferred\)/);
+});
+
+test('0.1.16 无观察：backend/backendKind/backendLabel=unknown、inferred=false', async () => {
+  await withStore(async (store, rootDir) => {
+    const { ctx, guard } = guardWith(store, withInference(noneAdapter(), []));
+    const built = buildCompaction({ before: healthyMessages(), summary: '', start: 2, end: 11 });
+    const session = liveSession(built);
+    runCycle(ctx, session, built);
+    await flush();
+    assert.equal(guard.status.adapter.inference.kind, 'unknown');
+    const audit = await readAudit(rootDir);
+    const cost = audit.find((entry) => entry.event === 'compaction-cost');
+    assert.equal(cost.backend, 'unknown');
+    assert.equal(cost.backendKind, 'unknown');
+    assert.equal(cost.backendLabel, 'unknown');
+    assert.equal(cost.backendInferred, false);
+  });
 });

@@ -65,3 +65,11 @@
   - `/cg status`：`compression: mode=event-level adapter=none inferred=host-basic (inferred) perception=event … summary=readable/free-form`。
 - **证据**：`native-test-0.1.15-reverify.jsonl`、`native-test-0.1.15-cg-status.txt`。
 - **测试**：全量 **202/202** 通过（+6）；版本 0.1.15；未安装/未重启桌面、未 push；隔离实例已停（18765 无监听）。
+
+## 9. 0.1.16 修复与自证（2026-10-25）
+
+- **P3-1 控制字符**：`README.md` 的两个控制字符（`0x08`/`0x07`，由写入路径把 `\b`/`\a` 当转义产生）已替换为正确字母（`backendInferred`、`auditVersion`）；新增 `test/no-control-chars.test.mjs` 扫描包内 `.md/.js/.mjs/.json/.yml`，禁止 `0x00-0x08 / 0x0B / 0x0C / 0x0E-0x1F / 0x7F`（允许 `\n`/`\t`/`\r`），命中打印文件+偏移。
+  - **自证**：临时注入 `.control-selftest.md`（`0x07`）→ 测试 fail 并打印 `.control-selftest.md @0 byte=0x07`；删除后恢复 pass。
+- **P3-2 成本字段拆分（cost-v1.4）**：`backend`/`backendKind` 只写枚举（`host-basic`/`context-zip`/`unknown`，不含括号/空格）；展示串在 `backendLabel`（`host-basic (inferred)`/`mixed (unverified)`）；`backendInferred=true` 仅当实测 kind 为 `none`/`unknown` 且由推断补位（`mixed` 也算补位）；无观察时三字段均 `unknown`、`inferred=false`；`/cg status` 显示 `backend-label=`。
+- **样例**（隔离/单测）：`backend:"host-basic"`, `backendKind:"host-basic"`, `backendLabel:"host-basic (inferred)"`, `backendInferred:true`, `auditVersion:"cost-v1.4"`；五段式 → `backend:"context-zip"`；混合 → `backend:"unknown"` + `backendLabel:"mixed (unverified)"` + `backendInferred:true`；无观察 → 全 `unknown` + `false`。
+- **测试**：全量 **204/204**（+2：控制字符闸、无观察字段）；版本 0.1.16；不改功能逻辑、未安装/未重启/未 push。

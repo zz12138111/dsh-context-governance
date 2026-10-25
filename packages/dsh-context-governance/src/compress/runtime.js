@@ -802,17 +802,24 @@ export class CompressionGuard {
       .slice(0, 5)
       .map(([name, count]) => `${name}:${count}`);
     const occurredAt = cost.occurredAt ?? this.#now().toISOString();
-    // 0.1.15：仅当实测探测不到后端（kind=none）时才用事件形态推断补位，且必须显式标 inferred（cost-v1.3）。
+    // 0.1.16（cost-v1.4）：backend/backendKind 只写枚举；backendLabel 才是展示串（可含 ` (inferred)`）。
+    // backendInferred=true 仅当实测 kind 为 none/unknown 且由事件形态推断补位（含 mixed）。
     const inference = this.#adapter.inference ?? null;
-    const useInference = (this.#adapter.kind === 'none' || this.#adapter.kind === 'unknown')
-      && inference !== null && inference.kind !== 'unknown';
-    const inferredKind = useInference ? inference.label : null;
+    const measuredKind = this.#adapter.kind;
+    const measuredEnum = measuredKind === 'host-basic' || measuredKind === 'context-zip' ? measuredKind : 'unknown';
+    const useInference = measuredEnum === 'unknown' && inference !== null && inference.kind !== 'unknown';
+    const backendKind = useInference
+      ? (inference.kind === 'mixed' ? 'unknown' : inference.kind)
+      : measuredEnum;
+    const backendLabel = useInference ? inference.label : measuredEnum;
     this.#auditEvent('compaction-cost', {
       sessionId: state.sessionId,
       compactionId: state.compactionId,
       project: this.#projectName,
-      backend: inferredKind ?? this.#adapter.kind,
-      backendInferred: inferredKind !== null && inference.inferred === true,
+      backend: backendKind,
+      backendKind,
+      backendLabel,
+      backendInferred: useInference,
       model: cost.model,
       trigger: cost.trigger,
       occurredAt,
@@ -834,7 +841,7 @@ export class CompressionGuard {
       backendCostSource: backendMeasured ? 'measured' : 'unknown',
       governanceCostSource: governanceEstimated ? 'estimated' : 'unknown',
       estimateMethod: governanceEstimated ? 'chars/4' : 'none',
-      auditVersion: 'cost-v1.3',
+      auditVersion: 'cost-v1.4',
     });
     this.#lastCost = {
       sessionId: state.sessionId,

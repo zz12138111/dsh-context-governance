@@ -218,7 +218,7 @@ test('M1.2 两路都缺：null + none，不伪造；stop 冲刷未等到 after �
     assert.equal(cost.tokensAfter, null);
     assert.equal(cost.tokensBeforeSource, 'none');
     assert.equal(cost.tokensAfterSource, 'none');
-    assert.equal(cost.auditVersion, 'cost-v1.3');
+    assert.equal(cost.auditVersion, 'cost-v1.4');
     assert.equal(cost.tokensPruned, null);
     assert.equal(cost.pruneCount, 0);
     assert.deepEqual(cost.pruneTools, []);
