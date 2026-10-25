@@ -234,49 +234,61 @@ test('0.1.15 混合：同组两种形态 → mixed (unverified)，不得标 infe
   });
 });
 
-test('0.1.15 /cg status 标注 inferred（不冒充实测）', async () => {
-  const command = createStatusCommand({
+function statusFixture(inference) {
+  return {
+    started: true,
+    mode: 'event-level',
+    perception: 'event',
+    eventApi: true,
+    readOnly: false,
+    readOnlyReason: null,
+    reasons: ['no-compaction-service', 'event-perception-only'],
+    degradedReasons: [],
+    conflicts: [],
+    fallback: null,
+    adapter: {
+      kind: 'none',
+      label: 'no-compaction-service',
+      versions: { host: '0.2.1-rc.3', backend: 'unknown' },
+      perception: 'none',
+      control: 'unknown',
+      hooks: { before: 'best-effort', after: 'event' },
+      protectionRole: 'validator',
+      summary: { readability: 'readable', style: 'free-form' },
+      inference,
+      matrix: { host: 'in', backend: 'unknown' },
+      selfCheck: { state: 'pending', checks: [] },
+      notes: [],
+    },
+    protection: { enabled: false, storeRoot: null, auditFile: null, auditMaxBytes: null, auditSizeBytes: 0, auditRotations: 0, pendingJournals: 0, reinjectionFailureStreak: 0, reinjectionSuspended: false, maxReinjectionFailures: 3 },
+    memory: { enabled: false, counts: {} },
+    stats: { events: 0, protectionWrites: 0, protectionWriteFailures: 0, reinjections: 0, reinjectionFailures: 0, auditWriteFailures: 0, auditSkippedReadOnly: 0 },
+    writeLatency: { count: 0, p50Ms: null, p95Ms: null, maxMs: null, minMs: null },
+    lastReport: null,
+    lastCost: null,
+  };
+}
+
+function statusCommand(inference) {
+  return createStatusCommand({
     store: null,
     audit: null,
-    guard: {
-      status: {
-        started: true,
-        mode: 'event-level',
-        perception: 'event',
-        eventApi: true,
-        readOnly: false,
-        readOnlyReason: null,
-        reasons: ['no-compaction-service', 'event-perception-only'],
-        degradedReasons: [],
-        conflicts: [],
-        fallback: null,
-        adapter: {
-          kind: 'none',
-          label: 'no-compaction-service',
-          versions: { host: '0.2.1-rc.3', backend: 'unknown' },
-          perception: 'none',
-          control: 'unknown',
-          hooks: { before: 'best-effort', after: 'event' },
-          protectionRole: 'validator',
-          summary: { readability: 'readable', style: 'free-form' },
-          inference: { kind: 'host-basic', label: 'host-basic (inferred)', inferred: true, styles: ['free-form'] },
-          matrix: { host: 'in', backend: 'unknown' },
-          selfCheck: { state: 'pending', checks: [] },
-          notes: [],
-        },
-        protection: { enabled: false, storeRoot: null, auditFile: null, auditMaxBytes: null, auditSizeBytes: 0, auditRotations: 0, pendingJournals: 0, reinjectionFailureStreak: 0, reinjectionSuspended: false, maxReinjectionFailures: 3 },
-        memory: { enabled: false, counts: {} },
-        stats: { events: 0, protectionWrites: 0, protectionWriteFailures: 0, reinjections: 0, reinjectionFailures: 0, auditWriteFailures: 0, auditSkippedReadOnly: 0 },
-        writeLatency: { count: 0, p50Ms: null, p95Ms: null, maxMs: null, minMs: null },
-        lastReport: null,
-        lastCost: null,
-      },
-    },
+    guard: { status: statusFixture(inference) },
     now: () => new Date('2026-10-25T00:00:00Z'),
   });
-  const result = await command.handler({ rawInput: 'status' });
-  assert.equal(result.kind, 'success');
-  assert.match(result.text, /adapter=none backend-label=host-basic \(inferred\)/);
+}
+
+test('0.1.18 /cg status：backend-kind 恒为枚举；实测 none 显示 none（无 label 后缀）', async () => {
+  const none = await statusCommand({ kind: 'unknown', label: 'unknown', inferred: false, styles: [] }).handler({ rawInput: 'status' });
+  assert.equal(none.kind, 'success');
+  assert.match(none.text, /adapter=none backend-kind=none /);
+  assert.equal(/backend-label=/.test(none.text), false, '无推断时不应出现 backend-label');
+});
+
+test('0.1.18 /cg status：推断补位时 backend-kind=枚举 + backend-label=展示串', async () => {
+  const inferred = await statusCommand({ kind: 'host-basic', label: 'host-basic (inferred)', inferred: true, styles: ['free-form'] }).handler({ rawInput: 'status' });
+  assert.equal(inferred.kind, 'success');
+  assert.match(inferred.text, /adapter=none backend-kind=host-basic backend-label=host-basic \(inferred\)/);
 });
 
 test('0.1.17 实测 none 不折叠：无观察 → backend/backendKind/backendLabel=none、inferred=false', async () => {

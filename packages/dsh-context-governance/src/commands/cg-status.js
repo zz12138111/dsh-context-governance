@@ -5,6 +5,8 @@
  * 命令注册与输出都走宿主公开接口；本文件不 import 任何 `@deepseek-ai/*` 包，便于单测。
  */
 
+import { resolveBackendFields } from '../compress/adapters.js';
+
 export const CG_COMMAND_NAME = 'cg';
 export const CG_COMMAND_DEFINITION_ID = 'dsh-context-governance/cg';
 
@@ -31,12 +33,12 @@ function statusText({ store, guard, audit, now }) {
     lines.push('compression: disabled (observer not mounted)');
   } else {
     const adapter = status.adapter;
-    const inference = adapter.inference ?? { kind: 'unknown', label: 'unknown', inferred: false, styles: [] };
-    const measuredEnum = adapter.kind === 'host-basic' || adapter.kind === 'context-zip' ? adapter.kind : 'unknown';
-    const useInference = measuredEnum === 'unknown' && inference.kind !== 'unknown';
-    const backendLabel = useInference ? inference.label : measuredEnum;
+    const backendFields = resolveBackendFields(adapter);
+    const backendSuffix = backendFields.backendLabel === backendFields.backendKind
+      ? ''
+      : ` backend-label=${backendFields.backendLabel}`;
     lines.push(
-      `compression: mode=${status.mode} adapter=${adapter.kind} backend-label=${backendLabel} ` +
+      `compression: mode=${status.mode} adapter=${adapter.kind} backend-kind=${backendFields.backendKind}${backendSuffix} ` +
       `perception=${status.perception} event-api=${status.eventApi ? 'on' : 'off'} ` +
       `events=${status.stats.events}${status.stats.events === 0 ? '(no session/event observed yet)' : ''} ` +
       `summary=${adapter.summary.readability}/${adapter.summary.style} ` +

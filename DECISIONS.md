@@ -260,3 +260,10 @@
 - 选择：`backend`/`backendKind` 枚举扩为 `none`/`unknown`/`host-basic`/`context-zip`（实测 none 保留 none，未知 provider 才 unknown；mixed 仍 unknown+label）；`auditVersion` 维持 `cost-v1.4`（值域扩展非 schema 变更）；控制字符闸扫描仓库根（排除 `.tmp`/`node_modules`/`.git`，允许 `\n\t\r`），清 `AGENTS.md` 的 0x0C。
 - 影响：M2 账本按枚举聚合不再把常态 none 误记 unknown；闸覆盖仓库文档，防同类转义复发。
 - 关联：`src/compress/runtime.js`、`test/m1.3-inference.test.mjs`、`test/no-control-chars.test.mjs`、`AGENTS.md`、`docs/T5`/`T8`、`README.md`；状态：active。
+
+## DEC-PLUGIN-20261025-36 [tech] 0.1.18：status 用 backendKind + 闸改 git ls-files
+
+- 背景：0.1.17 提交后 `/cg status` 在实测 none 下显示 `backend-label=unknown`，与 `compaction-cost.backend=none` 不一致；控制字符闸扫工作区未跟踪/忽略文件，计数 174（干净副本 156），且 `AGENTS.md` 实为 4 处被吃字母（含 0x0C 吃 `feat/` 的 f）。
+- 选择：新增 `resolveBackendFields(adapter)` 作 backend 四字段唯一来源，runtime 成本行与 `/cg status` 共用；status 显示 `backend-kind=<枚举>`（推断时另附 `backend-label=`）；控制字符闸改用 `git ls-files` 只扫 tracked 文件；文档写明 AGENTS.md 第 4 处（0x0C）修复。
+- 影响：status 与成本行枚举一致；闸计数收敛且不受本机未跟踪文件影响；`auditVersion` 维持 `cost-v1.4`。
+- 关联：`src/compress/adapters.js`、`src/compress/runtime.js`、`src/commands/cg-status.js`、`test/m1.3-inference.test.mjs`、`test/no-control-chars.test.mjs`、`docs/T5`、`README.md`、`analysis/req-20261025-06/REQ-06-M1.3-报告.md` §11；状态：active。

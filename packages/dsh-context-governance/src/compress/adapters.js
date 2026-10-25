@@ -353,6 +353,28 @@ export function withInference(adapter, styles = []) {
 }
 
 /**
+ * 成本行/状态命令共用的 backend 字段解析（0.1.18 单一来源）。
+ * 规则：backend/backendKind 只写枚举（含 `none`）；实测 `none` 不折叠成 `unknown`；
+ * `backendLabel` 才是展示串；`backendInferred` 仅当实测 kind 为 none/unknown 且由推断补位。
+ *
+ * @param {object} adapter
+ * @returns {{backend: string, backendKind: string, backendLabel: string, backendInferred: boolean}}
+ */
+export function resolveBackendFields(adapter) {
+  const inference = adapter?.inference ?? null;
+  const measuredKind = typeof adapter?.kind === 'string' ? adapter.kind : 'unknown';
+  const measuredEnum = measuredKind === 'host-basic' || measuredKind === 'context-zip' || measuredKind === 'none'
+    ? measuredKind
+    : 'unknown';
+  const useInference = (measuredEnum === 'none' || measuredEnum === 'unknown')
+    && inference !== null
+    && inference.kind !== 'unknown';
+  const backendKind = useInference ? (inference.kind === 'mixed' ? 'unknown' : inference.kind) : measuredEnum;
+  const backendLabel = useInference ? inference.label : measuredEnum;
+  return { backend: backendKind, backendKind, backendLabel, backendInferred: useInference };
+}
+
+/**
  * 用第一次真实摘要校准适配器（只读；不改宿主）。
  * @param {object} adapter
  * @param {string} summaryText

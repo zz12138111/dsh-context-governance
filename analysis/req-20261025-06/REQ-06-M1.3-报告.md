@@ -81,3 +81,13 @@
   - 闸输出：`scanned files=174 violations=0`。
   - 自证：仓库根注入 `.control-selftest.md`（`0x0C`）→ `files=175 violations=1`、测试 fail 打印 `.control-selftest.md @2 byte=0x0c`；删除后恢复 `files=174 violations=0` pass。
 - **测试**：全量 **205/205**（+1：实测 `none` 与未知 provider 区分）；版本 0.1.17；不改功能逻辑、未安装/未重启/未 push。
+
+## 11. 0.1.18 发布前收口（2026-10-25）
+
+- **P3-2 status/cost 对齐**：`/cg status` 改用 `backend-kind=<枚举>`（与 `compaction-cost` 同一解析函数 `resolveBackendFields`）。实测 `none` 下输出：
+  `compression: mode=event-level adapter=none backend-kind=none perception=event … summary=readable/free-form host=0.2.1-rc.3 backend=unknown`；
+  推断补位时附加 `backend-label=host-basic (inferred)`，与成本行一致、不再出现 `backend-label=unknown`。
+- **P3-1 闸改 `git ls-files`**：只扫 tracked 文本文件，本机计数 `scanned tracked files=163 violations=0`（此前 174 含未跟踪/忽略文件）。
+  自证：向 tracked 的 `AGENTS.md` 注入 `0x0C` → `files=163 violations=1`、fail 打印 `AGENTS.md @4569 byte=0x0c`；还原后恢复 163/0。
+- **P3-3 文档补第四处**：`AGENTS.md` 实际修复 **4 处**，而非三处——`0x0C`(Form Feed)@2867 吃掉了 `feat/` 的 `f`（修复前 `FF@2867`，提交信息为历史、不改写）；另三处为 `t`/`r`/`n` 被 TAB/CR/LF 吃掉。
+- **版本**：0.1.18；`auditVersion` 维持 `cost-v1.4`；不改功能逻辑、未安装/未重启/未 push。
