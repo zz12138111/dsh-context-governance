@@ -311,16 +311,25 @@ export function computePressure({
   };
 }
 
+/** 窗口展示：1.00M / 256k（P3-3：压力行必须能看出分母）。 */
+function formatWindow(value) {
+  if (!Number.isFinite(value) || value <= 0) return '-';
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`;
+  if (value >= 1000) return `${Math.round(value / 1000)}k`;
+  return String(value);
+}
+
 /** 压力行（`/cg status`）：缺失项写 `-` 并标原因，不写假数字。 */
 export function summarizePressure(pressure, { at = null } = {}) {
   const known = pressure !== null && typeof pressure === 'object';
   const fmt = (value) => (value === null || value === undefined ? '-' : Number(value).toFixed(3));
   const safety = known && pressure.adjusted !== null && pressure.safety !== null ? `(×${pressure.safety})` : '';
   const ratio = known && pressure.ratio !== null ? pressure.ratio.toFixed(2) : '-';
+  const window = known ? formatWindow(pressure.windowTokens) : '-';
   const head = `measured=${fmt(known ? pressure.measured : null)} ` +
     `estimated=${fmt(known ? pressure.estimated : null)} ` +
     `adjusted=${fmt(known ? pressure.adjusted : null)}${safety} ` +
-    `effective=${fmt(known ? pressure.effective : null)} ratio=${ratio}`;
+    `effective=${fmt(known ? pressure.effective : null)} ratio=${ratio} window=${window}`;
   if (!known || pressure.effective === null) return `pressure: ${head} (no usage/tokenMeter yet)`;
   const threshold = Number.isFinite(at) ? ` at=${Number(at).toFixed(2)} effective${pressure.effective >= at ? '>=' : '<'}at` : '';
   return `pressure: ${head}${threshold}`;

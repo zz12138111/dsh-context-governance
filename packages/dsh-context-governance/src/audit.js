@@ -203,7 +203,7 @@ export class AuditLog {
   get writeFailures() { return this.#writeFailures; }
   get lastError() { return this.#lastError; }
 
-  /** 当前审计文件字节数（读不到时按 0；不抛错）。 */
+  /** 当前审计文件字节数（真实 stat；读不到时按 0；不抛错）。 */
   get sizeBytes() {
     if (this.#sizeBytes !== null) return this.#sizeBytes;
     if (this.#file === null) return 0;
@@ -239,7 +239,8 @@ export class AuditLog {
     if (target === null) return true;
     try {
       fs.renameSync(this.#file, target);
-      this.#sizeBytes = 0;
+      // P3-8：轮转后当前文件由下一次 append 重建；大小留给 getter 重新 stat。
+      this.#sizeBytes = null;
       this.#rotations += 1;
       return true;
     } catch (error) {
@@ -254,7 +255,9 @@ export class AuditLog {
     try {
       fs.mkdirSync(path.dirname(this.#file), { recursive: true });
       fs.appendFileSync(this.#file, '');
-      this.#sizeBytes = 0;
+      // P3-8：既有文件（历史进程写的 42 行/15KB 之类）必须计入真实大小，
+      // 不能从 0 起算——否则 /cg status 的 size= 失真、轮转也会超上限。
+      this.#sizeBytes = null;
     } catch (error) {
       this.#lastError = `ensure:${error?.code ?? 'ERR'}`;
       /* 建不了文件不阻断；首次 append 会再试一次并回报失败 */
@@ -281,7 +284,8 @@ export class AuditLog {
       fs.mkdirSync(path.dirname(this.#file), { recursive: true });
       this.#rotateIfNeeded(bytes);
       fs.appendFileSync(this.#file, line, 'utf8');
-      this.#sizeBytes = (this.#sizeBytes ?? 0) + bytes;
+      // P3-8：sizeBytes 必须是真实文件大小——外部进程也可能写/轮转，写后不靠自增计数。
+      this.#sizeBytes = null;
       return true;
     } catch (error) {
       this.#writeFailures += 1;

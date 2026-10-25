@@ -39,7 +39,8 @@ function costLine(status) {
 function formatSession(overrides) {
   const keys = Object.keys(overrides ?? {});
   if (keys.length === 0) return 'none';
-  return keys.map((key) => `${key}=${overrides[key] === null ? 'null' : overrides[key]}`).join(', ');
+  const render = (value) => (value === null ? 'null' : value === true ? 'on' : value === false ? 'off' : value);
+  return keys.map((key) => `${key}=${render(overrides[key])}`).join(', ');
 }
 
 function statusText({ store, guard, audit, now, policy = null }) {
@@ -200,7 +201,7 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
       return { kind: 'error', text: '[context-governance] session layer is unavailable (policy not wired)' };
     }
     const sessionValues = policy.sessionLayer.values;
-    if (argText === '' || argText === 'show') {
+    if (argText === '' || argText === 'show' || argText === 'list') {
       return {
         kind: 'success',
         text: [
@@ -235,6 +236,11 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
     if (pairs.length === 0) {
       return { kind: 'error', text: 'context-governance set: 缺少参数（示例 /cg set compact.at=0.55）' };
     }
+    // P3-6：一条命令里同一键出现两次时后写会静默胜出，直接拒绝，避免“报两条、实际一条”。
+    const duplicated = pairs.map(([key]) => key).find((key, index, keys) => keys.indexOf(key) !== index);
+    if (duplicated !== undefined) {
+      return { kind: 'error', text: `context-governance set: 重复键 ${duplicated}（一条命令里每个键只能设一次）` };
+    }
     const next = { ...sessionValues };
     for (const [key, rawValue] of pairs) {
       if (CONFIG_ONLY_KEYS.includes(key)) {
@@ -261,13 +267,17 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
     for (const key of Object.keys(sessionValues)) delete sessionValues[key];
     Object.assign(sessionValues, next);
     const resolved = policy.resolve();
-    const blocking = resolved.invalid.find((item) => item.reason === 'low-threshold-unacked');
+    // P3-2：只判本次会话层引入的未确认（配置层本来就 0.25 时，不该连 /cg set compact.early 都挡住）。
+    const blocking = resolved.invalid.find(
+      (item) => item.reason === 'low-threshold-unacked' && item.source === 'session',
+    );
     if (blocking !== undefined) {
       for (const key of Object.keys(sessionValues)) delete sessionValues[key];
       Object.assign(sessionValues, previous);
+      const atValue = next['compact.at'] ?? previous['compact.at'];
       return {
         kind: 'error',
-        text: `context-governance set: compact.at=${next['compact.at']} 低于 0.30，` +
+        text: `context-governance set: compact.at=${atValue} 低于 0.30，` +
           '需在配置文件设 compact.lowThresholdAck=true 后重启（该确认不随会话覆盖）',
       };
     }

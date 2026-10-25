@@ -98,7 +98,7 @@ test('0.2.0 压力四段：adjusted 用 estimateSafety，effective 取 max，rat
   assert.equal(pressure.effective, 0.583);
   assert.equal(pressure.ratio, 1.42);
   const line = summarizePressure(pressure, { at: 0.60 });
-  assert.match(line, /adjusted=0\.556\(×1\.35\) effective=0\.583 ratio=1\.42 at=0\.60 effective<at/);
+  assert.match(line, /adjusted=0\.556\(×1\.35\) effective=0\.583 ratio=1\.42 window=1\.00M at=0\.60 effective<at/);
 });
 
 test('0.2.0 压力四段：来源缺失保持 null，不伪造；effective 只取已知项', () => {

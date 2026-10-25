@@ -281,7 +281,7 @@ test('0.2.0 压力四段：measured/estimated/adjusted/effective + ratio（只�
   assert.equal(result.kind, 'success');
   assert.match(
     result.text,
-    /pressure: measured=0\.583 estimated=0\.412 adjusted=0\.556\(×1\.35\) effective=0\.583 ratio=1\.42 at=0\.58 effective>=at/,
+    /pressure: measured=0\.583 estimated=0\.412 adjusted=0\.556\(×1\.35\) effective=0\.583 ratio=1\.42 window=1\.00M at=0\.58 effective>=at/,
   );
 });
 
@@ -292,7 +292,7 @@ test('0.2.0 压力四段：无 usage/tokenMeter 时写 -，不伪造数字', asy
     now: fixedNow,
   });
   const result = await command.handler({ rawInput: 'status' });
-  assert.match(result.text, /pressure: measured=- estimated=- adjusted=- effective=- ratio=- \(no usage\/tokenMeter yet\)/);
+  assert.match(result.text, /pressure: measured=- estimated=- adjusted=- effective=- ratio=- window=1\.00M \(no usage\/tokenMeter yet\)/);
 });
 
 test('0.2.0 guard.pressure：usage 实测与 tokenMeter 估算分开取，不互相顶替', () => {
@@ -315,4 +315,38 @@ test('0.2.0 guard.pressure：usage 实测与 tokenMeter 估算分开取，不互
   } finally {
     guard.stop();
   }
+});
+
+test('P3-2：配置层本就 <0.30 未确认时，无关的 /cg set 不被挡', async () => {
+  const config = resolveConfig({ projectRoot: 'D:/tmp/policy-set', policy: { values: { 'compact.at': 0.25 } } });
+  const state = buildPolicyState(config, {
+    readFile: () => { const error = new Error('missing'); error.code = 'ENOENT'; throw error; },
+  });
+  const command = createStatusCommand({ policy: state, now: fixedNow });
+  const set = await command.handler({ rawInput: 'set compact.early=off' });
+  assert.equal(set.kind, 'success');
+  const show = await command.handler({ rawInput: 'policy show' });
+  assert.match(show.text, /early=off/);
+  // 会话层自己设 0.25 仍必须被挡（<0.30 需配置文件确认）
+  const low = await command.handler({ rawInput: 'set compact.at=0.25' });
+  assert.equal(low.kind, 'error');
+  assert.match(low.text, /compact\.at=0\.25 低于 0\.30/);
+});
+
+test('P3-6：一条命令里重复键被拒绝，不静默后写胜', async () => {
+  const command = createStatusCommand({ policy: policyForSet({}), now: fixedNow });
+  const result = await command.handler({ rawInput: 'set compact.at=0.5 compact.at=0.4' });
+  assert.equal(result.kind, 'error');
+  assert.match(result.text, /重复键 compact\.at/);
+  const list = await command.handler({ rawInput: 'set list' });
+  assert.match(list.text, /session: none/);
+});
+
+test('P3-5：set list / set show 都列出当前覆盖', async () => {
+  const command = createStatusCommand({ policy: policyForSet({}), now: fixedNow });
+  await command.handler({ rawInput: 'set compact.early=off' });
+  const listed = await command.handler({ rawInput: 'set list' });
+  assert.match(listed.text, /session: compact\.early=off/);
+  const shown = await command.handler({ rawInput: 'set show' });
+  assert.match(shown.text, /session: compact\.early=off/);
 });

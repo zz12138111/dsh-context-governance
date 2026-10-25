@@ -1,3 +1,5 @@
+# sample: 示意/裁剪，非实跑（mock guard；真机下 adapter=none 时 summary=unknown/unknown、conflicts 非空）
+
 # fixture: profile=(none), projectFile=(absent), host=0.2.1-rc.3, cmd="/cg status"
 $ /cg status
 context-governance status
@@ -5,7 +7,7 @@ time: 2026-10-25T00:00:00.000Z
 policy: compact.at=0.60 (source=builtin) native=0.6785 early=on
 compression: mode=event-level adapter=none backend-kind=none perception=event event-api=on events=0(no session/event observed yet) summary=readable/free-form host=0.2.1-rc.3 backend=unknown
 capabilities: control=unknown hooks=best-effort/event protectionRole=validator
-pressure: measured=0.583 estimated=0.412 adjusted=0.556(×1.35) effective=0.583 ratio=1.42 at=0.60 effective<at
+pressure: measured=0.583 estimated=0.412 adjusted=0.556(×1.35) effective=0.583 ratio=1.42 window=1.00M at=0.60 effective<at
 degraded: none
 conflicts: none
 write-latency: n=0 p50=- p95=- max=-
@@ -60,7 +62,7 @@ policy: compact.at=0.58 (source=plugin) native=0.6785 early=on
 policy-invalid: 1 (project/compact.lowThresholdAck:project-denied)
 compression: mode=event-level adapter=none backend-kind=none perception=event event-api=on events=0(no session/event observed yet) summary=readable/free-form host=0.2.1-rc.3 backend=unknown
 capabilities: control=unknown hooks=best-effort/event protectionRole=validator
-pressure: measured=- estimated=- adjusted=- effective=- ratio=- (no usage/tokenMeter yet)
+pressure: measured=- estimated=- adjusted=- effective=- ratio=- window=1.00M (no usage/tokenMeter yet)
 degraded: none
 conflicts: none
 write-latency: n=0 p50=- p95=- max=-

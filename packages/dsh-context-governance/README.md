@@ -85,13 +85,16 @@ packages/dsh-context-governance/
 - `compact.at` 是**占窗口比例**（默认 0.60），上限是动态 `native = floor(min(W×0.8, W−O−65536))/W`（1M 窗口 + 256k 预留 ≈ 0.6785）；`at > native` 拒绝并说明“M2 不支持推迟”。`at < 0.30` 需配置文件 `compact.lowThresholdAck=true`，否则回退内置值并记 `low-threshold-unacked`。
 - `compact.early` 是**纯配置 `on|off`**（默认 on；`research` profile 默认 off）；“引擎通道是否可取到”留给 0.2.1 的 `early-channel`，0.2.0 没有任何引擎接线。
 - 项目文件 `.cg-policy.json` 按**不可信输入**处理（`DEC-20261025-62` A+C）：
-  - 只允许项目内相对路径（绝对路径/`..` 拒绝），containment 复核，>64KB 不读；
+  - 只允许项目内相对路径（绝对路径/`..` 拒绝），containment 复核（**词法层**，不解析 junction/symlink），>64KB 不读；
   - **禁** `compact.lowThresholdAck` / `compact.estimateSafety`（`project-denied`），`compact.at` 下限 **0.45**（`below-min`），上限 `native`；
-  - 任一键被拒 → **整层拒绝**（不逐键降级）→ 退回下一层；`source=project` + 键 + 原因进 `policy-invalid` 审计，并在 `/cg status` 的 `policy-invalid:` 行可见。
-- 压力四段（只展示，不据此压缩）：`measured`（最近 `assistant/message.usage` 的 input+cacheRead+cacheWrite 占窗口）、`estimated`（`tokenMeter` 估算）、`adjusted = estimated × estimateSafety`、`effective = max(measured, adjusted)`；`ratio = measured/estimated` 用来判断估算是否偏低。任一来源缺失写 `-`，不伪造。
+  - 任一键被拒 → **整层拒绝**（不逐键降级）→ 退回下一层；`source=project` + 键 + 原因进 `policy-invalid` 审计，并在 `/cg status` 的 `policy-invalid:` 行可见；
+  - **只在 `apply` 读一次**：改文件后需重启插件才生效。
+- 压力四段（只展示，不据此压缩）：`measured`（最近 `assistant/message.usage` 的 input+cacheRead+cacheWrite 占窗口）、`estimated`（`tokenMeter` 估算）、`adjusted = estimated × estimateSafety`、`effective = max(measured, adjusted)`；`ratio = measured/estimated` 用来判断估算是否偏低；行内带 `window=1.00M`（分母可见）。任一来源缺失写 `-`，不伪造。
 - `/cg set <key>=<value>` / `/cg set reset`：写会话层（最高优先级）。只允许 `compact.at`/`compact.early`/`compact.cooldownMin`/`compact.minDeltaTokens`/`cost.remainingTurns`；`estimateSafety`/`lowThresholdAck` 明确拒绝（只能改配置文件）。覆盖是**进程内**的，重启即失效。
 
-样例输出（带 fixture 头）见 `../../analysis/req-20261025-09/samples-0.2.0.txt`；完整口径见 `../../docs/T5-状态命令与审计.md` §1.1–§1.3。
+样例输出（带 fixture 头）见 `../../analysis/req-20261025-09/samples-0.2.0.txt`（**示意/裁剪，非实跑**）；完整口径见 `../../docs/T5-状态命令与审计.md` §1.1–§1.4。
+
+**命令可用性（与使用说明 v0.3 一致）**：0.2.0 只有 `/cg status` / `/cg policy show` / `/cg set`；`/cg compact now` 计划 0.2.1、`/cg cost` 计划 0.2.2——当前对未知参数只返回 usage，不假装执行。
 
 ## 配置（bundle patch）
 
