@@ -145,15 +145,15 @@
 - **依据**：M1 `REQ-20261025-01` 成本归属字段；`docs/M1-回顾与M2候选.md`；2026-10-25 可行性复查（宿主 asar 代码 + 真机会话日志）。
 - **优先级**：P1
 - **状态**：已排期（待 00 派开发；与 M1.1 T1 并行，不互斥）
-- **背景/痛点**：M1 真机上 `tokensBefore/After` 恒 `null`、能力行 `compaction=absent`，此前按“宿主限制”接受。复查发现两处都是**插件侧时序问题**：
-  1. `ctx.tokenMeter` 在 apply 时读一次并缓存（`runtime.js:189-195`），没走 `ctx.inject(['tokenMeter'], …)`；服务晚注册就永久为 `null`。宿主 `@deepseek-ai/dsh-token-meter` 由 `dsh-base` 默认挂载，确实存在。
-  2. `ctx.compaction` 在 apply 时探测为 absent，但 `compaction-basic` 已在本机 profile 配置（`thresholdRatio: 0.65`）且压缩事件真实发生 → 服务存在，只是探测太早。
+- **背景/痛点**：M1 真机上 `tokensBefore/After` 恒 `null`、能力行 `compaction=absent`，此前按“宿主限制”接受。复查后分成两类：
+  1. **确为插件侧问题**：`ctx.tokenMeter` 在 apply 时读一次并缓存（`runtime.js:189-195`），没走 `ctx.inject(['tokenMeter'], …)`；服务晚注册就永久为 `null`。宿主 `@deepseek-ai/dsh-token-meter` 由 `dsh-base` 默认挂载，确实存在。
+  2. **不是探测时机问题（2026-10-25 真机更正）**：真机 0.1.12 的 `capability@apply`（20:34:54）与 `capability@ready`（20:35:54）两行都是 `compaction=throws`、`get.compaction=absent` → **本部署下插件 scope 拿不到 `ctx.compaction`**；原因未定（服务未 active，或未向该 scope 提供），**下次用 `ctx.get('compaction', false)` 区分**。插件不依赖它：压缩观测走 `session/event` 已够用。
   3. 兜底证据：真机会话日志中 `assistant/message` 1199/1199 带 `usage`（样本 `inputTokens=20662 / cacheReadTokens=2432 / totalTokens=23321`），压缩前后水位可实测。
 - **目标（可验收）**：
   1. **成本实测**：`tokensBefore/After` 优先 `ctx.tokenMeter`（延迟注入或按需取，成功后缓存），失败退回 `assistant/message.usage`，仍取不到才 `null` + `unknown`。
   2. **探测修正**：能力探测由“apply 一次”改为「apply 记 `capability@apply` + 首个会话事件后补 `capability@ready`」两行审计，不得因时序把可用服务记成 absent。
   3. **口径可追**：新增 `tokensBeforeSource` / `tokensAfterSource`（`tokenMeter` / `usage` / `none`），`auditVersion` 升 `cost-v1.1`；**只增字段、不改已有字段语义**，旧解析器仍可用。
-  4. **provider 结论**：同一轮给出 `ctx.compaction` 是否可获取的只读结论（可/不可 + 证据路径），供 P1 决策「回注时点是否可修」；**本轮不改压缩后端、不替换 provider**。
+  4. **provider 结论（已出，2026-10-25）**：本部署下 `ctx.compaction` 在插件 scope **不可见**（`@apply`/`@ready` 均 `get.compaction=absent`）。**若 M2/后续要做「回注时点修正」，前置是拿到 compaction 服务**；拿不到就只能走事件时序推断（即现方案）。此前提显式备案，**不得视为已解决**。本轮不改压缩后端、不替换 provider。
 - **边界（不做什么）**：
   - 不改回注逻辑、不改记忆、不做折叠（折叠已于 2026-10-25 取消）；
   - 不接 ACP、不做货币成本、不做跨周期聚合（留 M2）；
@@ -167,9 +167,9 @@
   - ① 真机（或隔离 profile）上至少一条 `compaction-cost` 的 `tokensBefore/After` 非 null，且 `*Source` 与实际路径一致；
   - ② tokenMeter 不可用时 usage 兜底生效并标 `usage`；
   - ③ 两者都不可用时仍为 `null` + `none`，不伪造；
-  - ④ 审计出现 `capability@ready` 行，且不再出现“服务存在却被记 absent”；
+  - ④ 审计出现 `capability@apply` 与 `capability@ready` 两行，结论如实（本部署 `get.compaction=absent` 是正确结果，不算缺陷）；
   - ⑤ 单测覆盖：延迟注入生效、usage 兜底、全缺、来源字段、无正文/路径泄漏；
-  - ⑥ 给出 `ctx.compaction` 可用性结论与证据路径。
+  - ⑥ 给出 `ctx.compaction` 可用性结论与证据路径（已出：**不可见**）；口径记清——`get.X` 才是可用性信号，`X=throws` 只是访问路径表现（`tokenMeter=throws` 而 `get.tokenMeter=obj` 即反例）。
 - **依赖/风险**：
   - 依赖本版 cordis 的服务注入语义（`ctx.inject` 已在本插件用于 `commands`）；若延迟注入不可用，退化为“按需读取 + 缓存成功值”；
   - `assistant/message.usage` 是每次调用的用量，不是“省下的 token”；只做水位，不冒充节省量；
