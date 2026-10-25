@@ -181,15 +181,17 @@ Get-ChildItem "$env:USERPROFILE\.dsh" -Recurse -File -ErrorAction SilentlyContin
 Get-Content 'D:\DS-PROJECT\DSH插件开发\logs\governance.log' -Tail 3
 ```
 
-**期望一行**（时间/pid/host 可不同）：
+**期望两行**（时间/pid/host 可不同；v0.1.3 起）：
 
 ```
-2026-10-25T…Z governance apply version=0.1.0 pid=… adapter=context-zip mode=full host=… backend=unknown memory=D:\DS-PROJECT\DSH插件开发\memory\governance
+2026-10-25T…Z governance capability version=0.1.3 pid=… probe=on=fn,emit=fn,get=fn,events=obj(dispatch=fn),bus=absent,session=absent,sessions=absent,agents=absent,workspace=absent,compaction=absent,commands=obj,tools=obj,logger=obj,sessionProjections=absent,get.events=absent,get.sessions=absent,…,root=child
+2026-10-25T…Z governance apply version=0.1.3 pid=… adapter=none mode=event-level host=… backend=unknown compaction-service=absent(token=compaction) perception=event event-api=on audit=…\memory\governance\audit.jsonl memory=… warning=provider-unavailable
 ```
 
-- `adapter=context-zip`：识别到 context-zip 接管；若是 `host-basic`，先看 redirect 版本是否仍为 `0.1.0-context-zip`。
-- `mode=full`：事件级感知 + 摘要可读；`host=unknown` 只是版本探测失败，日志会带 conflict warning，不阻断。
-- 没有这行：按 §7 排查，不要反复重启。
+- `perception=event event-api=on`：`ctx.on('session/event')` 订阅成功；若为 `event-api=off`，能力探测行会指出哪个 token 缺失。
+- `adapter=none`：本机拿不到 `compaction` 服务（根作用域不可见），走事件级路线，属预期；识别到 provider 时会变 `context-zip`/`host-basic` 且 `mode=full`。
+- `audit=…`：`audit.jsonl` 在 apply 时即创建，首行是 `{"event":"apply",…}`。
+- 没有这两行：按 §7 排查，不要反复重启。
 
 3. 工具面（可选人工确认）：新开一个会话，让模型调用 `mem_query`/`mem_write` 或查看工具列表；能调用即注册成功。
 4. 再跑一遍装后状态（不要重装）：
@@ -285,8 +287,8 @@ DSH 启动失败诊断：CLI 路径会写 `%USERPROFILE%\.dsh\logs\startup-*.log
 - [ ] manifest 写入后无 BOM、`JSON.parse` 通过、`createRequire` 能解析
 - [ ] 装后：deps 14 / bundles 17 / redirect 不变 / pluginDep=true / pluginBundle=true
 - [ ] 装后 `check-env.ps1` 全绿、BOM 扫描无输出
-- [ ] 重启后 `logs\governance.log` 有 `apply version=0.1.0` 行
-- [ ] 行内 `adapter=context-zip`（或已知原因降级）、`mode=full`
+- [ ] 重启后 `logs\governance.log` 有 `capability version=0.1.3` 与 `apply version=0.1.3` 两行
+- [ ] apply 行含 `perception=event`、`event-api=on`、`audit=…audit.jsonl`；`audit.jsonl` 首行为 `event=apply`
 - [ ] 任意会话能看到 `mem_write` / `mem_query`
 - [ ] 回滚路径已读一遍（§6），备份目录位置已记下
 

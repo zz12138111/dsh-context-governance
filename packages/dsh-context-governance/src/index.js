@@ -14,7 +14,8 @@ import path from 'node:path';
 import { registerStatusCommand } from './commands/cg-status.js';
 import { detectHostVersion, normalizeBackendVersion } from './compress/adapters.js';
 import { CompressionGuard } from './compress/runtime.js';
-import { appendDiagnosticLine, startupLine } from './diagnostics.js';
+import { formatCapability, probeCapability } from './capabilities.js';
+import { appendDiagnosticLine, capabilityLine, PLUGIN_VERSION, startupLine } from './diagnostics.js';
 import { DEFAULT_MEMORY_DIR, MemoryStore, MemoryStoreError } from './memory/store.js';
 import { MEM_QUERY_NAME, MEM_WRITE_NAME, registerMemoryTools } from './tools/mem-tools.js';
 
@@ -143,6 +144,12 @@ export async function apply(ctx, rawConfig = {}) {
     ? detectHostVersion()
     : config.compression.hostVersion;
   const backendVersion = normalizeBackendVersion(config.compression.backendVersion);
+  // v0.1.3：先把事件面能力 dump 出来（只记类型），再决定感知层级。
+  const capability = probeCapability(ctx);
+  if (config.diagnostics.logFile !== '') {
+    const ok = appendDiagnosticLine(config.diagnostics.logFile, capabilityLine(capability.entries));
+    if (!ok) ctx.logger?.warn?.(`[context-governance] diagnostics log is not writable: ${config.diagnostics.logFile}`);
+  }
   let compactionProbe = null;
   try {
     compactionProbe = ctx.compaction ??
@@ -156,6 +163,12 @@ export async function apply(ctx, rawConfig = {}) {
     ctx.logger?.warn?.(
       '[context-governance] compaction service not mounted/visible (token="compaction"); ' +
       'provider path unavailable, event-level perception via session/event remains active',
+    );
+  }
+  if (config.compression.enabled && !capability.eventApi) {
+    ctx.logger?.warn?.(
+      '[context-governance] ctx.on is unavailable; compaction observation disabled (perception=none). ' +
+      `capability probe: ${formatCapability(capability.entries)}`,
     );
   }
   let guard = null;
@@ -172,13 +185,23 @@ export async function apply(ctx, rawConfig = {}) {
       const status = guard.status;
       ctx.logger?.info?.(
         `[context-governance] compression observer: adapter=${status.adapter.kind} ` +
-        `mode=${status.mode} host=${hostVersion} backend=${status.adapter.versions.backend} ` +
-        `compaction-service=${compactionService}`,
+        `mode=${status.mode} perception=${status.perception} host=${hostVersion} ` +
+        `backend=${status.adapter.versions.backend} compaction-service=${compactionService}`,
       );
       for (const conflict of status.conflicts) {
         const log = conflict.severity === 'error' ? 'warn' : 'info';
         ctx.logger?.[log]?.(`[context-governance] compression conflict ${conflict.code}: ${conflict.message}`);
       }
+      guard.auditLog?.append?.('apply', {
+        status: 'applied',
+        version: PLUGIN_VERSION,
+        mode: status.mode,
+        adapter: status.adapter.kind,
+        host: hostVersion,
+        backend: status.adapter.versions.backend,
+        perception: status.perception,
+        eventApi: status.eventApi,
+      });
     } catch (error) {
       ctx.logger?.warn?.(`[context-governance] compression observer failed to start: ${String(error?.message ?? error)}`);
       guard = null;
@@ -193,7 +216,9 @@ export async function apply(ctx, rawConfig = {}) {
       backendVersion,
       memoryRoot: config.memoryRoot,
       compactionService,
-      perception: guard?.adapter.perception ?? (guard?.mode === 'event-level' ? 'event' : 'unknown'),
+      perception: guard?.perception ?? 'none',
+      eventApi: capability.eventApi ? 'on' : 'off',
+      auditFile: guard?.auditLog?.file ?? '',
       warning: compactionService === 'absent' && config.compression.enabled ? 'provider-unavailable' : '',
     }));
     if (!ok) ctx.logger?.warn?.(`[context-governance] diagnostics log is not writable: ${config.diagnostics.logFile}`);

@@ -27,6 +27,9 @@
 - 2026-10-25 · rc.3 事件级感知核查：`compaction-basic` 仍写 `compaction/start|summary|end`（源码命中 3/2/4），`dsh-session` known-event-types 仍含三类事件 → 事件级感知可用；已装 context-zip 0.1.10 + redirect base rc.2 副本，事务事件由 redirect base 发出
 - 2026-10-25 · T3 真实日志审计（16 次压缩）：最新用户被吞 11/16（手动 10/10、自动 1/6）；批次未覆盖 5；回滚未覆盖 6；摘要可读 16/16；规则快照被吞 16/16 但后续 turn 均重注入 baseline；`analysis/t3/data/t3-audit.json`
 - 2026-10-25 · 安装方案：`file:` + junction，不跑 pnpm/`dsh plugin add`/`--lockfile-only`；Runbook `docs/插件安装升级-Runbook.md`；安装前基线 deps 13 / bundles 16 / redirect `0.1.0-context-zip`，装后期望 14/17/不变
+- 2026-10-25 · v0.1.3 实现：`src/capabilities.js` 能力探测（只记类型，单行 `governance capability … probe=…`）；`perception` 改为“订阅成功才 event”；startup 行加 `event-api=on|off`/`audit=<path>`；`AuditLog` apply 即建文件 + 写 `apply` 记录；`/cg status` 加 `events=N`（运行期收到 `session/event` 计数）；全量 **127/127**
+- 2026-10-25 · `session/event` 通道取证（源码级）：`dsh-session` commit 用 `collectSessionCallbacks(entry.emitCtx,[carrier,'session/event',…])` → `ctx.events.dispatch`；`scopeTarget` 过滤器对未打 scope 标签的监听者一律放行 → 根级 `ctx.on('session/event')` 应收全部会话事件；先例 `dsh-agent-instructions`（inject sessionProjections/workingDirectory）
+- 2026-10-25 · 18:43 装载后工作区两会话日志里最后一次 `compaction/start` 为 `18:41:28`（早于装载）→ 尚无新压缩，无法据此判定“收不到事件”；`audit.jsonl` 缺失只因 0.1.2 审计懒创建且未发生压缩
 
 
 

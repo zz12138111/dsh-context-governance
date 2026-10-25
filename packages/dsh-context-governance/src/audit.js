@@ -36,12 +36,17 @@ export const AUDIT_FIELD_WHITELIST = Object.freeze({
   mode: 'text',
   adapter: 'text',
   backend: 'text',
+  host: 'text',
+  version: 'text',
+  perception: 'text',
+  eventApi: 'boolean',
   status: 'text',
   window: 'number',
 });
 
 /** 已知审计事件（T5 正式化清单；未知事件仍记录，但只能带白名单字段）。 */
 export const AUDIT_EVENTS = Object.freeze([
+  'apply',
   'protection-write',
   'protection-write-failed',
   'protection-write-skipped',
@@ -105,9 +110,21 @@ export class AuditLog {
   constructor({ file, now = () => new Date() } = {}) {
     this.#file = typeof file === 'string' && file.trim() !== '' ? path.resolve(file) : null;
     this.#now = now;
+    this.#ensureFile();
   }
 
   get file() { return this.#file; }
+
+  /** 插件装载时就把审计文件建出来（T5 要求：apply 即落文件，便于确认路径与写入时机）。 */
+  #ensureFile() {
+    if (this.#file === null) return;
+    try {
+      fs.mkdirSync(path.dirname(this.#file), { recursive: true });
+      fs.appendFileSync(this.#file, '');
+    } catch {
+      /* 建不了文件不阻断；首次 append 会再试一次并回报失败 */
+    }
+  }
 
   /**
    * @param {string} event 事件名

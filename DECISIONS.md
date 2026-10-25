@@ -112,3 +112,10 @@
 - 选择：`inject=['tools','commands']` 只保留根级可见服务；压缩感知走 `ctx.on('session/event')` 里的 `compaction/start|summary|end`（E1 已验证）；provider 不可见时 `selectMode` 返回 **`event-level`**（新增模式），T3 保护校验与 T4 固化/回注照常工作。
 - 影响：apply 必然执行；启动行与 warn 明写 `compaction-service=absent(token=compaction)` / `warning=provider-unavailable`，不再静默；未来 provider 真正可见则自动升级为 provider 路线。插件版本 `0.1.2`；全量测试 118/118。
 - 关联：`src/index.js`（`inject`/`compactionProbe`/`startupLine`）、`src/compress/selection.js`（`MODES`/`selectMode`）、`docs/T3-压缩适配与保护.md` §6.4；状态：active。
+
+## DEC-PLUGIN-20261025-14 [tech] `perception` 只表示“实际订阅成功”；apply 时 dump 事件面能力（只记类型）
+
+- 背景：v0.1.2 在 provider 不可见时日志写 `perception=none` 却 `mode=event-level`——`perception` 直接取了 `adapter.perception`（`kind=none` 固定 `none`），与订阅是否挂上无关，容易被读成“没在看压缩”。
+- 选择：`guard.perception` = 已 `start()` 且 `ctx.on` 存在 → `event`，否则退回契约值；新增 `src/capabilities.js`，apply 时写一行 `governance capability … probe=on=fn,events=obj(dispatch=fn),…,get.sessions=absent,root=self`，**只记 typeof 类型**；启动行补 `event-api=on|off`、`audit=<path>`；审计在 apply 时建文件并写 `apply` 记录。
+- 影响：`perception` 不再可能“假报”；下次重启能从一行里看出宿主到底暴露了哪些事件面 API；`/cg status` 增加 `event-api`/`events=N`，`N` 是运行期真实收到 `session/event` 的计数（判断“事件是否真的到达”的硬证据）。
+- 关联：`src/capabilities.js`、`src/diagnostics.js`、`src/index.js`、`src/compress/runtime.js`、`src/audit.js`、`docs/T3-压缩适配与保护.md` §6.5；插件版本 `0.1.3`；状态：active。

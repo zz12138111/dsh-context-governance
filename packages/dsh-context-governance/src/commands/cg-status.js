@@ -19,7 +19,9 @@ function statusText({ store, guard, audit, now }) {
     const adapter = status.adapter;
     lines.push(
       `compression: mode=${status.mode} adapter=${adapter.kind} ` +
-      `perception=${adapter.perception} summary=${adapter.summary.readability}/${adapter.summary.style} ` +
+      `perception=${status.perception} event-api=${status.eventApi ? 'on' : 'off'} ` +
+      `events=${status.stats.events} ` +
+      `summary=${adapter.summary.readability}/${adapter.summary.style} ` +
       `host=${adapter.versions.host} backend=${adapter.versions.backend}`,
     );
     lines.push(

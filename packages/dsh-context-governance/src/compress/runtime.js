@@ -112,6 +112,7 @@ export class CompressionGuard {
   #reports = [];
   #unsubscribe = null;
   #started = false;
+  #eventApi = false;
   #reinjectionDisabled = false;
   #degradedReasons = [];
   #materializing = new Set();
@@ -152,6 +153,7 @@ export class CompressionGuard {
       : new AuditLog({ file: path.join(this.#store.rootDir, 'audit.jsonl'), now: this.#now }));
     this.#adapter = options.adapter ?? this.#detect();
     const eventApi = typeof this.#ctx?.on === 'function';
+    this.#eventApi = eventApi;
     this.#adapter = runSelfCheck({ adapter: this.#adapter, eventApi, matrix: this.#matrix });
     this.#selection = selectMode({
       adapter: this.#adapter,
@@ -179,6 +181,15 @@ export class CompressionGuard {
 
   get adapter() { return this.#adapter; }
   get mode() { return this.#selection.mode; }
+  /**
+   * 实际感知层级（v0.1.3）：只有**订阅真的挂上**才声称 `event`。
+   * `adapter.perception` 是契约声明（provider 不可用时为 `none`），不能拿来表示"正在看压缩事件"。
+   */
+  get perception() {
+    if (this.#eventApi && this.#started) return 'event';
+    return this.#adapter.perception;
+  }
+  get eventApi() { return this.#eventApi; }
   get auditLog() { return this.#audit; }
 
   /** 开始订阅；重复调用安全。 */
@@ -215,6 +226,8 @@ export class CompressionGuard {
     return {
       started: this.#started,
       mode: this.#selection.mode,
+      perception: this.perception,
+      eventApi: this.#eventApi,
       reasons: [...this.#selection.reasons],
       degradedReasons: [...this.#degradedReasons],
       conflicts: this.#selection.conflicts.map((conflict) => ({ ...conflict })),
