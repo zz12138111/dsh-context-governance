@@ -669,7 +669,44 @@ test('0.2.1 backfill：/cg status 显示 source=projection(backfilled) + 历史 
   const status = await command.handler({ rawInput: 'status' });
   assert.match(status.text, /window: current=1M \(session 58a2e845\) observed 2026-10-25T/);
   assert.match(status.text, /source=projection\(backfilled\)/);
-  assert.match(status.text, /native-current=0\.6934/);
+  assert.match(status.text, /native-current=0\.6934\(projection\(backfilled\)\)/);
   assert.match(status.text, /native-conservative=0\.6934 validated/);
-  assert.match(status.text, /pressure: .*window=1M \(session 58a2e845\)/);
+  assert.match(status.text, /pressure: .*window=1M \(session 58a2e845, backfilled\)/);
+});
+
+test('0.2.1 P3-12/P3-13 三来源字符串：backfilled/live/config 各自可辨、同行不叠两套括注', async () => {
+  const render = async (window) => {
+    const state = buildPolicyState(
+      resolveConfig({ projectRoot: 'D:/tmp/window', policy: {} }),
+      { readFile: () => { const error = new Error('missing'); error.code = 'ENOENT'; throw error; } },
+    );
+    state.setWindowProvider(() => window);
+    const command = createStatusCommand({
+      guard: { status: guardStatus({ measuredTokens: 100_000, estimatedTokens: 80_000 }) },
+      policy: state,
+      now: () => new Date('2026-10-26T00:00:00Z'),
+    });
+    return (await command.handler({ rawInput: 'status' })).text;
+  };
+  const observedAt = '2026-10-25T08:00:00.000Z';
+  const backfilled = await render({
+    current: { sessionId: 'session-58a2e845', tokens: 1_048_576, observedAt, source: 'backfilled' },
+    conservative: { sessionId: 'session-58a2e845', tokens: 1_048_576, observedAt, source: 'backfilled' },
+    observed: [], source: 'projection(backfilled)', removed: false,
+  });
+  assert.match(backfilled, /native-current=0\.6934\(projection\(backfilled\)\)/);
+  assert.match(backfilled, /pressure: .*window=1M \(session 58a2e845, backfilled\)/);
+
+  const live = await render({
+    current: { sessionId: 'session-aaaaaaaa', tokens: 1_048_576, observedAt, source: 'live' },
+    conservative: { sessionId: 'session-aaaaaaaa', tokens: 1_048_576, observedAt, source: 'live' },
+    observed: [], source: 'projection', removed: false,
+  });
+  assert.match(live, /native-current=0\.6934\(projection\)/);
+  assert.match(live, /pressure: .*window=1M \(session aaaaaaaa\)/);
+  assert.doesNotMatch(live, /backfilled/);
+
+  const fallback = await render(null);
+  assert.match(fallback, /native-current=0\.6785\(config-fallback\)/);
+  assert.match(fallback, /pressure: .*window=1M \(config-fallback\)/);
 });

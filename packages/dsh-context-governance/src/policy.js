@@ -126,7 +126,7 @@ export function summarizeWindow(window) {
   const mismatch = window.conservativeTokens !== null && window.conservativeTokens !== window.currentTokens
     ? ' 校验按 conservative'
     : '';
-  const nativeSource = String(window.currentSource).startsWith('projection') ? 'projection' : 'config-fallback';
+  const nativeSource = String(window.currentSource).startsWith('projection') ? window.currentSource : 'config-fallback';
   return `${current} conservative=${conservative} native-current=${nativeCurrent}(${nativeSource}) ` +
     `native-conservative=${nativeConservative} ${validated}${mismatch}`;
 }
@@ -402,10 +402,12 @@ export function summarizePressure(pressure, { at = null, sessionId = null, windo
   const safety = known && pressure.adjusted !== null && pressure.safety !== null ? `(×${pressure.safety})` : '';
   const ratio = known && pressure.ratio !== null ? pressure.ratio.toFixed(2) : '-';
   const windowValue = known ? formatWindow(pressure.windowTokens) : '-';
-  // DEC-20261025-66：window= 后带 session 短 id；P3-1：无观察时标 config-fallback。
+  // DEC-20261025-66 / P3-1 / P3-13：window= 的三种来源各一种写法，同一行内不叠加两套括注。
   let window;
-  if (sessionId !== null && sessionId !== undefined) window = `window=${windowValue} (session ${shortSessionId(sessionId)})`;
-  else if (windowSource === 'config-fallback') window = `window=${windowValue} (config-fallback)`;
+  if (sessionId !== null && sessionId !== undefined) {
+    const suffix = windowSource === 'projection(backfilled)' ? ', backfilled' : '';
+    window = `window=${windowValue} (session ${shortSessionId(sessionId)}${suffix})`;
+  } else if (windowSource === 'config-fallback') window = `window=${windowValue} (config-fallback)`;
   else window = `window=${windowValue}`;
   const head = `measured=${fmt(known ? pressure.measured : null)} ` +
     `estimated=${fmt(known ? pressure.estimated : null)} ` +
