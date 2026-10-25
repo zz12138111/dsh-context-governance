@@ -476,9 +476,18 @@
 - `/cg status` 同时显示两值：`window current=<#lastSession> (session id) | conservative=<min>`，避免出现“显示允许 0.68、apply 却拒绝”的矛盾；
 - 若 current 与 conservative 不一致，状态行必须明示“校验按 conservative”。
 
-**④ 验收（追加）**：
+**④ 公式退化（`W ≤ O + 65536`）——`DEC-20261025-68`：选 A，拒绝而非造数**：
+- 当 `floor(min(W×0.8, W−O−65536)) ≤ 0` 时，`native = unknown (degenerate)`；**禁止用常数 `0.6785` 冒充**；
+- 该值无法校验 `at ≤ native`：**设置 `compact.at` 的层一律拒绝**（含会话层），审计 `policy-invalid(reason=native-uncomputable)`；
+- 已生效的继承值标 `unverified-degenerate`；**0.2.2 提前压不得触发**（`effective < native` 无法成立）；
+- `/cg status` 显示 `native=unknown (degenerate: W=128k O=256k)`；
+- 若 W 后续恢复正常 → 自动恢复可校验状态；
+- **用例改写**：128k 窗口 + `at=0.6` → **被拒**（不是降级）；这条优先于“1M+128k 双会话”中的退化为准。
+
+**⑤ 验收（追加）**：
 - 状态行含 `current`/`conservative`/session 短 id/来源与时间；
-- 构造“一会话 1M、另一会话 128k”的用例：`compact.at=0.6` 在保守值下被拒或降级，且状态显示与校验结论一致；
+- “1M + 128k 双会话”用例：`compact.at=0.6` 在保守值下**被拒**，且状态显示与校验结论一致；
+- **退化用例**：`W=128k`、`O=256k` → `native=unknown (degenerate)`、`at` 层被拒、状态可见；
 - 模拟 `request/context` 删除窗口 → 状态变 `unknown`，不沿用旧值。
 
 
