@@ -15,6 +15,8 @@ temp/
 logs/
 .cross-session/
 STATUS.local.md
+# 文件附件插件在本工作区落下的本地缓存（用户附件，不进库）
+.dsh-file-attachment/
 
 # 插件运行时状态（记忆库、保护 journal、写者锁；不进库）
 memory/governance/
