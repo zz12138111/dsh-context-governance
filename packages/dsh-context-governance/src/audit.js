@@ -84,6 +84,9 @@ export const AUDIT_FIELD_WHITELIST = Object.freeze({
   governanceCostSource: 'text',
   estimateMethod: 'text',
   auditVersion: 'text',
+  // 0.2.0：`/cg set` 会话层覆盖（只记键与字面值，不记消息）。
+  key: 'text',
+  value: 'text',
   // M1.2：能力探测双行只记服务名/类型，不记值。
   probe: 'text-array',
 });
@@ -95,6 +98,7 @@ export const AUDIT_EVENTS = Object.freeze([
   'capability@ready',
   'adapter-inferred',
   'policy-invalid',
+  'policy-set',
   'protection-write',
   'protection-write-failed',
   'protection-write-skipped',

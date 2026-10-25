@@ -132,6 +132,8 @@ export class CompressionGuard {
   #tokenMeter = null;
   #meterFiber = null;
   #lastUsage = new Map();
+  /** 0.2.0 压力观测：最近一次本项目会话事件所属的 session（只读引用，不持有消息）。 */
+  #lastSession = null;
   #pendingCosts = new Map();
   #lastCost = null;
   #toolNames = new Map();
@@ -346,6 +348,7 @@ export class CompressionGuard {
     }
     this.#unsubscribe = null;
     this.#started = false;
+    this.#lastSession = null;
     try {
       // ctx.inject 返回 cordis Fiber（不是 dispose 函数）；调用 fiber.dispose()，
       // 不是把返回值当函数调用。父 fiber 仍兜底。
@@ -429,6 +432,7 @@ export class CompressionGuard {
         unattributedEvents: this.#stats.unattributedEvents,
       },
       writeLatency: calculateLatencyStats(this.#writeDurations),
+      pressure: this.pressure(),
       stats: { ...this.#stats, pending: this.#pending.size, reports: this.#reports.length },
       lastCost: this.#lastCost === null ? null : { ...this.#lastCost },
       lastReport: last === null ? null : cloneJson(last),
@@ -529,6 +533,23 @@ export class CompressionGuard {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * 运行时压力观测（0.2.0）：返回最近会话的实测/估算 token 原始值。
+   * 只读，不触发压缩、不改任何状态；比例换算与 safety 系数在命令侧（policy.computePressure）。
+   */
+  pressure() {
+    const session = this.#lastSession;
+    if (session === null) return { sessionId: null, seq: null, measuredTokens: null, estimatedTokens: null };
+    const key = this.#sessionKey(session);
+    const usage = key === null ? undefined : this.#lastUsage.get(key);
+    return {
+      sessionId: key,
+      seq: usage?.seq ?? null,
+      measuredTokens: Number.isFinite(usage?.tokens) ? usage.tokens : null,
+      estimatedTokens: this.#measureTokens(session),
+    };
   }
 
   #sessionKey(session) {
@@ -1234,6 +1255,7 @@ export class CompressionGuard {
         return;
       }
       this.#stats.events += 1;
+      this.#lastSession = session;
       // T2′：替换事件必须紧跟在 compaction/prune 之后；若下一条不是它，
       // 先把尚未完成的那条按 unknown 落盘，再处理当前事件。
       const eventSessionId = this.#sessionKey(session);

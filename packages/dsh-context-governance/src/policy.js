@@ -46,6 +46,13 @@ export const NATIVE_DEFAULT_RATIO = 0.6785;
 export const NATIVE_HEADROOM_TOKENS = 65536;
 export const NATIVE_RATIO_CAP = 0.8;
 
+/** `compact.at` 绝对下限（任何层）。 */
+export const AT_MIN = 0.2;
+/** 项目层下限：仓库自带的 `.cg-policy.json` 不能把阈值压得过低。 */
+export const PROJECT_AT_MIN = 0.45;
+/** 项目文件大小上限（防巨型文件拖慢 apply 时的同步读）。 */
+export const POLICY_FILE_MAX_BYTES = 64 * 1024;
+
 /**
  * 计算宿主原生触发点比例：
  *   native = floor(min(W × 0.8, W − O − 65536)) / W
@@ -65,13 +72,18 @@ function isInteger(value) {
 }
 
 /**
- * 校验单层配置。未知键/未知类型/越界 → 整层拒绝（返回 invalid 列表）。
+ * 校验单层配置。未知键/未知类型/越界/该层不允许的键 → 整层拒绝（返回 invalid 列表）。
+ *
+ * `sessionLayer`：只允许 `/cg set` 子集（安全参数只能从配置文件改）。
+ * `projectLayer`：仓库自带文件是新输入面——禁改安全参数，且 `compact.at` 有更高下限。
+ *
  * @param {object} raw
- * @param {{source: string, native: number, sessionLayer?: boolean}} options
+ * @param {{source: string, native: number, sessionLayer?: boolean, projectLayer?: boolean}} options
  */
-export function validateLayer(raw, { source = 'builtin', native = NATIVE_DEFAULT_RATIO, sessionLayer = false } = {}) {
+export function validateLayer(raw, { source = 'builtin', native = NATIVE_DEFAULT_RATIO, sessionLayer = false, projectLayer = false } = {}) {
   const invalid = [];
   const values = {};
+  const atMin = projectLayer ? PROJECT_AT_MIN : AT_MIN;
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
     return { values: {}, invalid: [{ source, key: '*', reason: 'layer-must-be-object' }] };
   }
@@ -80,14 +92,28 @@ export function validateLayer(raw, { source = 'builtin', native = NATIVE_DEFAULT
       invalid.push({ source, key, reason: 'unknown-key' });
       continue;
     }
-    if (sessionLayer && !SESSION_KEYS.includes(key)) {
-      invalid.push({ source, key, reason: 'config-only' });
+    if ((sessionLayer || projectLayer) && !SESSION_KEYS.includes(key)) {
+      // 项目层与 /cg set 都不得改 estimateSafety / lowThresholdAck（防仓库自盖确认）。
+      invalid.push({
+        source,
+        key,
+        reason: projectLayer ? 'project-denied' : 'config-only',
+        detail: projectLayer ? '项目层禁改安全参数' : undefined,
+      });
       continue;
     }
     switch (key) {
       case 'compact.at': {
         if (typeof value !== 'number' || !Number.isFinite(value)) { invalid.push({ source, key, reason: 'not-number' }); break; }
-        if (value < 0.2) { invalid.push({ source, key, reason: 'below-min', detail: 'compact.at 下限 0.20' }); break; }
+        if (value < atMin) {
+          invalid.push({
+            source,
+            key,
+            reason: 'below-min',
+            detail: projectLayer ? `项目层 compact.at 下限 ${PROJECT_AT_MIN}` : `compact.at 下限 ${AT_MIN}`,
+          });
+          break;
+        }
         if (value > native + 1e-9) {
           invalid.push({ source, key, reason: 'over-native', detail: '超过宿主原生触发点，M2 不支持推迟' });
           break;
@@ -135,6 +161,8 @@ export function validateLayer(raw, { source = 'builtin', native = NATIVE_DEFAULT
         invalid.push({ source, key, reason: 'unknown-key' });
     }
   }
+  // 项目层按不可信输入处理：任一键被拒 → 整层拒绝（不逐键降级），退回下一层生效。
+  if (projectLayer && invalid.length > 0) return { values: {}, invalid };
   return { values, invalid };
 }
 
@@ -197,4 +225,103 @@ export function policyTable(policy) {
     const text = value === null ? 'null' : String(value);
     return `${key}=${text} (source=${policy.sources[key]})`;
   });
+}
+
+/**
+ * 合并两类 invalid（层校验拒绝 + resolve 回退去重），供 `/cg status`、`/cg policy show` 共用。
+ * @param {{invalid?: Array<object>}|null} policyState buildPolicyState 的结果
+ * @param {{invalid?: Array<object>}|null} resolved resolve() 的结果
+ */
+export function collectInvalid(policyState = null, resolved = null) {
+  const items = [];
+  const seen = new Set();
+  const push = (item) => {
+    if (item === null || typeof item !== 'object') return;
+    const key = `${item.source}|${item.key}|${item.reason}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    items.push(item);
+  };
+  for (const item of policyState?.invalid ?? []) push(item);
+  for (const item of resolved?.invalid ?? []) push(item);
+  return items;
+}
+
+/** `source/key:reason` 单行摘要（截断到 max 条，余量写 +N）。 */
+export function formatInvalid(items = [], max = 5) {
+  const list = Array.isArray(items) ? items : [];
+  const shown = list.slice(0, max).map((item) => `${item.source}/${item.key}:${item.reason}`);
+  if (list.length > max) shown.push(`+${list.length - max}`);
+  return shown.join(', ');
+}
+
+/** 层级链展示：空层标 `(empty)`，避免被误读成“该项目层已生效”。 */
+export function layerChain(policy) {
+  const layers = Array.isArray(policy?.layers) ? policy.layers : [];
+  if (layers.length === 0) return 'builtin';
+  return layers
+    .map((layer) => {
+      const values = layer?.values ?? {};
+      const empty = Object.keys(values).length === 0;
+      return empty ? `${layer.source} (empty)` : layer.source;
+    })
+    .join(' -> ');
+}
+
+function round3(value) {
+  return Math.round(value * 1000) / 1000;
+}
+
+/**
+ * 运行时压力四段（0.2.0 只展示，不据此压缩）：
+ *   measured  = 最近 assistant/message.usage 的上下文侧 token / window
+ *   estimated = tokenMeter 估算 token / window
+ *   adjusted  = estimated × estimateSafety
+ *   effective = max(measured, adjusted)
+ *   ratio     = measured / estimated（估算是不是偏低）
+ *
+ * 任一来源缺失保持 null（不伪造），effective 只取已知项的最大值。
+ */
+export function computePressure({
+  measuredTokens = null,
+  estimatedTokens = null,
+  windowTokens,
+  estimateSafety = POLICY_DEFAULTS['compact.estimateSafety'],
+} = {}) {
+  const window = Number(windowTokens);
+  const validWindow = Number.isFinite(window) && window > 0;
+  const ratioOf = (tokens) => (validWindow && Number.isFinite(tokens) && tokens >= 0 ? round3(tokens / window) : null);
+  const measured = ratioOf(measuredTokens);
+  const estimated = ratioOf(estimatedTokens);
+  const safety = Number.isFinite(estimateSafety) ? estimateSafety : null;
+  const adjusted = estimated === null || safety === null ? null : round3(estimated * safety);
+  const known = [measured, adjusted].filter((value) => value !== null);
+  const effective = known.length === 0 ? null : Math.max(...known);
+  const ratio = measured === null || estimated === null || estimated === 0
+    ? null
+    : Math.round((measured / estimated) * 100) / 100;
+  return {
+    measured,
+    estimated,
+    adjusted,
+    effective,
+    ratio,
+    safety,
+    windowTokens: validWindow ? window : null,
+  };
+}
+
+/** 压力行（`/cg status`）：缺失项写 `-` 并标原因，不写假数字。 */
+export function summarizePressure(pressure, { at = null } = {}) {
+  const known = pressure !== null && typeof pressure === 'object';
+  const fmt = (value) => (value === null || value === undefined ? '-' : Number(value).toFixed(3));
+  const safety = known && pressure.adjusted !== null && pressure.safety !== null ? `(×${pressure.safety})` : '';
+  const ratio = known && pressure.ratio !== null ? pressure.ratio.toFixed(2) : '-';
+  const head = `measured=${fmt(known ? pressure.measured : null)} ` +
+    `estimated=${fmt(known ? pressure.estimated : null)} ` +
+    `adjusted=${fmt(known ? pressure.adjusted : null)}${safety} ` +
+    `effective=${fmt(known ? pressure.effective : null)} ratio=${ratio}`;
+  if (!known || pressure.effective === null) return `pressure: ${head} (no usage/tokenMeter yet)`;
+  const threshold = Number.isFinite(at) ? ` at=${Number(at).toFixed(2)} effective${pressure.effective >= at ? '>=' : '<'}at` : '';
+  return `pressure: ${head}${threshold}`;
 }

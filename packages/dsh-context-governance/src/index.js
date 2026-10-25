@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { registerStatusCommand } from './commands/cg-status.js';
-import { nativeRatio, profileLayer, resolvePolicy, validateLayer } from './policy.js';
+import { POLICY_FILE_MAX_BYTES, nativeRatio, profileLayer, resolvePolicy, validateLayer } from './policy.js';
 import { detectHostVersion, normalizeBackendVersion } from './compress/adapters.js';
 import { CompressionGuard } from './compress/runtime.js';
 import { formatCapability, probeCapability } from './capabilities.js';
@@ -123,6 +123,11 @@ export function resolveConfig(raw = {}) {
   if (policy.values === null || typeof policy.values !== 'object' || Array.isArray(policy.values)) {
     throw new MemoryStoreError('CONFIG', 'policy.values must be an object');
   }
+  // 项目层文件名只允许项目内相对路径：拒绝绝对路径与 `..`（防逃出 projectRoot）。
+  const projectFile = String(policy.projectFile ?? '.cg-policy.json').trim() || '.cg-policy.json';
+  if (path.isAbsolute(projectFile) || /(^|[\\/])\.\.([\\/]|$)/.test(projectFile)) {
+    throw new MemoryStoreError('CONFIG', 'policy.projectFile must be a relative path inside projectRoot');
+  }
   // policyBlockValidated
   if (config.audit === null || typeof config.audit !== 'object' || Array.isArray(config.audit)) {
     throw new MemoryStoreError('CONFIG', 'audit must be an object');
@@ -219,13 +224,20 @@ export async function openStore(config, options = {}) {
  */
 /**
  * 构建策略状态（纯同步、可单测）：profile 标签层 → 插件层 → 项目 .cg-policy.json。
- * 读文件失败/非法 JSON/非法键 → 只记 invalid（由 apply 写 policy-invalid 审计），不抛错。
+ * 读文件失败/非法 JSON/非法键/越界/超长 → 只记 invalid（由 apply 写 policy-invalid 审计），不抛错。
+ *
+ * 项目层是新输入面（仓库自带的文件）：路径必须在 projectRoot 内，大小受限，
+ * 且只能设策略子集（禁 estimateSafety/lowThresholdAck，compact.at 下限 0.45）。
  *
  * @param {object} config resolveConfig 的结果。
- * @param {{readFile?: (file: string) => string}} [deps]
+ * @param {{readFile?: (file: string) => string, statSize?: (file: string) => number}} [deps]
  */
 export function buildPolicyState(config, deps = {}) {
+  const realFs = typeof deps.readFile !== 'function';
   const readFile = typeof deps.readFile === 'function' ? deps.readFile : (target) => fs.readFileSync(target, 'utf8');
+  const statSize = typeof deps.statSize === 'function'
+    ? deps.statSize
+    : (realFs ? (target) => fs.statSync(target).size : null);
   const native = nativeRatio({ windowTokens: config.policy.windowTokens, reservedTokens: config.policy.reservedTokens });
   const layers = [];
   const invalid = [];
@@ -235,44 +247,51 @@ export function buildPolicyState(config, deps = {}) {
   layers.push({ source: 'plugin', values: plugin.values });
   invalid.push(...plugin.invalid);
   const project = { source: 'project', values: {} };
-  try {
-    const target = path.join(config.projectRoot, config.policy.projectFile);
-    const parsed = JSON.parse(String(readFile(target)));
-    const validated = validateLayer(parsed, { source: 'project', native });
-    project.values = validated.values;
-    invalid.push(...validated.invalid);
-  } catch (error) {
-    if (error?.code !== 'ENOENT') {
-      invalid.push({
-        source: 'project',
-        key: '*',
-        reason: error instanceof SyntaxError ? 'invalid-json' : 'read-failed',
-      });
+  const root = path.resolve(config.projectRoot);
+  const target = path.resolve(root, config.policy.projectFile);
+  if (!(target === root || target.startsWith(root + path.sep))) {
+    // 纵深防御：resolveConfig 已拒绝绝对路径与 `..`。
+    invalid.push({ source: 'project', key: '*', reason: 'outside-project-root' });
+  } else {
+    try {
+      const size = statSize === null ? null : statSize(target);
+      if (size !== null && size > POLICY_FILE_MAX_BYTES) {
+        invalid.push({ source: 'project', key: '*', reason: 'too-large', detail: `> ${POLICY_FILE_MAX_BYTES} bytes` });
+      } else {
+        const parsed = JSON.parse(String(readFile(target)));
+        const validated = validateLayer(parsed, { source: 'project', native, projectLayer: true });
+        project.values = validated.values;
+        invalid.push(...validated.invalid);
+      }
+    } catch (error) {
+      if (error?.code !== 'ENOENT') {
+        invalid.push({
+          source: 'project',
+          key: '*',
+          reason: error instanceof SyntaxError ? 'invalid-json' : 'read-failed',
+        });
+      }
     }
   }
   layers.push(project);
+  // 会话层（`/cg set`）：最高优先级；0.2.0 起为进程内覆盖，重启即失效。
+  const sessionLayer = { source: 'session', values: {} };
+  layers.push(sessionLayer);
   return {
     native,
     layers,
     invalid,
+    sessionLayer,
+    windowTokens: config.policy.windowTokens,
+    reservedTokens: config.policy.reservedTokens,
     resolve: () => resolvePolicy(layers, { native }),
   };
 }
 
 export async function apply(ctx, rawConfig = {}) {
   const config = resolveConfig(rawConfig);
-  const policyNative = nativeRatio({ windowTokens: config.policy.windowTokens, reservedTokens: config.policy.reservedTokens });
-  const policyLayers = [];
-  const profilePreset = profileLayer(config.policy.profile);
-  if (profilePreset !== null) policyLayers.push({ source: profilePreset.source, values: profilePreset.values });
-  const pluginPolicy = validateLayer(config.policy.values, { source: 'plugin', native: policyNative });
-  policyLayers.push({ source: 'plugin', values: pluginPolicy.values });
-  const policyState = {
-    native: policyNative,
-    layers: policyLayers,
-    invalid: [...pluginPolicy.invalid],
-    resolve: () => resolvePolicy(policyLayers, { native: policyNative }),
-  };
+  // 策略链只在这里算一次：profile 标签 → 插件配置 → 项目 .cg-policy.json（命令侧只读它）。
+  const policyState = buildPolicyState(config);
   if (!config.enabled) {
     ctx.logger?.info?.('[context-governance] disabled by config');
     return;
@@ -430,6 +449,17 @@ export async function apply(ctx, rawConfig = {}) {
       reason: invalid.reason,
       code: invalid.key,
     });
+  }
+  if (policyState.invalid.length > 0) {
+    // 用户日常只看 /cg status：apply 时也留一行，别让被拒的层静默退回。
+    const summary = policyState.invalid
+      .slice(0, 5)
+      .map((invalid) => `${invalid.source}/${invalid.key}:${invalid.reason}`)
+      .join(', ');
+    ctx.logger?.warn?.(
+      `[context-governance] policy layer rejected (${policyState.invalid.length}): ${summary}` +
+      `${policyState.invalid.length > 5 ? ', ...' : ''}`,
+    );
   }
   const commandOptions = {
     store,

@@ -6,7 +6,18 @@
  */
 
 import { resolveBackendFields } from '../compress/adapters.js';
-import { policyTable, summarizePolicy } from '../policy.js';
+import {
+  CONFIG_ONLY_KEYS,
+  SESSION_KEYS,
+  collectInvalid,
+  computePressure,
+  formatInvalid,
+  layerChain,
+  policyTable,
+  summarizePolicy,
+  summarizePressure,
+  validateLayer,
+} from '../policy.js';
 
 export const CG_COMMAND_NAME = 'cg';
 export const CG_COMMAND_DEFINITION_ID = 'dsh-context-governance/cg';
@@ -25,11 +36,27 @@ function costLine(status) {
     `trigger=${cost.trigger ?? '-'} pruned=${pruned} tools=${tools}`;
 }
 
+function formatSession(overrides) {
+  const keys = Object.keys(overrides ?? {});
+  if (keys.length === 0) return 'none';
+  return keys.map((key) => `${key}=${overrides[key] === null ? 'null' : overrides[key]}`).join(', ');
+}
+
 function statusText({ store, guard, audit, now, policy = null }) {
   const lines = [];
   const status = guard?.status ?? null;
   lines.push('context-governance status');
   lines.push(`time: ${now().toISOString()}`);
+  // 策略链与观察器无关：观察器没挂时也要能看到生效阈值与被拒的层。
+  let resolvedPolicy = null;
+  if (policy !== null && typeof policy.resolve === 'function') {
+    resolvedPolicy = policy.resolve();
+    lines.push(`policy: ${summarizePolicy(resolvedPolicy)}`);
+    const rejected = collectInvalid(policy, resolvedPolicy);
+    if (rejected.length > 0) lines.push(`policy-invalid: ${rejected.length} (${formatInvalid(rejected)})`);
+    const overrides = formatSession(policy.sessionLayer?.values);
+    if (overrides !== 'none') lines.push(`policy-session: ${overrides}`);
+  }
   if (status === null) {
     lines.push('compression: disabled (observer not mounted)');
   } else {
@@ -49,9 +76,16 @@ function statusText({ store, guard, audit, now, policy = null }) {
       `capabilities: control=${adapter.control} hooks=${adapter.hooks.before}/${adapter.hooks.after} ` +
       `protectionRole=${adapter.protectionRole ?? 'validator'}`,
     );
-    if (policy !== null && typeof policy.resolve === 'function') {
-      lines.push(`policy: ${summarizePolicy(policy.resolve())}`);
-    }
+    // 0.2.0 压力四段：只展示（不据此压缩）；safety 系数只从配置文件读。
+    lines.push(summarizePressure(
+      computePressure({
+        measuredTokens: status.pressure?.measuredTokens ?? null,
+        estimatedTokens: status.pressure?.estimatedTokens ?? null,
+        windowTokens: policy?.windowTokens,
+        estimateSafety: resolvedPolicy?.values?.['compact.estimateSafety'],
+      }),
+      { at: resolvedPolicy?.values?.['compact.at'] ?? null },
+    ));
     if (status.degradedReasons.length > 0) lines.push(`degraded: ${status.degradedReasons.join(', ')}`);
     else lines.push('degraded: none');
     if (status.conflicts.length > 0) {
@@ -139,26 +173,149 @@ function statusText({ store, guard, audit, now, policy = null }) {
  */
 export function createStatusCommand({ store = null, guard = null, getGuard = null, audit = null, policy = null, now = () => new Date() } = {}) {
   const currentGuard = () => (typeof getGuard === 'function' ? getGuard() : guard);
+
+  const parseBoolean = (text) => {
+    const lowered = String(text).trim().toLowerCase();
+    if (['on', 'true', '1', 'yes'].includes(lowered)) return { value: true };
+    if (['off', 'false', '0', 'no'].includes(lowered)) return { value: false };
+    return { error: `需要 on/off（收到 ${text}）` };
+  };
+  const parseValue = (key, text) => {
+    if (key === 'compact.early') return parseBoolean(text);
+    if (key === 'cost.remainingTurns') {
+      if (String(text).trim().toLowerCase() === 'null') return { value: null };
+      const number = Number(text);
+      if (!Number.isInteger(number) || number < 0) return { error: `需要 ≥0 整数或 null（收到 ${text}）` };
+      return { value: number };
+    }
+    if (String(text).trim() === '') return { error: '缺少值' };
+    const number = Number(text);
+    if (!Number.isFinite(number)) return { error: `需要数字（收到 ${text}）` };
+    return { value: number };
+  };
+  const sessionText = (sessionValues) => formatSession(sessionValues);
+  /** `/cg set key=value [key=value…] | /cg set reset`：会话层覆盖（最高优先级）。 */
+  const handleSet = (argText) => {
+    if (policy === null || typeof policy.resolve !== 'function' || policy.sessionLayer === undefined) {
+      return { kind: 'error', text: '[context-governance] session layer is unavailable (policy not wired)' };
+    }
+    const sessionValues = policy.sessionLayer.values;
+    if (argText === '' || argText === 'show') {
+      return {
+        kind: 'success',
+        text: [
+          'context-governance set',
+          `session: ${sessionText(sessionValues)}`,
+          'usage: /cg set compact.at=0.55 | /cg set compact.early=off | /cg set reset',
+          '（estimateSafety / lowThresholdAck 只能改配置文件；会话覆盖在重启后失效）',
+        ].join('\n'),
+      };
+    }
+    if (argText === 'reset' || argText === 'clear') {
+      const count = Object.keys(sessionValues).length;
+      for (const key of Object.keys(sessionValues)) delete sessionValues[key];
+      audit?.append?.('policy-set', { source: 'session', key: '*', value: 'reset' });
+      return { kind: 'success', text: `context-governance set\ncleared: ${count} session override(s)` };
+    }
+    // 解析 `key=value` 或 `key value` 两种写法。
+    const tokens = argText.split(/\s+/).filter((token) => token !== '');
+    const pairs = [];
+    for (let index = 0; index < tokens.length; index += 1) {
+      const token = tokens[index];
+      if (token.includes('=')) {
+        const at = token.indexOf('=');
+        pairs.push([token.slice(0, at), token.slice(at + 1)]);
+      } else {
+        const next = tokens[index + 1];
+        if (next === undefined || next.includes('=')) return { kind: 'error', text: `context-governance set: ${token} 缺少值` };
+        pairs.push([token, next]);
+        index += 1;
+      }
+    }
+    if (pairs.length === 0) {
+      return { kind: 'error', text: 'context-governance set: 缺少参数（示例 /cg set compact.at=0.55）' };
+    }
+    const next = { ...sessionValues };
+    for (const [key, rawValue] of pairs) {
+      if (CONFIG_ONLY_KEYS.includes(key)) {
+        return {
+          kind: 'error',
+          text: `context-governance set: ${key} 只能在配置文件改（安全参数不随会话覆盖；改完需重启）`,
+        };
+      }
+      if (!SESSION_KEYS.includes(key)) {
+        return { kind: 'error', text: `context-governance set: 未知键 ${key}（可设：${SESSION_KEYS.join(', ')}）` };
+      }
+      const parsed = parseValue(key, rawValue);
+      if (parsed.error !== undefined) return { kind: 'error', text: `context-governance set: ${key} ${parsed.error}` };
+      const checked = validateLayer({ [key]: parsed.value }, { source: 'session', native: policy.native, sessionLayer: true });
+      if (checked.invalid.length > 0) {
+        const item = checked.invalid[0];
+        const detail = item.detail === undefined ? '' : `（${item.detail}）`;
+        return { kind: 'error', text: `context-governance set: ${key}=${rawValue} 被拒绝: ${item.reason}${detail}` };
+      }
+      next[key] = parsed.value;
+    }
+    // 先写会话层再整体求解：<0.30 未确认会被 resolve 回退，此时撤销并明确报错。
+    const previous = { ...sessionValues };
+    for (const key of Object.keys(sessionValues)) delete sessionValues[key];
+    Object.assign(sessionValues, next);
+    const resolved = policy.resolve();
+    const blocking = resolved.invalid.find((item) => item.reason === 'low-threshold-unacked');
+    if (blocking !== undefined) {
+      for (const key of Object.keys(sessionValues)) delete sessionValues[key];
+      Object.assign(sessionValues, previous);
+      return {
+        kind: 'error',
+        text: `context-governance set: compact.at=${next['compact.at']} 低于 0.30，` +
+          '需在配置文件设 compact.lowThresholdAck=true 后重启（该确认不随会话覆盖）',
+      };
+    }
+    for (const [key, rawValue] of pairs) {
+      audit?.append?.('policy-set', { source: 'session', key, value: String(rawValue) });
+    }
+    return {
+      kind: 'success',
+      text: [
+        'context-governance set',
+        `applied: ${pairs.map(([key, value]) => `${key}=${value}`).join(', ')}`,
+        `session: ${sessionText(sessionValues)}`,
+        `policy: ${summarizePolicy(resolved)}`,
+      ].join('\n'),
+    };
+  };
+
   return {
     definitionId: CG_COMMAND_DEFINITION_ID,
     name: CG_COMMAND_NAME,
     description: '上下文治理状态：后端/能力、策略链、记忆、上次压缩与回注、prune 成本、写盘 p50/p95、审计',
-    input: { hint: 'status | status last-cost | policy show' },
+    input: { hint: 'status | status last-cost | policy show | set <key>=<value> | set reset' },
     handler: async (invocation = {}) => {
       const raw = String(invocation.rawInput ?? '').trim();
+      if (raw === 'set' || raw.startsWith('set ') || raw === 'reset') {
+        try {
+          return handleSet(raw === 'reset' ? 'reset' : raw.slice(3).trim());
+        } catch (error) {
+          return {
+            kind: 'error',
+            text: `[context-governance] set failed: ${String(error?.message ?? error).slice(0, 300)}`,
+          };
+        }
+      }
       if (raw === 'policy show' || raw === 'policy') {
         if (policy === null || typeof policy.resolve !== 'function') {
           return { kind: 'error', text: '[context-governance] policy is unavailable' };
         }
         const resolved = policy.resolve();
-        const layers = Array.isArray(policy.layers) ? policy.layers.map((layer) => layer.source) : [];
+        const rejected = collectInvalid(policy, resolved);
         const lines = [
           'context-governance policy',
           summarizePolicy(resolved),
-          `layers: ${layers.join(' -> ') || 'builtin'}`,
+          `layers: ${layerChain(policy)}`,
+          `session: ${formatSession(policy.sessionLayer?.values)}`,
           ...policyTable(resolved),
-          ...(resolved.invalid.length > 0
-            ? ['invalid:', ...resolved.invalid.map((item) => `${item.key} (source=${item.source}): ${item.reason}`)]
+          ...(rejected.length > 0
+            ? ['invalid:', ...rejected.map((item) => `${item.key} (source=${item.source}): ${item.reason}`)]
             : ['invalid: none']),
         ];
         return { kind: 'success', text: lines.join('\n') };
@@ -179,7 +336,8 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
       if (raw !== '' && raw !== 'status') {
         return {
           kind: 'error',
-          text: 'Usage: /cg status [last-cost] | /cg policy show   (未指定参数时等价于 /cg status)',
+          text: 'Usage: /cg status [last-cost] | /cg policy show | /cg set <key>=<value> | /cg set reset' +
+            '   (未指定参数时等价于 /cg status)',
         };
       }
       try {

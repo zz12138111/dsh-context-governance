@@ -8,9 +8,12 @@ import test from 'node:test';
 import {
   NATIVE_DEFAULT_RATIO,
   POLICY_DEFAULTS,
+  computePressure,
+  layerChain,
   nativeRatio,
   profileLayer,
   resolvePolicy,
+  summarizePressure,
   validateLayer,
   summarizePolicy,
   policyTable,
@@ -85,4 +88,35 @@ test('0.2.0 show 展开：每键一行含 source', () => {
   const table = policyTable(policy);
   assert.equal(table.length, Object.keys(POLICY_DEFAULTS).length);
   assert.ok(table.some((line) => line.startsWith('compact.at=0.52 (source=project)')));
+});
+
+test('0.2.0 压力四段：adjusted 用 estimateSafety，effective 取 max，ratio=实测/估算', () => {
+  const pressure = computePressure({ measuredTokens: 583000, estimatedTokens: 412000, windowTokens: 1_000_000 });
+  assert.equal(pressure.measured, 0.583);
+  assert.equal(pressure.estimated, 0.412);
+  assert.equal(pressure.adjusted, 0.556);
+  assert.equal(pressure.effective, 0.583);
+  assert.equal(pressure.ratio, 1.42);
+  const line = summarizePressure(pressure, { at: 0.60 });
+  assert.match(line, /adjusted=0\.556\(×1\.35\) effective=0\.583 ratio=1\.42 at=0\.60 effective<at/);
+});
+
+test('0.2.0 压力四段：来源缺失保持 null，不伪造；effective 只取已知项', () => {
+  const onlyMeasured = computePressure({ measuredTokens: 500000, estimatedTokens: null, windowTokens: 1_000_000 });
+  assert.equal(onlyMeasured.estimated, null);
+  assert.equal(onlyMeasured.adjusted, null);
+  assert.equal(onlyMeasured.effective, 0.5);
+  assert.equal(onlyMeasured.ratio, null);
+  const empty = computePressure({ windowTokens: 1_000_000 });
+  assert.equal(empty.effective, null);
+  assert.match(summarizePressure(empty), /\(no usage\/tokenMeter yet\)/);
+  const badWindow = computePressure({ measuredTokens: 1, estimatedTokens: 1, windowTokens: 0 });
+  assert.equal(badWindow.measured, null);
+  assert.equal(badWindow.effective, null);
+});
+
+test('0.2.0 层级链：空层标 (empty)，不被读成已生效', () => {
+  const policy = { layers: [{ source: 'plugin', values: { 'compact.at': 0.58 } }, { source: 'project', values: {} }] };
+  assert.equal(layerChain(policy), 'plugin -> project (empty)');
+  assert.equal(layerChain({ layers: [] }), 'builtin');
 });
