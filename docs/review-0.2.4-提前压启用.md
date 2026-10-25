@@ -50,6 +50,12 @@
 5. `research` profile → `early=off (policy:research)`；
 6. 全程不触碰 `desktop`、不重启桌面 DSH。
 
+### 3.1 T5 构造参数（用户已定 `at=0.35`）——口径核对
+
+- **代码允许**：`AT_MIN = 0.2`、`PROJECT_AT_MIN = 0.45`（仅项目层）；`<0.30` 才需 `compact.lowThresholdAck`。**`at=0.35` 在插件/会话层合法、无需 ack**；约 `0.35 × 1,048,576 ≈ 367,002` tokens，与任务单描述一致。
+- **但 1.0 定义里「`compact.at` 下限 0.45」的写法不准确**：0.45 只是**项目层**下限；策略/配置/会话层下限是 0.30（<0.30 需 ack），硬地板 0.2。发布说明与定义应改为「默认 0.60；插件/配置/会话层 ≥0.30（<0.30 需 `lowThresholdAck`）；项目层 ≥0.45」——否则 T5 用 0.35 会与自家文档冲突。
+- 复核 T5 时我会同时验：`/cg status` 的 `compact.at` 显示为 0.35（source=config）且无 `below-min`/`low-threshold-unacked` 的 `policy-invalid`。
+
 ## 4. 待复核（下一批）
 
 - **T1**（`5f83d10`：armed 三通道接线）尚未出正式复核记录；T3 用例已覆盖其状态/命令面，但默认值与项目层忽略需单独签；
