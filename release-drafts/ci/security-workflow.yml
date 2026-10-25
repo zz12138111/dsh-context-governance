@@ -1,0 +1,36 @@
+# REQ-12 T2 · CI 敏感扫描草稿（启用前放 .github/workflows/security.yml）
+name: security
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # gitleaks 需要历史
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: unit tests
+        working-directory: packages/dsh-context-governance
+        run: node --test "test/*.test.mjs"
+
+      - name: repo compliance scan (strict, blocker gate)
+        run: node scripts/compliance-scan.mjs --strict
+
+      # 第三方 Action：需用户批准后启用；私有仓库可能需要 GITLEAKS_LICENSE secret
+      - name: gitleaks (history)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }} # 可选，按需提供
