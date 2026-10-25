@@ -81,7 +81,7 @@
 
 - **依据**：`docs/上下文治理插件-架构说明-v1.0.md` §16.3；M1 `REQ-20261025-01`
 - **优先级**：P1
-- **状态**：待评估（M1 结项后由 00 排期）
+- **状态**：已排期（M1 已结项，已推 00 派开发）
 - **背景/痛点**：M1 解决“不断线”，不解决“进入量”。工具结果是最大的一块；用“头尾 + 落盘指针”换体积，同时测量批量调用空间，不承诺收益。
 - **目标（可验收）**：
   1. 超过保守阈值的工具结果折叠为“头 + 省略标记 + 尾 + 指针”，完整内容可按指针用原生 `read` 回读。
@@ -96,8 +96,9 @@
   - 不强制批量、不新增“批量工具”；
   - 不接 ACP、不做数据库、不做宽兼容。
 - **前置门禁（硬门禁）**：
-  - **F1 折叠 seam**：必须在工具结果**进入历史前**完成替换。若只能“事后替换/事后改写” → **直接停掉 M1.1，不发版**；不接受部分折叠，也不降级为“仅审计”。
-  - **F2 冲突检查**：已带 `[token-guard]` 或 `[cg-fold]` 标记的结果跳过，不叠加。
+  - **F1 折叠 seam（2026-10-25 修订，替代原“进入历史前”字面口径）**：替换必须让**模型下一次请求看到折叠后的内容**——判定看“模型看到什么”，不看“替换发生在哪个函数里”。允许使用宿主既有机制：`session.append` 替换事件 + `compaction/prune` 影子定价（宿主 `@deepseek-ai/dsh-compaction-tool-result-pruner` 即用此协议，`dsh-base` 默认挂载）。只有在“模型下一次仍看到全文、折叠只体现在审计/日志”时才算失败 → **停项、不发版**；不接受“仅审计”降级。
+    - 修订理由：原字面口径会把宿主官方 replace+shadow 协议判成失败，而该协议在真机已证明有效（同一会话内 `compaction/prune` 事件 8/8 出现）。
+  - **F2 冲突检查**：已带 `[token-guard]` 或 `[cg-fold]` 标记的结果跳过；**已被宿主 tool-result-pruner 折叠的结果也跳过**（其替换版紧跟 `compaction/prune` 影子事件，或以 `sourceEventSeqs` 引用原事件），不叠加。
   - **B1 批量基线**：先只读采集步/回合、调用/步、prompt token，作为测量基线。
 - **行为**：
   - **触发**：结果长度 ≥ `fold.minChars`（默认 8000），工具在名单内，未被折叠过，不是最近 `keepRecent`（默认 3）条。
@@ -118,7 +119,7 @@
   - **批量**：只测量；内部隐藏 A/B 可开，但默认不改变行为、不承诺收益。
 - **配置默认值**：`fold.enabled=true`（保守）；`minChars=8000`；`headChars=tailChars=1500`；`keepRecent=3`；`ttlDays=7`；`maxMB=256`；`batch.measure=true`；`batch.hiddenAb=internal`。
 - **验收标准**：
-  - ① **F1 通过**：进入历史前替换；仅事后替换 → 停项、不发版。
+  - ① **F1 通过**：模型下一次请求看到折叠后内容（允许宿主 replace+shadow 协议）；仅“模型仍看全文、只留审计” → 停项、不发版。
   - ② **折叠生效**：名单内 ≥`minChars` 的结果折叠；中间有“省略 N 字符”与指针。
   - ③ **可回读**：原生 `read` 可按指针找回原文；回读成功率有记录。
   - ④ **硬排除**：`pwsh`、`read` 永不折叠；tokenGuard/已折叠结果不叠加。
@@ -129,10 +130,53 @@
   - ⑨ **安全**：spill 不进 git/记忆，TTL 清理，敏感风险有文档。
 - **依赖/风险**：
   - F1 是硬门禁，失败即停；不做降级版。
+  - **与宿主 tool-result-pruner 重叠（2026-10-25 发现）**：`dsh-base` 默认挂载 `@deepseek-ai/dsh-compaction-tool-result-pruner`，>8192 字符的工具结果在**压缩触发时**已被替换为「头 4096 + `middle pruned` + 尾 1024」，原文留会话日志。T2 优先复用其替换协议与 `compaction/prune` 影子定价，**不自研替换协议**；差异价值只保留“早于压力触发、工具名单（绝不折 `pwsh`/`read`）、spill 指针可原生 `read` 回读、审计”。先出差异表，再定 T2 范围。
   - 与 tokenGuard 重叠，必须跳过已折结果。
   - spill 可能含敏感内容；回读依赖原生 `read` 的路径权限。
   - 折叠过度会导致反复回读，净节省可能为负；用 B1 基线测。
 
 ### 任务拆解
 
-见 `TASKS/REQ-20261025-02-M1.1-拆解.md`；等 M1 结项后由 00 排期，现在不派活。
+见 `TASKS/REQ-20261025-02-M1.1-拆解.md`；M1 已结项，已推 00 派开发。
+
+---
+
+## REQ-20261025-03 上下文治理插件 M1.2 —— 探测修正与成本实测
+
+- **依据**：M1 `REQ-20261025-01` 成本归属字段；`docs/M1-回顾与M2候选.md`；2026-10-25 可行性复查（宿主 asar 代码 + 真机会话日志）。
+- **优先级**：P1
+- **状态**：已排期（待 00 派开发；与 M1.1 T1 并行，不互斥）
+- **背景/痛点**：M1 真机上 `tokensBefore/After` 恒 `null`、能力行 `compaction=absent`，此前按“宿主限制”接受。复查发现两处都是**插件侧时序问题**：
+  1. `ctx.tokenMeter` 在 apply 时读一次并缓存（`runtime.js:189-195`），没走 `ctx.inject(['tokenMeter'], …)`；服务晚注册就永久为 `null`。宿主 `@deepseek-ai/dsh-token-meter` 由 `dsh-base` 默认挂载，确实存在。
+  2. `ctx.compaction` 在 apply 时探测为 absent，但 `compaction-basic` 已在本机 profile 配置（`thresholdRatio: 0.65`）且压缩事件真实发生 → 服务存在，只是探测太早。
+  3. 兜底证据：真机会话日志中 `assistant/message` 1199/1199 带 `usage`（样本 `inputTokens=20662 / cacheReadTokens=2432 / totalTokens=23321`），压缩前后水位可实测。
+- **目标（可验收）**：
+  1. **成本实测**：`tokensBefore/After` 优先 `ctx.tokenMeter`（延迟注入或按需取，成功后缓存），失败退回 `assistant/message.usage`，仍取不到才 `null` + `unknown`。
+  2. **探测修正**：能力探测由“apply 一次”改为「apply 记 `capability@apply` + 首个会话事件后补 `capability@ready`」两行审计，不得因时序把可用服务记成 absent。
+  3. **口径可追**：新增 `tokensBeforeSource` / `tokensAfterSource`（`tokenMeter` / `usage` / `none`），`auditVersion` 升 `cost-v1.1`；**只增字段、不改已有字段语义**，旧解析器仍可用。
+  4. **provider 结论**：同一轮给出 `ctx.compaction` 是否可获取的只读结论（可/不可 + 证据路径），供 P1 决策「回注时点是否可修」；**本轮不改压缩后端、不替换 provider**。
+- **边界（不做什么）**：
+  - 不改回注逻辑、不改记忆、不改折叠（折叠归 M1.1）；
+  - 不接 ACP、不做货币成本、不做跨周期聚合（留 M2）；
+  - 不安装/不重启/不改已装插件与 profile；实验用隔离 profile 或只读方式，需要安装/重启先报 00 + 用户批准；
+  - 不猜：取不到就 `null` + `unknown`，不许拿估算冒充实测。
+- **口径定义**（写进文档）：
+  - `tokensBefore` = 压缩前**最后一次模型调用**的上下文侧用量 = `inputTokens + cacheReadTokens + cacheWriteTokens`（取 checkpoint 之前最后一条 `assistant/message`）；
+  - `tokensAfter` = `compaction/end` 之后**第一条** `assistant/message` 的同口径值；
+  - 原始分量可选记 `tokensBeforeParts` / `tokensAfterParts`（input/cacheRead/cacheWrite），只放数字。
+- **验收标准**：
+  - ① 真机（或隔离 profile）上至少一条 `compaction-cost` 的 `tokensBefore/After` 非 null，且 `*Source` 与实际路径一致；
+  - ② tokenMeter 不可用时 usage 兜底生效并标 `usage`；
+  - ③ 两者都不可用时仍为 `null` + `none`，不伪造；
+  - ④ 审计出现 `capability@ready` 行，且不再出现“服务存在却被记 absent”；
+  - ⑤ 单测覆盖：延迟注入生效、usage 兜底、全缺、来源字段、无正文/路径泄漏；
+  - ⑥ 给出 `ctx.compaction` 可用性结论与证据路径。
+- **依赖/风险**：
+  - 依赖本版 cordis 的服务注入语义（`ctx.inject` 已在本插件用于 `commands`）；若延迟注入不可用，退化为“按需读取 + 缓存成功值”；
+  - `assistant/message.usage` 是每次调用的用量，不是“省下的 token”；只做水位，不冒充节省量；
+  - 真机验证需一次重启（用户执行，开发不执行）。
+- **成本归属字段**：沿用 M1 的 A 口径，字段不删不改；本单只补来源与实测路径。
+
+### 任务拆解
+
+见 `TASKS/REQ-20261025-03-M1.2-拆解.md`。
