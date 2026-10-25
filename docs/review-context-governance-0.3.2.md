@@ -215,3 +215,36 @@ P2-1（扫描）与 P3-2/P3-3（cleanup）修复有效；6 条降级口径未漂
 ### 8.4 复核结论
 
 三笔提交可作为重启窗口前候选。**阻塞项：无。** 遗留非阻塞项：P3-1（busy 文案）、P3-2（`getEngine` 在 try 外）、P3-4（`selfRegexLiteral` 行级判定，仅自述文件）、P3-5（dry-run 非纯只读：瞬时 probe 文件 + 可能取锁）。
+
+## 9. 已知限制 / backlog（发布说明可直接引用）
+
+> 本节是给 Release notes / README 直接引用的话术；行为以实测为准，不写“不写任何文件”这类不成立的断言。
+
+### 9.1 `memory-cleanup --dry-run` 的准确语义（P3-5）
+
+**准确口径**：
+
+> `--dry-run` 只做预演判定，**不修改任何记忆条目、不写审计**；但为判断记忆库是否可写，会**临时创建并删除**一个探针文件（`.write-probe-<pid>-<ts>`）；写者锁空闲时还会**短暂取用并释放** `.writer.json`。
+
+**不能写的口径**：“dry-run 不写任何文件”——不成立（`MemoryStore.open` 未带 `readOnly`，会 `probeWritable()` 写探针、并可能取锁）。
+
+影响与边界：
+
+- 不产生任何记忆变更（条目不 expire、audit 不追加）；探针文件异常退出时可能残留 `.write-probe-*`，可直接删除。
+- 写者锁按 pid 存活自动接管；dry-run 退出时释放自己取的锁。
+- 修复计划（窗口后）：dry-run 回 `readOnly: true`，锁状态改用 `readWriterLock() + isPidAlive()` 只读判断。
+
+### 9.2 清理目标数不是固定值
+
+- 目标 = 当前 `status=active` 且 `writer=rule` 的 `progress` 条目（或 `writer=rule` 且标题纯数字）。
+- 每次压缩都可能新增一条；实测从 7 涨到 **8**（`MEM-20261026-1006 批次进度：3/5`，rule 噪音）。
+- 用户口径：**按 `writer=rule` 核实时清单，不按“7 条”核**。
+
+### 9.3 backlog（均不阻塞重启窗口）
+
+| 编号 | 位置 | 说明 | 影响 | 计划 |
+|---|---|---|---|---|
+| P3-1 | `src/compress/early.js` | `runMaintenance` 同步 busy 文案 `already has active work` 未被 `isBusyCompactionError` 识别 | 只影响 `reason` 字段（`failed` 而非 `busy`） | 0.2.2 接线时修 |
+| P3-2 | `src/compress/early.js` | `getEngine()` 在 `try` 外 | 访问器抛错会外泄给调用方 | 0.2.2 接线时修 |
+| P3-4 | `scripts/compliance-scan.mjs` | `selfRegexLiteral` 仍是**行级**判定（仅 `contract.js` 与扫描脚本两个自述文件） | 真 token 落在含正则字面量的行上会被降 info | 与扫描规则一并改 |
+| P3-5 | `scripts/memory-cleanup.mjs` | dry-run 非纯只读（见 9.1） | 无数据风险；头注释不准确 | 窗口后修 |
