@@ -6,6 +6,7 @@
 > 当前进度：**T2–T8 + M1.2 + T2′ 离线完成**——记忆文件与契约、`mem_write`/`mem_query`、压缩适配与保护校验、压缩前固化与回注、`/cg status` 与审计正式化、故障注入/轮转/只读降级、S1–S6 验收场景 + 真实自动/手动压缩双样本回放 + 回注自愈 + 成本归属审计（T8）；M1.2 增加 `capability@apply/@ready`、`tokenMeter` 延迟获取、usage 兜底与 `cost-v1.1` 来源字段；T2′ 增加宿主 `compaction/prune` 观测与 `cost-v1.2` 成本视图（不折叠、不落盘）；**M2 0.2.0 策略层**——四层配置合成（内置/profile/插件/项目 `.cg-policy.json`/会话）、`/cg policy show`、`/cg set` 会话覆盖、`/cg status` 的 `policy`/`policy-invalid`/`pressure` 行、项目文件按不可信输入加固（A+C 口径）；**M2 0.2.1 窗口/校验层**——宿主 `contextPressure.contextWindow` 观察、dynamic native 同源、conservative 校验、`/cg status` 的 `window:` 双显，**本版不触发任何压缩**；**全部测试通过（数量见 `node --test` 输出）**。
 > 真机：已安装（junction 指向源码目录）；最近一次真机验证记录见 `memory/ARTIFACTS.md`，待验收项见 `STATUS.md`（本文不写具体版本/数字）。**M3 T2（0.3.1）起新会话 header 默认开启**（`/cg header off` 或配置 `memoryHeader.enabled=false` 可关）。
 > 安装方式：`docs/插件安装升级-Runbook.md`（`file:` 声明 + junction + bundle；不用 pnpm）。本机已按该方式安装（junction 指向源码），其它机器按 Runbook 操作。
+> **宿主兼容边界**：`engines.dsh = ">=0.2.1-rc.2 <0.2.2-0"`；实测只到 **0.2.1-rc.3**（在范围内）。**宿主升级到 0.2.2 会被拒载**——升级 DSH 前先看兼容矩阵/发布说明。
 
 ## 提前压（0.2.4，默认开）⚠️
 
