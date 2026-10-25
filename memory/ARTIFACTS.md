@@ -57,3 +57,4 @@
 - 2026-10-25 · 三轮复核 P2（v0.1.9）：fixture 改**结构白名单**（`analysis/t7/structure.mjs`）——只保留 type/seq/time/枚举/数值/id 引用/source.kind/shadowedRange/usage；content/stream/texts/args/meta/summary 整段占位；重生成两份 fixture（58 KB/55 KB），scan strings=566/544、violations=0（单串/join/join-tight/raw），新增“结构字段无空白散文”断言；回放全过
 - 2026-10-25 · 三轮复核 P3-1/P3-2：commands 晚挂载时 `/cg status` 通过 `ctx.inject(['commands'], retry)` 或下个 tick 重试一次（新增晚挂载测试）；`reinjection-shadowed` 判定在 shadowedSeqs 缺失时用 shadowedRange 兜底（新增 range 测试）
 - 2026-10-25 · 全量测试 **168/168**（T8 166 + commands 晚挂载 + shadowedRange 兜底）
+- 2026-10-25 · 四轮复核收口（v0.1.10）：`reinjection.maxFailures` 接入插件配置（DEFAULT_CONFIG/resolveConfig 夹取 1–20/传入 guard/cordis.patch.yml 示例/`/cg status` 显示）；`compaction-cost` 增加 `backend: adapter.kind`；`tokensShadowed` 缺字段为 null；空 usage 标 unknown；late-start trigger 按 summary.sourceCommandId；删除死字段 `#reinjectionDisabled`；恢复后直接回实际 mode；全量 **171/171**

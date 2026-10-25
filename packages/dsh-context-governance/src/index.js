@@ -45,6 +45,10 @@ export const DEFAULT_CONFIG = Object.freeze({
   audit: Object.freeze({
     maxBytes: DEFAULT_AUDIT_MAX_BYTES,
   }),
+  /** T8-1：连续回注失败阈值（达到后暂停一个周期保护写；1–20 夹取）。 */
+  reinjection: Object.freeze({
+    maxFailures: 3,
+  }),
   memoryHeader: Object.freeze({
     enabled: false,
     maxEntries: 5,
@@ -122,6 +126,14 @@ export function resolveConfig(raw = {}) {
   }
   if (typeof config.onlyProject !== 'boolean') throw new MemoryStoreError('CONFIG', 'onlyProject must be a boolean');
   if (typeof config.captureTitle !== 'boolean') throw new MemoryStoreError('CONFIG', 'captureTitle must be a boolean');
+  if (config.reinjection === null || typeof config.reinjection !== 'object' || Array.isArray(config.reinjection)) {
+    throw new MemoryStoreError('CONFIG', 'reinjection must be an object');
+  }
+  const reinjection = { ...DEFAULT_CONFIG.reinjection, ...config.reinjection };
+  if (!Number.isInteger(reinjection.maxFailures)) {
+    throw new MemoryStoreError('CONFIG', 'reinjection.maxFailures must be an integer (clamped to [1, 20])');
+  }
+  reinjection.maxFailures = Math.min(Math.max(reinjection.maxFailures, 1), 20);
   return {
     enabled: config.enabled,
     projectRoot,
@@ -136,6 +148,9 @@ export function resolveConfig(raw = {}) {
     },
     audit: {
       maxBytes: audit.maxBytes,
+    },
+    reinjection: {
+      maxFailures: reinjection.maxFailures,
     },
     memoryHeader: {
       enabled: memoryHeader.enabled,
@@ -250,6 +265,7 @@ export async function apply(ctx, rawConfig = {}) {
         onlyProject: config.onlyProject,
         captureTitle: config.captureTitle,
         project: config.project,
+        reinjection: { maxFailures: config.reinjection.maxFailures },
       });
       guard.start();
       const status = guard.status;

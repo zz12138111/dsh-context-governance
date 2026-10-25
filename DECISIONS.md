@@ -199,3 +199,9 @@
 - 选择：首次注册失败时优先 `ctx.inject(['commands'], retry)`，否则下个 tick `setTimeout` 重试一次；重试成功写 info、dispose 最终 handler。回注被吞判定改为 `shadowedSeqs.includes(seq) || seq ∈ shadowedRange`。
 - 影响：晚挂载可恢复命令；缺 shadowedSeqs 的宿主也能记回注被吞与 tokensDropped。
 - 关联：`src/index.js`、`src/compress/runtime.js`、`test/t7-p2.test.mjs`、`test/t8-cost.test.mjs`；状态：active。
+## DEC-PLUGIN-20261025-27 [tech] T8 配置收口：reinjection.maxFailures 进配置、成本补 backend 维度与口径修正
+
+- 背景：四轮复核指出 `reinjection.maxFailures` 只在测试可传、配置写 `/cg` 会静默忽略；`compaction-cost` 缺 `backend` 维度；`tokensShadowed` 缺字段默认 0 无法区分、空 usage 误标 measured、late-start trigger 写死 auto、`#reinjectionDisabled` 为死代码、恢复后 mode 粘滞。
+- 选择：`DEFAULT_CONFIG.reinjection={maxFailures:3}`，`resolveConfig` 校验整数并夹取 [1,20]，经 `cordis.patch.yml` 示例暴露并传入 guard，`/cg status` 显示 `maxFailures`；成本记录加 `backend: adapter.kind`；`tokensShadowed` 白名单改 `nullable-number`，缺失为 null；`usage` 必须至少含一个有效 token 数值才写 `backendUsage`/measured；late-start trigger 读 `summary.sourceCommandId`；删除死字段；`reinjection-recovered` 后若 reinjection 降级原因清空则直接赋 `selectMode` 结果（不写死 full）。
+- 影响：配置生效、成本维度完整、口径可区分 null/0；0.1.9 的 fixture 结构白名单/commands 重试/range 兜底未动。
+- 关联：`src/index.js`、`src/compress/runtime.js`、`src/audit.js`、`src/commands/cg-status.js`、`cordis.patch.yml`、`test/t7-p2.test.mjs`、`test/t8-cost.test.mjs`；状态：active。

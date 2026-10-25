@@ -124,6 +124,7 @@ test('T8-2 成本记录：主键/维度/数值/口径齐全，实测与估算分
     assert.equal(cost.sessionId, 'session-t8');
     assert.equal(cost.project, 'DSH插件开发');
     assert.equal(cost.trigger, 'auto');
+    assert.equal(cost.backend, 'host-basic');
     assert.equal(cost.model, 'test/test');
     assert.match(cost.occurredAt, /^\d{4}-\d{2}-\d{2}T/);
     // tokenMeter 提供 tokensBefore/After（每节点 100，按 surface 节点数）
@@ -160,6 +161,7 @@ test('T8-2 成本记录：无 tokenMeter / 无 usage 时标 unknown，不伪造�
     });
     const summaryEvent = built.events.find((item) => item.type === 'compaction/summary');
     summaryEvent.data.usage = undefined;
+    delete summaryEvent.data.shadowedTokenCount;
     const session = liveSession(built);
     runCycle(ctx, session, built);
     await flush();
@@ -170,7 +172,50 @@ test('T8-2 成本记录：无 tokenMeter / 无 usage 时标 unknown，不伪造�
     assert.equal(cost.backendUsage, undefined, '没有 usage 时不写 backendUsage');
     assert.equal(cost.backendCostSource, 'unknown');
     assert.equal(cost.tokensSummary, null);
+    assert.equal(cost.tokensShadowed, null, '缺 shadowedTokenCount 应为 null（不是 0）');
     assert.equal(cost.governanceCostSource, 'estimated', '回注仍有字符估算');
+    guard.stop();
+  });
+});
+
+test('P3：usage={} 空对象时标 unknown，不写 backendUsage', async () => {
+  await withStore(async (store) => {
+    const ctx = makeCtx();
+    const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.2', store, logger: ctx.logger });
+    guard.start();
+    const built = buildCompaction({ before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 11 });
+    const summaryEvent = built.events.find((item) => item.type === 'compaction/summary');
+    summaryEvent.data.usage = {};
+    const session = liveSession(built);
+    runCycle(ctx, session, built);
+    await flush();
+    const cost = (await readAudit(store)).find((entry) => entry.event === 'compaction-cost');
+    assert.ok(cost);
+    assert.equal(cost.backendUsage, undefined, '空 usage 不应写 backendUsage');
+    assert.equal(cost.backendCostSource, 'unknown', '空 usage 应标 unknown');
+    assert.equal(cost.tokensSummary, null);
+    guard.stop();
+  });
+});
+
+test('P3：late-start 周期的 trigger 按 summary.sourceCommandId 判定 manual', async () => {
+  await withStore(async (store) => {
+    const ctx = makeCtx();
+    const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.2', store, logger: ctx.logger });
+    guard.start();
+    const built = buildCompaction({ before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 11 });
+    const summary = built.events.find((item) => item.type === 'compaction/summary');
+    summary.data.sourceCommandId = 'cmd-late-manual';
+    const session = liveSession(built);
+    const handler = ctx.handlers[0].handler;
+    // 模拟晚挂载：只看到 summary，没看到 start
+    handler(session, summary);
+    session.surface.nodes = [...built.postSurface];
+    handler(session, built.events.find((item) => item.type === 'compaction/end'));
+    await flush();
+    const cost = (await readAudit(store)).find((entry) => entry.event === 'compaction-cost');
+    assert.ok(cost);
+    assert.equal(cost.trigger, 'manual');
     guard.stop();
   });
 });

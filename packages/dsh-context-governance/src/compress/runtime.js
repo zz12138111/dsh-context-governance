@@ -121,7 +121,6 @@ export class CompressionGuard {
   #unsubscribe = null;
   #started = false;
   #eventApi = false;
-  #reinjectionDisabled = false;
   #reinjectionFailureStreak = 0;
   #maxReinjectionFailures = 3;
   #protectionSuspended = false;
@@ -379,14 +378,13 @@ export class CompressionGuard {
         notes: [...(this.#adapter.notes ?? [])],
       },
       protection: {
-        enabled: this.#store !== null && this.#reinjection.enabled && !this.#reinjectionDisabled,
+        enabled: this.#store !== null && this.#reinjection.enabled,
         storeRoot: this.#store?.rootDir ?? null,
         auditFile: this.#audit?.file ?? null,
         auditMaxBytes: this.#audit?.maxBytes ?? null,
         auditSizeBytes: this.#audit?.sizeBytes ?? 0,
         auditRotations: this.#audit?.rotations ?? 0,
         pendingJournals: this.#store?.protectionPending ?? 0,
-        reinjectionDisabled: this.#reinjectionDisabled,
         reinjectionFailureStreak: this.#reinjectionFailureStreak,
         reinjectionSuspended: this.#protectionSuspended || this.#skipProtectionThisCycle,
         maxReinjectionFailures: this.#maxReinjectionFailures,
@@ -469,7 +467,7 @@ export class CompressionGuard {
       trigger,
       tokensBefore: this.#measureTokens(session),
       tokensAfter: null,
-      tokensShadowed: 0,
+      tokensShadowed: null,
       tokensSummary: null,
       tokensInjected: null,
       injectedEntries: 0,
@@ -493,12 +491,15 @@ export class CompressionGuard {
       cost.tokensInjected = 0;
       cost.injectedEntries = 0;
     }
-    const backendMeasured = cost.backendUsage !== null;
+    const backendMeasured = cost.backendUsage !== null
+      && typeof cost.backendUsage === 'object'
+      && Object.keys(cost.backendUsage).length > 0;
     const governanceEstimated = state.reinjection?.status === 'injected';
     this.#auditEvent('compaction-cost', {
       sessionId: state.sessionId,
       compactionId: state.compactionId,
       project: this.#projectName,
+      backend: this.#adapter.kind,
       model: cost.model,
       trigger: cost.trigger,
       occurredAt: cost.occurredAt ?? this.#now().toISOString(),
@@ -547,12 +548,18 @@ export class CompressionGuard {
     this.#degradedReasons = this.#degradedReasons.filter((reason) => reason !== 'reinjection-failed');
     this.#auditEvent('reinjection-recovered', { count: 1 });
     this.#logger?.info?.('[context-governance] reinjection recovered; protection writes resume');
-    this.#applySelection(selectMode({
+    const next = selectMode({
       adapter: this.#adapter,
       eventApi: typeof this.#ctx?.on === 'function',
       enabled: this.#enabled,
       summaryReadability: this.#adapter.summary.readability,
-    }));
+    });
+    if (this.#degradedReasons.length === 0) {
+      // 恢复后回到实际 mode（本机 adapter=none 时是 event-level，不写死 full）。
+      this.#selection = next;
+    } else {
+      this.#applySelection(next);
+    }
   }
 
   #record(report, state) {
@@ -582,15 +589,6 @@ export class CompressionGuard {
     }
     const storeReason = this.#store?.status?.readOnlyReason ?? null;
     if (storeReason !== null && !this.#readOnly) this.#setReadOnly(storeReason);
-    if (this.#reinjectionDisabled) {
-      state.protectionWrite = 'skipped-observe-only';
-      this.#auditEvent('protection-write-skipped', {
-        sessionId: state.sessionId,
-        compactionId: id,
-        reason: 'reinjection-disabled',
-      });
-      return;
-    }
     if (this.#skipProtectionThisCycle) {
       // T8-1：连续回注失败后的一个周期暂停写入，但压缩/回注照常（回注走既有记忆指针）。
       state.protectionWrite = 'suspended';
@@ -764,10 +762,6 @@ export class CompressionGuard {
   #injectPointers(session, state) {
     if (this.#store === null || !this.#reinjection.enabled) {
       state.reinjection = { status: 'disabled' };
-      return;
-    }
-    if (this.#reinjectionDisabled) {
-      state.reinjection = { status: 'skipped-observe-only' };
       return;
     }
     if (!Array.isArray(state.entries) || state.entries.length === 0) {
@@ -1002,7 +996,7 @@ export class CompressionGuard {
               protectionWrite: 'late-start',
               reinjectionScheduled: false,
               report: null,
-              cost: this.#newCost('auto', session),
+              cost: this.#newCost(event.data?.sourceCommandId != null ? 'manual' : 'auto', session),
             };
             this.#pending.set(id, state);
             this.#stats.lateSnapshots += 1;
@@ -1018,7 +1012,10 @@ export class CompressionGuard {
           state.summaryReadable = text.trim() !== '';
           // T8-2：成本字段取自压缩事件（usage/shadowedTokenCount/provider/model）。
           const usage = event?.data?.usage;
-          if (usage !== null && typeof usage === 'object' && !Array.isArray(usage)) state.cost.backendUsage = usage;
+          const usageKeys = ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'totalTokens'];
+          const hasUsage = usage !== null && typeof usage === 'object' && !Array.isArray(usage)
+            && usageKeys.some((key) => Number.isFinite(usage[key]));
+          if (hasUsage) state.cost.backendUsage = usage; // 空对象/无有效数值 → 保持 null + unknown
           state.cost.tokensSummary = Number.isFinite(usage?.outputTokens) ? usage.outputTokens : null;
           state.cost.tokensShadowed = Number.isFinite(event?.data?.shadowedTokenCount)
             ? event.data.shadowedTokenCount

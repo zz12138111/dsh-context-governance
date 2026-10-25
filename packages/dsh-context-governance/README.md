@@ -84,6 +84,8 @@ config:
     logFile: "D:/DS-PROJECT/DSH插件开发/logs/governance.log"
   audit:
     maxBytes: 8388608                 # 8 MiB 后轮转 audit-YYYYMMDD.jsonl
+  reinjection:
+    maxFailures: 3                    # 连续回注失败阈值（1–20）
   memoryHeader:
     enabled: false                    # S3：新会话注入偏好/决定 header（opt-in，默认关）
     maxEntries: 5

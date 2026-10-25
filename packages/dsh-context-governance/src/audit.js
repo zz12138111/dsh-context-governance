@@ -55,7 +55,7 @@ export const AUDIT_FIELD_WHITELIST = Object.freeze({
   occurredAt: 'text',
   tokensBefore: 'nullable-number',
   tokensAfter: 'nullable-number',
-  tokensShadowed: 'number',
+  tokensShadowed: 'nullable-number',
   tokensSummary: 'nullable-number',
   tokensInjected: 'nullable-number',
   injectedEntries: 'number',

@@ -13,6 +13,7 @@ import { apply, inject, resolveConfig } from '../src/index.js';
 import { MemoryStore } from '../src/memory/store.js';
 import { MEM_QUERY_NAME, MEM_WRITE_NAME } from '../src/tools/mem-tools.js';
 import { buildProtectionSnapshotFixture } from './p2-helpers.mjs';
+import { FIVE_SECTION_SUMMARY, buildCompaction, healthyMessages } from './compress-helpers.mjs';
 import { tempDir } from './helpers.mjs';
 
 class BasicCompactionEngine {
@@ -190,6 +191,60 @@ test('P3-1：commands 晚挂载时 /cg status 重试一次后注册成功', asyn
     commandsService = { register: (definition) => { registeredCommands.push(definition.name); } };
     injectCallback.callback();
     assert.deepEqual(registeredCommands, ['cg'], '晚挂载后应注册 cg 命令');
+  } finally {
+    for (const dispose of disposers) await dispose();
+    await fs.rm(rootDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }).catch(() => {});
+  }
+});
+
+test('P2-1：reinjection.maxFailures 接进配置（默认 3、夹取 1–20），配置 2 时行为随之为 2', async () => {
+  assert.equal(resolveConfig({}).reinjection.maxFailures, 3);
+  assert.equal(resolveConfig({ reinjection: { maxFailures: 2 } }).reinjection.maxFailures, 2);
+  assert.equal(resolveConfig({ reinjection: { maxFailures: 0 } }).reinjection.maxFailures, 1);
+  assert.equal(resolveConfig({ reinjection: { maxFailures: 99 } }).reinjection.maxFailures, 20);
+  assert.throws(() => resolveConfig({ reinjection: { maxFailures: 'x' } }), /maxFailures/);
+
+  const rootDir = await tempDir();
+  const handlers = [];
+  const disposers = [];
+  const ctx = {
+    tools: { register: () => {} },
+    logger: { info: () => {}, warn: () => {} },
+    get: () => undefined,
+    on: (event, handler) => { handlers.push({ event, handler }); return () => {}; },
+    effect: (callback) => { disposers.push(callback()); },
+  };
+  try {
+    await apply(ctx, {
+      projectRoot: rootDir,
+      project: 'test-project',
+      compression: { enabled: true, hostVersion: '0.2.1-rc.3', backendVersion: '' },
+      reinjection: { maxFailures: 2 },
+    });
+    const handler = handlers.find((item) => item.event === 'session/event').handler;
+    for (const compactionId of ['cmp-a', 'cmp-b']) {
+      const built = buildCompaction({ compactionId, before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 11 });
+      const bySeq = new Map(built.events.map((event) => [event.seq, event]));
+      const session = {
+        id: 'session-cfg',
+        surface: { nodes: [...built.session.surface.nodes] },
+        eventAt: (seq) => bySeq.get(seq),
+        append: () => { throw new Error('append rejected'); },
+      };
+      handler(session, built.events.find((event) => event.type === 'compaction/start'));
+      handler(session, built.events.find((event) => event.type === 'compaction/summary'));
+      handler(session, built.events.find((event) => event.type === 'user/message' && event.data.source.kind === 'compact-checkpoint'));
+      session.surface.nodes = [...built.postSurface];
+      handler(session, built.events.find((event) => event.type === 'compaction/end'));
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    const audit = (await fs.readFile(path.join(rootDir, '.dsh', 'memory', 'audit.jsonl'), 'utf8'))
+      .split('\n').filter(Boolean).map((line) => JSON.parse(line));
+    const failed = audit.find((entry) => entry.event === 'reinjection-failed');
+    assert.ok(failed, '应有 reinjection-failed');
+    assert.ok(audit.some((entry) => entry.event === 'reinjection-degraded'),
+      'maxFailures=2 应在第 2 次失败后降级（而不是默认 3）');
   } finally {
     for (const dispose of disposers) await dispose();
     await fs.rm(rootDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }).catch(() => {});
