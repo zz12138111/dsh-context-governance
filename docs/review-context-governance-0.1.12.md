@@ -111,3 +111,11 @@
 - 未安装/重启/卸载、未改 profile/`cordis.patch.yml`、未动用户数据；只读 asar、会话日志与仓库。
 - 拓扑已确认为直线（`7180313 → d5e6d54 → a75ce82 → 85acc94`）；按约定在本报告之后叠 0.1.11/0.1.12 两份复核报告 commit，**一次 push 只推分支**，不 force。
 - 基线口径：0.1.11=`01a7598`；0.1.12=`a75ce82`（文档 `85acc94` docs-only）。
+
+## 10. 真机更正记录（2026-10-25 20:3x，0.1.12 重启后）
+
+- 真机 `capability@apply`（20:34:54）/`capability@ready`（20:35:54）：**`compaction=throws`、`get.compaction=absent`**，同时 **`get.tokenMeter=obj`**。
+- 因此 0.1.11 复核报告 §2④ 的“`ctx.compaction` ready 时可获取”**不成立**，已在 `docs/review-context-governance-0.1.11.md` §2④ 更正为“该部署下拿不到，插件不依赖它”。
+- 两列语义不同：`ctx.X` 是未 inject 的属性读取（服务不在 fiber store 链上即抛 `cannot get property "X" without inject`，cordis `reflect.ts:144-170`）；`ctx.get('X')` 才是可用性信号（未提供返回 `undefined`，`reflect.ts:9-19`）。`tokenMeter=throws` 但 `get.tokenMeter=obj` 就是反例。
+- 本报告的 T2′/成本/零折叠结论**不受影响**：prune 观测走 `session/event` 事件面，不依赖 compaction 服务。
+- 建议（不阻断）：能力探测把 `get.X` 与 `get.X(strict=false)` 分列并写清语义，避免把 `throws` 误读成“服务异常”。

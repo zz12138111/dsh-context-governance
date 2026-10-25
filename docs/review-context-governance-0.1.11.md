@@ -58,12 +58,13 @@
 - **P3-5**：end 后第一条 assistant 消息若没 usage（如中断），直接记 `null`+`none`，不会等第二条。
 - **P3-6**：`auditVersion` 值由 `cost-v1` → `cost-v1.1`；字段层兼容（只增、sanitizer 不校验版本），但**精确匹配 `cost-v1` 的读方会漏新行**，建议文档写明“按前缀/忽略未知字段”。
 
-### ④ `ctx.compaction` 可用性结论
+### ④ `ctx.compaction` 可用性结论（2026-10-25 真机更正）
 
-- `dsh-base/cordis.patch.yml:348-352` 确挂 `token-meter` + `compaction-basic`（asar 只读核对，行号命中）；
-- 本机 profile `cordis.patch.yml:79-82` 有 `compaction-basic … thresholdRatio: 0.65`（我抽了 79-82 行）；
-- 真机 `58a2e845` 有自动 `compaction/start 4193 → summary 4195 → end 4197`，手动 `8535 → 8537 → 8539`（`sourceCommandId=cmd-5888a9cf-1`）；
-- 结论“apply 时 absent 是探测时机，不是宿主不支持”**成立**；仍待真机 `capability@ready` 行确认。
+- `dsh-base/cordis.patch.yml:348-352` 确挂 `token-meter` + `compaction-basic`；本机 profile `cordis.patch.yml:79-82` 有 `thresholdRatio: 0.65`；真机 `58a2e845` 也确实发生过自动/手动压缩（`4193–4197`、`8535–8539`）。
+- **但真机 0.1.12 的 `capability@apply`（20:34:54）与 `capability@ready`（20:35:54）两条都是 `compaction=throws`、`get.compaction=absent`**，ready 出现在首个会话事件之后仍未变 → **“apply 时 absent 只是探测时机（ready 时可得）”不成立**。
+- 两列语义不同（cordis `reflect.ts`）：`ctx.X` 是“未 inject 的属性读取”，服务不在 fiber store 链上时抛 `cannot get property "X" without inject`（`reflect.ts:144-170`）；`ctx.get('X')` 是“无 inject 要求的 store 读取”，未提供时返回 `undefined`（`reflect.ts:9-19`）。对照证据就在同一条日志里：**`tokenMeter=throws` 但 `get.tokenMeter=obj`** —— 所以 `throws` 列不能当作“服务坏了/不存在”，只有 `get.X` 是可用性信号。
+- 结论（更正后）：**该部署下插件上下文拿不到 `ctx.compaction`**（apply 与 ready 一致）；插件不依赖它（压缩走 `session/event` 的 `compaction/start|summary|end`，0.1.10 起一直如此），但「回注时点可修」的 P1 前提不成立。
+- 未定的原因（需宿主侧区分）：provider 不在插件可见 scope，或 provider fiber 非 active（被 redirect/未装载）。诊断建议：`ctx.get('compaction', false)`（strict=false）——返回 `obj` 表示有 impl 但未 active，`undefined` 表示本 scope 根本未提供。
 
 ## 3. 回归面（折叠/回注/记忆三链路）
 
