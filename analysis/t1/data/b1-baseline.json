@@ -1,0 +1,843 @@
+{
+  "generatedAt": "2026-10-25T12:08:34.503Z",
+  "minChars": 8000,
+  "foldList": [
+    "grep",
+    "web_fetch",
+    "dsh_browser_content",
+    "cross_session_read",
+    "job_output",
+    "history_search"
+  ],
+  "hardExclude": [
+    "pwsh",
+    "read"
+  ],
+  "aggregate": {
+    "sessions": 3,
+    "turnsCompleted": 87,
+    "steps": 1819,
+    "calls": 2218
+  },
+  "sessions": [
+    {
+      "file": "session.v4.jsonl.zstd",
+      "id": "session-58a2e845-cec5-4229-afa9-7f09a0fc0207",
+      "turnsSeen": 20,
+      "turnsCompleted": 19,
+      "steps": 1129,
+      "calls": 1411,
+      "callsAllTurns": 1584,
+      "results": 1419,
+      "assistantMessages": 1264,
+      "stepsPerTurn": {
+        "mean": 59.42,
+        "median": 61,
+        "max": 159
+      },
+      "callsPerTurn": {
+        "mean": 74.26,
+        "median": 75,
+        "max": 194
+      },
+      "callsPerStep": {
+        "mean": 1.25
+      },
+      "promptTokens": {
+        "n": 1127,
+        "mean": 396004,
+        "median": 393663,
+        "p90": 687901,
+        "max": 791339
+      },
+      "toolCallsByName": {
+        "pwsh": 630,
+        "edit": 498,
+        "read": 297,
+        "write": 119,
+        "cross_session_reply": 18,
+        "grep": 10,
+        "todo_write": 4,
+        "glob": 3,
+        "app_env_audit": 1,
+        "notes_write": 1,
+        "cross_session_read": 1,
+        "present": 1,
+        "subagent": 1
+      },
+      "resultCharsByName": {
+        "read": 758412,
+        "pwsh": 518715,
+        "edit": 54117,
+        "write": 13911,
+        "grep": 5832,
+        "cross_session_read": 5202,
+        "cross_session_reply": 648,
+        "app_env_audit": 346,
+        "glob": 276,
+        "todo_write": 171,
+        "present": 140,
+        "notes_write": 2
+      },
+      "foldCandidates": {
+        "minChars": 8000,
+        "count": 4,
+        "byTool": {
+          "read (hard-exclude)": 4
+        },
+        "examples": [
+          {
+            "turn": 12,
+            "tool": "read",
+            "chars": 13588
+          },
+          {
+            "turn": 12,
+            "tool": "read",
+            "chars": 11546
+          },
+          {
+            "turn": 2,
+            "tool": "read",
+            "chars": 8092
+          },
+          {
+            "turn": 2,
+            "tool": "read",
+            "chars": 8087
+          }
+        ]
+      },
+      "existingFolds": {
+        "tokenGuard": 23,
+        "cgFold": 0,
+        "hostSpillNotice": 0,
+        "hostPruner": 8
+      },
+      "pruneEvents": 8,
+      "compactions": 2,
+      "contextWindowErrors": 1,
+      "perTurn": [
+        {
+          "turn": 1,
+          "steps": 3,
+          "calls": 5
+        },
+        {
+          "turn": 2,
+          "steps": 159,
+          "calls": 194
+        },
+        {
+          "turn": 3,
+          "steps": 63,
+          "calls": 76
+        },
+        {
+          "turn": 4,
+          "steps": 119,
+          "calls": 144
+        },
+        {
+          "turn": 5,
+          "steps": 78,
+          "calls": 97
+        },
+        {
+          "turn": 6,
+          "steps": 39,
+          "calls": 50
+        },
+        {
+          "turn": 7,
+          "steps": 51,
+          "calls": 65
+        },
+        {
+          "turn": 8,
+          "steps": 71,
+          "calls": 86
+        },
+        {
+          "turn": 9,
+          "steps": 101,
+          "calls": 125
+        },
+        {
+          "turn": 10,
+          "steps": 112,
+          "calls": 157
+        },
+        {
+          "turn": 11,
+          "steps": 54,
+          "calls": 64
+        },
+        {
+          "turn": 12,
+          "steps": 70,
+          "calls": 93
+        },
+        {
+          "turn": 13,
+          "steps": 6,
+          "calls": 5
+        },
+        {
+          "turn": 14,
+          "steps": 7,
+          "calls": 6
+        },
+        {
+          "turn": 15,
+          "steps": 65,
+          "calls": 83
+        },
+        {
+          "turn": 16,
+          "steps": 61,
+          "calls": 75
+        },
+        {
+          "turn": 17,
+          "steps": 20,
+          "calls": 20
+        },
+        {
+          "turn": 18,
+          "steps": 6,
+          "calls": 6
+        },
+        {
+          "turn": 19,
+          "steps": 44,
+          "calls": 60
+        }
+      ]
+    },
+    {
+      "file": "session.v4.jsonl.zstd",
+      "id": "session-5d1121ed-99fa-431f-9607-2312a173ecbf",
+      "turnsSeen": 14,
+      "turnsCompleted": 14,
+      "steps": 410,
+      "calls": 469,
+      "callsAllTurns": 469,
+      "results": 469,
+      "assistantMessages": 410,
+      "stepsPerTurn": {
+        "mean": 29.29,
+        "median": 17,
+        "max": 137
+      },
+      "callsPerTurn": {
+        "mean": 33.5,
+        "median": 16,
+        "max": 168
+      },
+      "callsPerStep": {
+        "mean": 1.144
+      },
+      "promptTokens": {
+        "n": 410,
+        "mean": 330595,
+        "median": 324164,
+        "p90": 608758,
+        "max": 676773
+      },
+      "toolCallsByName": {
+        "pwsh": 251,
+        "read": 128,
+        "write": 28,
+        "grep": 15,
+        "cross_session_reply": 12,
+        "edit": 7,
+        "dsh_browser_a11y": 5,
+        "dsh_browser_open": 4,
+        "notes_write": 4,
+        "dsh_browser_click": 3,
+        "dsh_browser_execute": 3,
+        "dsh_browser_wait": 2,
+        "cross_session_list": 2,
+        "dsh_browser_set_value": 1,
+        "dsh_browser_get_value": 1,
+        "mem_query": 1,
+        "notes_read": 1,
+        "cross_session_send": 1
+      },
+      "resultCharsByName": {
+        "read": 612256,
+        "pwsh": 372580,
+        "grep": 23008,
+        "dsh_browser_a11y": 11798,
+        "dsh_browser_open": 6226,
+        "write": 3176,
+        "cross_session_list": 1388,
+        "edit": 694,
+        "cross_session_reply": 432,
+        "mem_query": 313,
+        "dsh_browser_execute": 276,
+        "dsh_browser_wait": 78,
+        "notes_read": 52,
+        "cross_session_send": 43,
+        "dsh_browser_click": 24,
+        "dsh_browser_get_value": 18,
+        "dsh_browser_set_value": 14,
+        "notes_write": 8
+      },
+      "foldCandidates": {
+        "minChars": 8000,
+        "count": 18,
+        "byTool": {
+          "read (hard-exclude)": 18
+        },
+        "examples": [
+          {
+            "turn": 5,
+            "tool": "read",
+            "chars": 29244
+          },
+          {
+            "turn": 5,
+            "tool": "read",
+            "chars": 29131
+          },
+          {
+            "turn": 5,
+            "tool": "read",
+            "chars": 19298
+          },
+          {
+            "turn": 5,
+            "tool": "read",
+            "chars": 19139
+          },
+          {
+            "turn": 5,
+            "tool": "read",
+            "chars": 14867
+          },
+          {
+            "turn": 5,
+            "tool": "read",
+            "chars": 13959
+          },
+          {
+            "turn": 5,
+            "tool": "read",
+            "chars": 13953
+          },
+          {
+            "turn": 7,
+            "tool": "read",
+            "chars": 12292
+          },
+          {
+            "turn": 5,
+            "tool": "read",
+            "chars": 11546
+          },
+          {
+            "turn": 5,
+            "tool": "read",
+            "chars": 11219
+          }
+        ]
+      },
+      "existingFolds": {
+        "tokenGuard": 4,
+        "cgFold": 0,
+        "hostSpillNotice": 0,
+        "hostPruner": 0
+      },
+      "pruneEvents": 0,
+      "compactions": 1,
+      "contextWindowErrors": 0,
+      "perTurn": [
+        {
+          "turn": 1,
+          "steps": 3,
+          "calls": 4
+        },
+        {
+          "turn": 2,
+          "steps": 29,
+          "calls": 32
+        },
+        {
+          "turn": 3,
+          "steps": 6,
+          "calls": 5
+        },
+        {
+          "turn": 4,
+          "steps": 4,
+          "calls": 3
+        },
+        {
+          "turn": 5,
+          "steps": 137,
+          "calls": 168
+        },
+        {
+          "turn": 6,
+          "steps": 3,
+          "calls": 2
+        },
+        {
+          "turn": 7,
+          "steps": 73,
+          "calls": 89
+        },
+        {
+          "turn": 8,
+          "steps": 39,
+          "calls": 42
+        },
+        {
+          "turn": 9,
+          "steps": 52,
+          "calls": 60
+        },
+        {
+          "turn": 10,
+          "steps": 17,
+          "calls": 16
+        },
+        {
+          "turn": 11,
+          "steps": 19,
+          "calls": 18
+        },
+        {
+          "turn": 12,
+          "steps": 5,
+          "calls": 4
+        },
+        {
+          "turn": 13,
+          "steps": 5,
+          "calls": 4
+        },
+        {
+          "turn": 14,
+          "steps": 18,
+          "calls": 22
+        }
+      ]
+    },
+    {
+      "file": "session.v4.jsonl.zstd",
+      "id": "session-f72e86a8-fe89-4311-b186-7193a392e9c8",
+      "turnsSeen": 54,
+      "turnsCompleted": 54,
+      "steps": 280,
+      "calls": 338,
+      "callsAllTurns": 338,
+      "results": 338,
+      "assistantMessages": 280,
+      "stepsPerTurn": {
+        "mean": 5.19,
+        "median": 2,
+        "max": 34
+      },
+      "callsPerTurn": {
+        "mean": 6.26,
+        "median": 3,
+        "max": 52
+      },
+      "callsPerStep": {
+        "mean": 1.207
+      },
+      "promptTokens": {
+        "n": 280,
+        "mean": 325098,
+        "median": 347505,
+        "p90": 588365,
+        "max": 633846
+      },
+      "toolCallsByName": {
+        "edit": 92,
+        "pwsh": 78,
+        "read": 59,
+        "web_fetch": 33,
+        "grep": 20,
+        "write": 16,
+        "cross_session_reply": 9,
+        "cross_session_send": 6,
+        "notes_write": 6,
+        "present": 6,
+        "glob": 3,
+        "web_search": 2,
+        "cross_session_list": 2,
+        "cross_session_read": 2,
+        "mem_query": 1,
+        "notes_read": 1,
+        "cross_session_status": 1,
+        "mem_write": 1
+      },
+      "resultCharsByName": {
+        "web_fetch": 542840,
+        "read": 135154,
+        "pwsh": 95551,
+        "grep": 27730,
+        "cross_session_read": 8728,
+        "edit": 7358,
+        "web_search": 3823,
+        "write": 1779,
+        "cross_session_list": 1328,
+        "glob": 592,
+        "present": 395,
+        "cross_session_reply": 324,
+        "mem_query": 305,
+        "cross_session_status": 234,
+        "cross_session_send": 228,
+        "mem_write": 63,
+        "notes_read": 52,
+        "notes_write": 12
+      },
+      "foldCandidates": {
+        "minChars": 8000,
+        "count": 14,
+        "byTool": {
+          "web_fetch (in-list)": 10,
+          "read (hard-exclude)": 3,
+          "grep (in-list)": 1
+        },
+        "examples": [
+          {
+            "turn": 25,
+            "tool": "web_fetch",
+            "chars": 41708
+          },
+          {
+            "turn": 6,
+            "tool": "web_fetch",
+            "chars": 23485
+          },
+          {
+            "turn": 7,
+            "tool": "web_fetch",
+            "chars": 23214
+          },
+          {
+            "turn": 6,
+            "tool": "web_fetch",
+            "chars": 22206
+          },
+          {
+            "turn": 6,
+            "tool": "web_fetch",
+            "chars": 20182
+          },
+          {
+            "turn": 6,
+            "tool": "web_fetch",
+            "chars": 12291
+          },
+          {
+            "turn": 6,
+            "tool": "web_fetch",
+            "chars": 12162
+          },
+          {
+            "turn": 6,
+            "tool": "web_fetch",
+            "chars": 11089
+          },
+          {
+            "turn": 51,
+            "tool": "grep",
+            "chars": 10255
+          },
+          {
+            "turn": 6,
+            "tool": "read",
+            "chars": 10132
+          }
+        ]
+      },
+      "existingFolds": {
+        "tokenGuard": 2,
+        "cgFold": 0,
+        "hostSpillNotice": 7,
+        "hostPruner": 0
+      },
+      "pruneEvents": 0,
+      "compactions": 1,
+      "contextWindowErrors": 0,
+      "perTurn": [
+        {
+          "turn": 1,
+          "steps": 4,
+          "calls": 7
+        },
+        {
+          "turn": 2,
+          "steps": 1,
+          "calls": 0
+        },
+        {
+          "turn": 3,
+          "steps": 2,
+          "calls": 2
+        },
+        {
+          "turn": 4,
+          "steps": 8,
+          "calls": 12
+        },
+        {
+          "turn": 5,
+          "steps": 1,
+          "calls": 0
+        },
+        {
+          "turn": 6,
+          "steps": 29,
+          "calls": 52
+        },
+        {
+          "turn": 7,
+          "steps": 7,
+          "calls": 12
+        },
+        {
+          "turn": 8,
+          "steps": 1,
+          "calls": 0
+        },
+        {
+          "turn": 9,
+          "steps": 1,
+          "calls": 0
+        },
+        {
+          "turn": 10,
+          "steps": 5,
+          "calls": 8
+        },
+        {
+          "turn": 11,
+          "steps": 1,
+          "calls": 0
+        },
+        {
+          "turn": 12,
+          "steps": 1,
+          "calls": 0
+        },
+        {
+          "turn": 13,
+          "steps": 5,
+          "calls": 6
+        },
+        {
+          "turn": 14,
+          "steps": 4,
+          "calls": 6
+        },
+        {
+          "turn": 15,
+          "steps": 1,
+          "calls": 0
+        },
+        {
+          "turn": 16,
+          "steps": 1,
+          "calls": 0
+        },
+        {
+          "turn": 17,
+          "steps": 1,
+          "calls": 0
+        },
+        {
+          "turn": 18,
+          "steps": 1,
+          "calls": 0
+        },
+        {
+          "turn": 19,
+          "steps": 1,
+          "calls": 0
+        },
+        {
+          "turn": 20,
+          "steps": 1,
+          "calls": 0
+        },
+        {
+          "turn": 21,
+          "steps": 1,
+          "calls": 0
+        },
+        {
+          "turn": 22,
+          "steps": 6,
+          "calls": 6
+        },
+        {
+          "turn": 23,
+          "steps": 1,
+          "calls": 0
+        },
+        {
+          "turn": 24,
+          "steps": 5,
+          "calls": 7
+        },
+        {
+          "turn": 25,
+          "steps": 2,
+          "calls": 3
+        },
+        {
+          "turn": 26,
+          "steps": 1,
+          "calls": 0
+        },
+        {
+          "turn": 27,
+          "steps": 5,
+          "calls": 5
+        },
+        {
+          "turn": 28,
+          "steps": 1,
+          "calls": 0
+        },
+        {
+          "turn": 29,
+          "steps": 4,
+          "calls": 4
+        },
+        {
+          "turn": 30,
+          "steps": 1,
+          "calls": 0
+        },
+        {
+          "turn": 31,
+          "steps": 5,
+          "calls": 5
+        },
+        {
+          "turn": 32,
+          "steps": 10,
+          "calls": 12
+        },
+        {
+          "turn": 33,
+          "steps": 1,
+          "calls": 0
+        },
+        {
+          "turn": 34,
+          "steps": 1,
+          "calls": 0
+        },
+        {
+          "turn": 35,
+          "steps": 7,
+          "calls": 10
+        },
+        {
+          "turn": 36,
+          "steps": 8,
+          "calls": 10
+        },
+        {
+          "turn": 37,
+          "steps": 6,
+          "calls": 5
+        },
+        {
+          "turn": 38,
+          "steps": 18,
+          "calls": 25
+        },
+        {
+          "turn": 39,
+          "steps": 11,
+          "calls": 13
+        },
+        {
+          "turn": 40,
+          "steps": 1,
+          "calls": 0
+        },
+        {
+          "turn": 41,
+          "steps": 2,
+          "calls": 2
+        },
+        {
+          "turn": 42,
+          "steps": 2,
+          "calls": 1
+        },
+        {
+          "turn": 43,
+          "steps": 6,
+          "calls": 5
+        },
+        {
+          "turn": 44,
+          "steps": 8,
+          "calls": 9
+        },
+        {
+          "turn": 45,
+          "steps": 8,
+          "calls": 11
+        },
+        {
+          "turn": 46,
+          "steps": 6,
+          "calls": 6
+        },
+        {
+          "turn": 47,
+          "steps": 5,
+          "calls": 10
+        },
+        {
+          "turn": 48,
+          "steps": 1,
+          "calls": 0
+        },
+        {
+          "turn": 49,
+          "steps": 2,
+          "calls": 1
+        },
+        {
+          "turn": 50,
+          "steps": 8,
+          "calls": 12
+        },
+        {
+          "turn": 51,
+          "steps": 34,
+          "calls": 44
+        },
+        {
+          "turn": 52,
+          "steps": 22,
+          "calls": 24
+        },
+        {
+          "turn": 53,
+          "steps": 4,
+          "calls": 3
+        },
+        {
+          "turn": 54,
+          "steps": 1,
+          "calls": 0
+        }
+      ]
+    }
+  ]
+}

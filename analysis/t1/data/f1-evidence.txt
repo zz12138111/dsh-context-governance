@@ -1,0 +1,204 @@
+session=session-f72e86a8-fe89-4311-b186-7193a392e9c8 seq=148 turn=4 tool=pwsh kind=token-guard foldedChars=1573 rawChars=8129 rawBytes=8137 omitted=null headInRaw=false tailInRaw=false rawMinusOmitted=null
+  locator=C:\Users\19091\AppData\Local\Temp\dsh-spill-0qNGfo\session-90f01e281a2a\320e11f29a61-pwsh.txt exists=true
+session=session-f72e86a8-fe89-4311-b186-7193a392e9c8 seq=229 turn=6 tool=pwsh kind=token-guard foldedChars=2196 rawChars=9202 rawBytes=9370 omitted=null headInRaw=false tailInRaw=false rawMinusOmitted=null
+  locator=C:\Users\19091\AppData\Local\Temp\dsh-spill-0qNGfo\session-90f01e281a2a\7a7215730c78-pwsh.txt exists=true
+session=session-f72e86a8-fe89-4311-b186-7193a392e9c8 seq=319 turn=6 tool=web_fetch kind=host-spill foldedChars=49929 rawChars=100248 rawBytes=104606 omitted=52880 headInRaw=true tailInRaw=true rawMinusOmitted=47368
+  locator=C:\Users\19091\AppData\Local\Temp\dsh-spill-0qNGfo\session-90f01e281a2a\e3e2406829a2-web_fetch.txt exists=true
+session=session-f72e86a8-fe89-4311-b186-7193a392e9c8 seq=364 turn=6 tool=web_fetch kind=host-spill foldedChars=49929 rawChars=100213 rawBytes=100213 omitted=50517 headInRaw=true tailInRaw=true rawMinusOmitted=49696
+  locator=C:\Users\19091\AppData\Local\Temp\dsh-spill-0qNGfo\session-90f01e281a2a\43e37344f564-web_fetch.txt exists=true
+session=session-f72e86a8-fe89-4311-b186-7193a392e9c8 seq=365 turn=6 tool=web_fetch kind=host-spill foldedChars=49933 rawChars=87771 rawBytes=88108 omitted=38071 headInRaw=true tailInRaw=true rawMinusOmitted=49700
+  locator=C:\Users\19091\AppData\Local\Temp\dsh-spill-0qNGfo\session-90f01e281a2a\1fd2e1a27ac0-web_fetch.txt exists=true
+session=session-f72e86a8-fe89-4311-b186-7193a392e9c8 seq=375 turn=6 tool=web_fetch kind=host-spill foldedChars=49932 rawChars=55400 rawBytes=55493 omitted=5700 headInRaw=true tailInRaw=true rawMinusOmitted=49700
+  locator=C:\Users\19091\AppData\Local\Temp\dsh-spill-0qNGfo\session-90f01e281a2a\b1e3f0ed9cf0-web_fetch.txt exists=true
+session=session-f72e86a8-fe89-4311-b186-7193a392e9c8 seq=384 turn=6 tool=web_fetch kind=host-spill foldedChars=49933 rawChars=99733 rawBytes=99764 omitted=50060 headInRaw=true tailInRaw=true rawMinusOmitted=49673
+  locator=C:\Users\19091\AppData\Local\Temp\dsh-spill-0qNGfo\session-90f01e281a2a\d5173d40a634-web_fetch.txt exists=true
+session=session-f72e86a8-fe89-4311-b186-7193a392e9c8 seq=393 turn=6 tool=web_fetch kind=host-spill foldedChars=49933 rawChars=61841 rawBytes=62215 omitted=12143 headInRaw=true tailInRaw=true rawMinusOmitted=49698
+  locator=C:\Users\19091\AppData\Local\Temp\dsh-spill-0qNGfo\session-90f01e281a2a\13b43cd0b7fa-web_fetch.txt exists=true
+session=session-f72e86a8-fe89-4311-b186-7193a392e9c8 seq=394 turn=6 tool=web_fetch kind=host-spill foldedChars=49929 rawChars=100265 rawBytes=100265 omitted=50569 headInRaw=true tailInRaw=true rawMinusOmitted=49696
+  locator=C:\Users\19091\AppData\Local\Temp\dsh-spill-0qNGfo\session-90f01e281a2a\aee957843dbe-web_fetch.txt exists=true
+session=ff71b121-0b62-4b06-8d29-8ed98c027fcc seq=21 turn=1 tool=grep kind=host-spill foldedChars=49932 rawChars=74075 rawBytes=74075 omitted=24371 headInRaw=true tailInRaw=true rawMinusOmitted=49704
+  locator=C:\Users\19091\AppData\Local\Temp\dsh-spill-2gz2fg\session-3b11d4455aec\26fb87002f6f-grep.txt exists=true
+{
+  "total": 10,
+  "byKind": {
+    "token-guard": 2,
+    "host-spill": 8
+  },
+  "byTool": {
+    "pwsh": 2,
+    "web_fetch": 7,
+    "grep": 1
+  },
+  "rows": [
+    {
+      "session": "session-f72e86a8-fe89-4311-b186-7193a392e9c8",
+      "seq": 148,
+      "callSeq": 145,
+      "turn": 4,
+      "tool": "pwsh",
+      "kind": "token-guard",
+      "foldedChars": 1573,
+      "locator": "C:\\Users\\19091\\AppData\\Local\\Temp\\dsh-spill-0qNGfo\\session-90f01e281a2a\\320e11f29a61-pwsh.txt",
+      "exists": true,
+      "rawBytes": 8137,
+      "rawChars": 8129,
+      "omittedBytes": null,
+      "headInRaw": false,
+      "tailInRaw": false,
+      "rawMinusOmitted": null
+    },
+    {
+      "session": "session-f72e86a8-fe89-4311-b186-7193a392e9c8",
+      "seq": 229,
+      "callSeq": 226,
+      "turn": 6,
+      "tool": "pwsh",
+      "kind": "token-guard",
+      "foldedChars": 2196,
+      "locator": "C:\\Users\\19091\\AppData\\Local\\Temp\\dsh-spill-0qNGfo\\session-90f01e281a2a\\7a7215730c78-pwsh.txt",
+      "exists": true,
+      "rawBytes": 9370,
+      "rawChars": 9202,
+      "omittedBytes": null,
+      "headInRaw": false,
+      "tailInRaw": false,
+      "rawMinusOmitted": null
+    },
+    {
+      "session": "session-f72e86a8-fe89-4311-b186-7193a392e9c8",
+      "seq": 319,
+      "callSeq": 313,
+      "turn": 6,
+      "tool": "web_fetch",
+      "kind": "host-spill",
+      "foldedChars": 49929,
+      "locator": "C:\\Users\\19091\\AppData\\Local\\Temp\\dsh-spill-0qNGfo\\session-90f01e281a2a\\e3e2406829a2-web_fetch.txt",
+      "exists": true,
+      "rawBytes": 104606,
+      "rawChars": 100248,
+      "omittedBytes": 52880,
+      "headInRaw": true,
+      "tailInRaw": true,
+      "rawMinusOmitted": 47368
+    },
+    {
+      "session": "session-f72e86a8-fe89-4311-b186-7193a392e9c8",
+      "seq": 364,
+      "callSeq": 362,
+      "turn": 6,
+      "tool": "web_fetch",
+      "kind": "host-spill",
+      "foldedChars": 49929,
+      "locator": "C:\\Users\\19091\\AppData\\Local\\Temp\\dsh-spill-0qNGfo\\session-90f01e281a2a\\43e37344f564-web_fetch.txt",
+      "exists": true,
+      "rawBytes": 100213,
+      "rawChars": 100213,
+      "omittedBytes": 50517,
+      "headInRaw": true,
+      "tailInRaw": true,
+      "rawMinusOmitted": 49696
+    },
+    {
+      "session": "session-f72e86a8-fe89-4311-b186-7193a392e9c8",
+      "seq": 365,
+      "callSeq": 363,
+      "turn": 6,
+      "tool": "web_fetch",
+      "kind": "host-spill",
+      "foldedChars": 49933,
+      "locator": "C:\\Users\\19091\\AppData\\Local\\Temp\\dsh-spill-0qNGfo\\session-90f01e281a2a\\1fd2e1a27ac0-web_fetch.txt",
+      "exists": true,
+      "rawBytes": 88108,
+      "rawChars": 87771,
+      "omittedBytes": 38071,
+      "headInRaw": true,
+      "tailInRaw": true,
+      "rawMinusOmitted": 49700
+    },
+    {
+      "session": "session-f72e86a8-fe89-4311-b186-7193a392e9c8",
+      "seq": 375,
+      "callSeq": 372,
+      "turn": 6,
+      "tool": "web_fetch",
+      "kind": "host-spill",
+      "foldedChars": 49932,
+      "locator": "C:\\Users\\19091\\AppData\\Local\\Temp\\dsh-spill-0qNGfo\\session-90f01e281a2a\\b1e3f0ed9cf0-web_fetch.txt",
+      "exists": true,
+      "rawBytes": 55493,
+      "rawChars": 55400,
+      "omittedBytes": 5700,
+      "headInRaw": true,
+      "tailInRaw": true,
+      "rawMinusOmitted": 49700
+    },
+    {
+      "session": "session-f72e86a8-fe89-4311-b186-7193a392e9c8",
+      "seq": 384,
+      "callSeq": 381,
+      "turn": 6,
+      "tool": "web_fetch",
+      "kind": "host-spill",
+      "foldedChars": 49933,
+      "locator": "C:\\Users\\19091\\AppData\\Local\\Temp\\dsh-spill-0qNGfo\\session-90f01e281a2a\\d5173d40a634-web_fetch.txt",
+      "exists": true,
+      "rawBytes": 99764,
+      "rawChars": 99733,
+      "omittedBytes": 50060,
+      "headInRaw": true,
+      "tailInRaw": true,
+      "rawMinusOmitted": 49673
+    },
+    {
+      "session": "session-f72e86a8-fe89-4311-b186-7193a392e9c8",
+      "seq": 393,
+      "callSeq": 390,
+      "turn": 6,
+      "tool": "web_fetch",
+      "kind": "host-spill",
+      "foldedChars": 49933,
+      "locator": "C:\\Users\\19091\\AppData\\Local\\Temp\\dsh-spill-0qNGfo\\session-90f01e281a2a\\13b43cd0b7fa-web_fetch.txt",
+      "exists": true,
+      "rawBytes": 62215,
+      "rawChars": 61841,
+      "omittedBytes": 12143,
+      "headInRaw": true,
+      "tailInRaw": true,
+      "rawMinusOmitted": 49698
+    },
+    {
+      "session": "session-f72e86a8-fe89-4311-b186-7193a392e9c8",
+      "seq": 394,
+      "callSeq": 391,
+      "turn": 6,
+      "tool": "web_fetch",
+      "kind": "host-spill",
+      "foldedChars": 49929,
+      "locator": "C:\\Users\\19091\\AppData\\Local\\Temp\\dsh-spill-0qNGfo\\session-90f01e281a2a\\aee957843dbe-web_fetch.txt",
+      "exists": true,
+      "rawBytes": 100265,
+      "rawChars": 100265,
+      "omittedBytes": 50569,
+      "headInRaw": true,
+      "tailInRaw": true,
+      "rawMinusOmitted": 49696
+    },
+    {
+      "session": "ff71b121-0b62-4b06-8d29-8ed98c027fcc",
+      "seq": 21,
+      "callSeq": 20,
+      "turn": 1,
+      "tool": "grep",
+      "kind": "host-spill",
+      "foldedChars": 49932,
+      "locator": "C:\\Users\\19091\\AppData\\Local\\Temp\\dsh-spill-2gz2fg\\session-3b11d4455aec\\26fb87002f6f-grep.txt",
+      "exists": true,
+      "rawBytes": 74075,
+      "rawChars": 74075,
+      "omittedBytes": 24371,
+      "headInRaw": true,
+      "tailInRaw": true,
+      "rawMinusOmitted": 49704
+    }
+  ]
+}
