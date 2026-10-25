@@ -9,6 +9,7 @@
  * 宿主侧包装（defineTool、Schemastery 表单、workspace 根解析）留到 T3。
  */
 
+import fs from 'node:fs';
 import path from 'node:path';
 
 import { registerStatusCommand } from './commands/cg-status.js';
@@ -66,6 +67,7 @@ export const DEFAULT_CONFIG = Object.freeze({
     profile: '',
     windowTokens: 1_000_000,
     reservedTokens: 256_000,
+    projectFile: '.cg-policy.json',
     values: Object.freeze({}),
   }),
 });
@@ -188,6 +190,7 @@ export function resolveConfig(raw = {}) {
       profile: policy.profile,
       windowTokens: policy.windowTokens,
       reservedTokens: policy.reservedTokens,
+      projectFile: String(policy.projectFile ?? '.cg-policy.json').trim() || '.cg-policy.json',
       values: policy.values,
     },
   };
@@ -214,6 +217,48 @@ export async function openStore(config, options = {}) {
  * @param {object} ctx 宿主插件上下文。
  * @param {object} [rawConfig]
  */
+/**
+ * 构建策略状态（纯同步、可单测）：profile 标签层 → 插件层 → 项目 .cg-policy.json。
+ * 读文件失败/非法 JSON/非法键 → 只记 invalid（由 apply 写 policy-invalid 审计），不抛错。
+ *
+ * @param {object} config resolveConfig 的结果。
+ * @param {{readFile?: (file: string) => string}} [deps]
+ */
+export function buildPolicyState(config, deps = {}) {
+  const readFile = typeof deps.readFile === 'function' ? deps.readFile : (target) => fs.readFileSync(target, 'utf8');
+  const native = nativeRatio({ windowTokens: config.policy.windowTokens, reservedTokens: config.policy.reservedTokens });
+  const layers = [];
+  const invalid = [];
+  const profilePreset = profileLayer(config.policy.profile);
+  if (profilePreset !== null) layers.push({ source: profilePreset.source, values: profilePreset.values });
+  const plugin = validateLayer(config.policy.values, { source: 'plugin', native });
+  layers.push({ source: 'plugin', values: plugin.values });
+  invalid.push(...plugin.invalid);
+  const project = { source: 'project', values: {} };
+  try {
+    const target = path.join(config.projectRoot, config.policy.projectFile);
+    const parsed = JSON.parse(String(readFile(target)));
+    const validated = validateLayer(parsed, { source: 'project', native });
+    project.values = validated.values;
+    invalid.push(...validated.invalid);
+  } catch (error) {
+    if (error?.code !== 'ENOENT') {
+      invalid.push({
+        source: 'project',
+        key: '*',
+        reason: error instanceof SyntaxError ? 'invalid-json' : 'read-failed',
+      });
+    }
+  }
+  layers.push(project);
+  return {
+    native,
+    layers,
+    invalid,
+    resolve: () => resolvePolicy(layers, { native }),
+  };
+}
+
 export async function apply(ctx, rawConfig = {}) {
   const config = resolveConfig(rawConfig);
   const policyNative = nativeRatio({ windowTokens: config.policy.windowTokens, reservedTokens: config.policy.reservedTokens });

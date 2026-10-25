@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { createStatusCommand } from '../src/commands/cg-status.js';
+import { buildPolicyState, resolveConfig } from '../src/index.js';
 import { profileLayer, resolvePolicy, validateLayer } from '../src/policy.js';
 
 const NATIVE = 0.6785;
@@ -78,4 +79,22 @@ test('0.2.0 /cg status：出现 policy 合成链行', async () => {
   assert.equal(result.kind, 'success');
   assert.match(result.text, /policy: compact\.at=0\.58 \(source=plugin\) native=0\.6785 early=on/);
   if (process.env.CG_SAMPLE === '1') console.log('### status tail ###\n' + result.text.split('\n').filter((line) => line.startsWith('compression:') || line.startsWith('policy:') || line.startsWith('degraded:')).join('\n'));
+});
+
+test('0.2.0 项目 .cg-policy.json：覆盖插件层，来源=project', () => {
+  const config = resolveConfig({ projectRoot: 'D:/tmp/project', policy: { values: { 'compact.at': 0.58 } } });
+  const state = buildPolicyState(config, { readFile: () => JSON.stringify({ 'compact.at': 0.52 }) });
+  const resolved = state.resolve();
+  assert.equal(resolved.values['compact.at'], 0.52);
+  assert.equal(resolved.sources['compact.at'], 'project');
+});
+
+test('0.2.0 项目文件非法：只记 invalid，不抛错；越界/未知键都拒绝该层', () => {
+  const config = resolveConfig({ projectRoot: 'D:/tmp/project' });
+  const state = buildPolicyState(config, { readFile: () => JSON.stringify({ 'compact.at': 0.9, 'x': 1 }) });
+  const resolved = state.resolve();
+  assert.equal(resolved.values['compact.at'], 0.60);
+  assert.equal(resolved.sources['compact.at'], 'builtin');
+  assert.ok(state.invalid.some((item) => item.reason === 'over-native'));
+  assert.ok(state.invalid.some((item) => item.reason === 'unknown-key'));
 });
