@@ -83,6 +83,24 @@ test('0.2.2 接线：armed=true + 压力在位 → early-decision + early-forced
   assert.equal(forced.delayMs, EARLY_DELAY_MS);
 });
 
+test('0.2.2 接线：accepted 但无新报告 → protection=null（不得回退 ok）', async () => {
+  const guard = makeGuard({
+    lastReport: { compactionId: 'old', compaction: 'committed', protection: 'ok', failures: [], reinjected: true },
+  });
+  const engine = makeEngine(); // resolve，但不产生新报告（guard.lastReport 不变）
+  const { ctx } = makeCtx({ engine });
+  const audit = makeAudit();
+  const wiring = wireEarlyCompaction({ ctx, getGuard: () => guard, getPolicy: () => POLICY, audit, getArmed: () => true, now: () => 0 });
+  await wiring.check({ id: 's1' });
+  assert.deepEqual(audit.entries.map((entry) => entry.event), ['early-decision', 'early-forced']);
+  const forced = audit.entries[1];
+  assert.equal(forced.accepted, true);
+  assert.equal(forced.compaction, 'committed');
+  assert.equal(forced.protection, null, '没有新报告时必须写未知 null，不得写 ok');
+  assert.deepEqual(forced.failures, []);
+  assert.equal(forced.reinjected, null);
+});
+
 test('0.2.2 接线：busy → early-aborted；其他失败 → early-failed', async () => {
   const busyEngine = makeEngine('busy');
   const audit = makeAudit();

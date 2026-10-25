@@ -159,7 +159,7 @@ export function wireEarlyCompaction(options = {}) {
       sessionId,
       accepted: result.accepted === true,
       compaction: fresh?.compaction ?? (result.accepted === true ? 'committed' : 'failed'),
-      protection: result.accepted === true ? (fresh?.protection ?? 'ok') : null,
+      protection: result.accepted === true ? (fresh?.protection ?? null) : null,
       failures: result.accepted === true && Array.isArray(fresh?.failures)
         ? fresh.failures.map((failure) => failure.name)
         : [],
