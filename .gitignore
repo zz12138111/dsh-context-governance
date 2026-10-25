@@ -37,3 +37,6 @@ credentials*
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# 记忆备份（真实内容，禁止入库）
+memory/governance.bak-*
