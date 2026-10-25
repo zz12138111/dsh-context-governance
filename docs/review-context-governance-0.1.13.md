@@ -59,7 +59,7 @@
 
 - `capabilities.js` 新增 `LAX_PROBES=['compaction']`，输出 `get.compaction(strict=false)`：`obj`（有 impl 未 active）/`undefined`（本 scope 未提供）/`unknown`（不支持或抛错）✔
 - 我的现场探测（4 态）：`obj` / `undefined` / `unknown` / `no-get`（`ctx.get` 缺失时）均符合预期 ✔
-- 真机值（2026-10-25 13:18Z，0.1.14 重启后确认）：@apply 与 @ready 两条都是 **`get.compaction(strict=false)=undefined`** → 本 scope **未提供** compaction 服务（`obj` 才表示“有 impl 未 active”）；「回注时点修正」在该部署下**不可行**，只能按事件时序推断。
+- 真机值（2026-10-25 13:18Z，0.1.14 重启后确认）：@apply 与 @ready 两条都是 **`get.compaction(strict=false)=undefined`** → 本 scope **看不到** compaction 服务（`obj` 才表示“有 impl 未 active”）；**根因：agent preset 的 `cordis:group` + `isolate: {compaction: true}`**（`@local/dsh-computer-use/presets/cordis.patch.yml`、`@deepseek-ai/dsh-web-app/presets/standard.patch.yml` 均如此）；「回注时点修正」在该部署下**不可行**，只能按事件时序推断。
 
 ### ⑥ 无回归
 
@@ -105,7 +105,7 @@
 
 ## 6. 真机验收观察点（重启后，复核方不下结论）
 
-1. ✅ 已确认（2026-10-25 13:18Z，0.1.14）：`capability@apply`/`@ready` 都是 `get.compaction(strict=false)=undefined` → 本 scope 未提供；「回注时点修正」不可行，只能按事件时序推断。
+1. ✅ 已确认（2026-10-25 13:18Z，0.1.14）：`capability@apply`/`@ready` 都是 `get.compaction(strict=false)=undefined` → 本 scope 看不到（根因：agent preset `cordis:group` + `isolate.compaction: true`）；「回注时点修正」不可行，只能按事件时序推断。
 2. 下一次真实压缩：若摘要/消息里有明确 `x/y`，`batch-list` 应能 pass/fail；若只有关键字 → `skip` + `protection-skip`（`reason=no-ratio-in-user-messages`）。
 3. **若出现 `batch-list=fail` 且比例是 `2/6`、`183/183` 这类计数 → 属于 §4 的已知假失败，不要当成批次丢失**（0.1.14 修复前）。
 4. 成本/回注/记忆行为与 0.1.12 一致（`cost-v1.2`、`prune-observed` 不受影响）。

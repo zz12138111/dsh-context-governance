@@ -279,6 +279,7 @@
 
 1. 工作区**未提交的 T6/T7 改动**（复核期间仍在变，19:0x 见 `src/audit.js` 轮转、`src/compress/runtime.js`、`src/index.js`、`src/memory/store.js`、**新增 `src/memory/header.js`**、`docs/T6-失败与降级.md`、`test/t6-*`、`test/t7-*`、`analysis/t7/`）——等提交后再复核一轮；本报告所有结论只对 `cdf178b` 成立。
 2. **context-zip 后端**未在当前真机跑通（`adapter=none`，provider 被 preset group 隔离）；双后端验收（需求⑤）无本轮证据。
+   - **结项注记（2026-10-25，架构 v1.1 + REQ-01 结项口径）**：真机实际运行的就是 **context-zip**（profile redirect 接管 `compaction-basic` 行）；宿主默认后端未单独跑；**provider 路径已结案不可行**——根因是 agent preset 把 compaction 服务放进 `cordis:group` 并设 `isolate: { compaction: true }`（`@local/dsh-computer-use/presets/cordis.patch.yml` 与 `@deepseek-ai/dsh-web-app/presets/standard.patch.yml` 等多套 preset 一致；本报告 §9 已记录 preset `isolate.compaction=true`），根级插件 `ctx.get('compaction', false)` 返回 `undefined` 属设计行为。按 REQ-01 结项口径，双后端以**事件级契约一致**为准，本条**不再是待验证项**。
 3. 真实压缩下的保护/回注行为（V2）——重启后尚未发生压缩，全部结论仍是静态 + 离线测试。
 4. 安装/升级/回滚**实跑**——本轮只读，未执行 Runbook。
 5. 发布形态（zip/Release 说明/tag）——下一阶段（打包）再做。

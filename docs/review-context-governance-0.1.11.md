@@ -60,11 +60,11 @@
 
 ### ④ `ctx.compaction` 可用性结论（2026-10-25 真机更正）
 
-- `dsh-base/cordis.patch.yml:348-352` 确挂 `token-meter` + `compaction-basic`；本机 profile `cordis.patch.yml:79-82` 有 `thresholdRatio: 0.65`；真机 `58a2e845` 也确实发生过自动/手动压缩（`4193–4197`、`8535–8539`）。
+- `dsh-base/cordis.patch.yml:348-352` 确挂 `token-meter` + `compaction-basic`；本机 profile `cordis.patch.yml:79-82` 有 `thresholdRatio: 0.65`（**注（2026-10-25）：该 patch 行实际不生效**；有效阈值在 preset：`thresholdRatio 0.8` + `headroomTokens 65536` ≈ **67.85%**，见架构 v1.1 §6.4/§19）；真机 `58a2e845` 也确实发生过自动/手动压缩（`4193–4197`、`8535–8539`）。
 - **但真机 0.1.12 的 `capability@apply`（20:34:54）与 `capability@ready`（20:35:54）两条都是 `compaction=throws`、`get.compaction=absent`**，ready 出现在首个会话事件之后仍未变 → **“apply 时 absent 只是探测时机（ready 时可得）”不成立**。
 - 两列语义不同（cordis `reflect.ts`）：`ctx.X` 是“未 inject 的属性读取”，服务不在 fiber store 链上时抛 `cannot get property "X" without inject`（`reflect.ts:144-170`）；`ctx.get('X')` 是“无 inject 要求的 store 读取”，未提供时返回 `undefined`（`reflect.ts:9-19`）。对照证据就在同一条日志里：**`tokenMeter=throws` 但 `get.tokenMeter=obj`** —— 所以 `throws` 列不能当作“服务坏了/不存在”，只有 `get.X` 是可用性信号。
-- 结论（更正后，2026-10-25 0.1.14 真机定性）：**该部署下插件 scope 根本没有提供 `ctx.compaction`** —— `get.compaction(strict=false)` 在 @apply（13:18:10Z）与 @ready（13:18:23Z）两条都是 `undefined`（`obj` 才表示“有 impl 未 active”，已排除）；插件不依赖它（压缩走 `session/event` 的 `compaction/start|summary|end`，0.1.10 起一直如此），**「回注时点修正」在该部署下不可行，只能按事件时序推断**。
-- 定性路径：先用 `get.X`（`absent`）确认不可见，再用 `ctx.get('compaction', false)` 区分——`undefined` = 本 scope 未提供（已定性），`obj` = 有 impl 但未 active（已排除）。
+- 结论（更正后，2026-10-25 0.1.14 真机定性）：**该部署下插件 scope 根本看不到 `ctx.compaction`** —— `get.compaction(strict=false)` 在 @apply（13:18:10Z）与 @ready（13:18:23Z）两条都是 `undefined`（`obj` 才表示“有 impl 未 active”，已排除）；**根因已定位：agent preset 用 `cordis:group` + `isolate: {compaction: true, toolResultPruner: true}` 把服务隔离在 preset 作用域内**（`@local/dsh-computer-use/presets/cordis.patch.yml`、`@deepseek-ai/dsh-web-app/presets/standard.patch.yml` 均如此；见架构 v1.1 §6.8）。插件不依赖它（压缩走 `session/event` 的 `compaction/start|summary|end`，0.1.10 起一直如此），**「回注时点修正」在该部署下不可行，只能按事件时序推断**。
+- 定性路径：先用 `get.X`（`absent`）确认不可见，再用 `ctx.get('compaction', false)` 区分——`undefined` = 本 scope 不可见（preset isolate 隔离，已定性），`obj` = 有 impl 但未 active（已排除）。
 
 ## 3. 回归面（折叠/回注/记忆三链路）
 
