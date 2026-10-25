@@ -20,10 +20,10 @@
 
 ## REQ-20261025-01 上下文治理插件 M1 —— 压缩前后不断线
 
-- **依据**：`docs/上下文治理插件-架构说明-v1.0.md`
+- **依据**：`docs/上下文治理插件-架构说明-v1.1.md`
 - **背景/痛点**：长会话压缩后，任务状态、决策、批次进度容易丢失；已定的事被重问；换会话或定时唤醒接不上。M1 先解决“不断线”，不追求省 token。
 - **目标（可验收）**：
-  1. 单插件、对宿主零硬依赖；支持宿主默认与 context-zip 两种压缩后端。
+  1. 单插件、对宿主零硬依赖；对宿主默认与 context-zip 两种后端保持**事件级契约一致**（provider 层在本 scope 不可得，见验收 ⑤）。
   2. 压缩、换会话、唤醒后，任务态（目标、待办、最近决定、关键约束）能自动恢复。
   3. 压缩保护按 S4=B：压缩前先把受保护内容写进记忆（标题+指针）；压缩结束（`compaction/end` 发布后首个 microtask、下一次模型调用前）从记忆回注；自动压缩下 5 类受保护内容 0 丢失；手动压缩允许原文丢失，但必须有记忆指针、audit 显式告警、回注后能看出最后一句。
   4. 回注只放记忆 ID/状态/指针，详情留记忆，不产生第二段摘要。
@@ -39,7 +39,7 @@
   - ② **记忆写作**：模型调用记忆写入工具后，条目包含 `id/type/status/project/source/writer/confidence`；高风险项为 `proposed`；来源可追溯。
   - ③ **压缩保护（S4=B）**：压缩前把受保护内容写进记忆（标题+指针）；压缩结束（`compaction/end` 发布后首个 microtask、同一 tick、下一次模型调用前）从记忆回注；字面“checkpoint 后、end 前”需替换压缩 provider，M1 不做。自动压缩：5 类受保护内容（最新用户消息/规则注入/工具配对/批次 STATE/回滚点映射）0 丢失；手动压缩：允许原文丢失（宿主仅保留最后 1 个 surface 节点，治理层无否决权），但必须满足记忆有指针、audit 有显式告警、回注后调用方能看出“最后一句是什么”；任何“写不进/注不进”必须有 audit，不允许静默。
   - ④ **回注行为**：只含 ID + 状态 + 指针；摘要可读时按覆盖判断是否补一行标题；摘要不可读时仅 ID+状态；摘要与记忆冲突时记忆赢；详情可通过记忆工具找回。
-  - ⑤ **双后端**：宿主默认与 context-zip 各跑一遍；不替换用户现有 context-zip 配置；没装 context-zip 时自动用宿主默认。
+  - ⑤ **双后端（事件级）**：两种后端共用同一事件契约；真机实测为 **context-zip**（redirect 接管 `compaction-basic`），宿主默认未单独跑；**provider 路径不可用**（本插件 scope `get.compaction(strict=false) → undefined`，见 `REQ-20261025-03` 结案），因此不替换用户现有配置、也不参与 provider 选择；没装 context-zip 时自动用宿主默认。
   - ⑥ **失败与降级**：记忆写失败 → 重试一次，仍失败跳过本次压缩并告警；压缩失败 → 回退宿主默认；配置非法 → 插件不加载、DSH 正常；摘要/范围/产物都不可见 → 该后端只读。
   - ⑦ **状态与审计**：状态命令（暂名 `/cg status`）显示后端、能力、记忆条数、上次压缩、上次回注、降级项；审计含后端、压缩前后、成本归属（字段见下）、回注被吞/重复、失败。
 
@@ -49,7 +49,7 @@
 - **维度**：`sessionId`、`project`、`backend`、`model`（`provider/model`）、`trigger`（auto/manual）、`occurredAt`。
 - **数值**：`tokensBefore`、`tokensAfter`、`tokensShadowed`、`tokensSummary`、`tokensInjected`、`injectedEntries`、`tokensDropped`。
 - **口径**：`backendUsage`（压缩事件 usage）；`backendCostSource` / `governanceCostSource`（`measured` / `estimated` / `unknown`）；`estimateMethod`；`auditVersion`。
-- **对齐宿主**：`tokensBefore/After` 用宿主 tokenMeter/压缩事件；`backendUsage`/`tokensSummary` 用压缩事件 usage；`tokensInjected` 优先用宿主 tokenMeter，取不到则按字符估算并标 `estimated`；`tokensDropped` 来自 `reinjection-shadowed`；实测与估算分开存，不混算。
+- **对齐宿主**：`tokensBefore/After` 用宿主 `tokenMeter`（**估算，chars/4，系统性偏低**）或压缩事件；`backendUsage`/`tokensSummary` 用压缩事件 usage（**实测**）；`tokensInjected` 优先用宿主 tokenMeter，取不到则按字符估算并标 `estimated`；`tokensDropped` 来自 `reinjection-shadowed`；**实测（`usage`）与估算（`tokenMeter`/chars-4）分开存、不混算**。M1.2 起每个数值带 `*Source`（`tokenMeter`/`usage`/`none`）。
 - **说明**：M1 只记 token 归属，不记金额；金额可由路由单价另行换算。
 - **前置门禁（不是验收项）**：
   - **E1**：至少达到“状态级”感知；
@@ -63,11 +63,11 @@
   - S5：摘要不可读 → 只回注 ID+状态；
   - S6：后端不可用 / 配置非法 → 回退或插件不加载，DSH 正常。
 - **依赖/风险**：
-  - DSH 当前版本（`0.2.1-rc.2`）、context-zip 当前版本、Schemastery；
+  - DSH 当前版本（`0.2.1-rc.3`）、context-zip 当前版本、Schemastery；
   - E1/E2 可能发现 context-zip 只有状态级感知或摘要不可读，按降级阶梯处理；
   - 记忆单写者只保证进程内，跨进程不承诺。
 - **优先级**：P0
-- **状态**：已排期
+- **状态**：**已结项**（M1 主体 v0.1.10；后续 0.1.11–0.1.14 为探测/成本/判据修正，均属 M1 收尾，不改本单范围）
 
 ### 任务拆解
 
@@ -75,11 +75,13 @@
 
 **T9 已被 T8-2 吸收，不再待排期**：T8-1 已修 ROB-01/06；T8-2 已实现成本归属（A 口径，`compaction-cost` 审计，token 实测/估算分列，不记金额）。M1 成本归属无待办；若后续做跨周期聚合/货币成本，另立 M2 增强，不复用 T9。
 
+**结项说明（2026-10-25，事实口径）**：M1 以 **v0.1.10** 结项；0.1.11 修成本实测（`tokenMeter` 延迟获取 + `usage` 兜底 + `*Source`）、0.1.12 加宿主 prune 观测、0.1.13/0.1.14 修 batch 判据。**已知边界**：① provider 路径不可得（`ctx.compaction` 本 scope 未提供，`strict=false → undefined`）；② 手动压缩吞最新用户消息（宿主行为，S4=B 已接住）；③ 金额不可得；④ `tokenMeter` 是 chars/4 估算，样本低估约 28%，只能当估算来源。
+
 ---
 
 ## REQ-20261025-02 上下文治理插件 M1.1 —— 宿主 prune 观测（已收口）
 
-- **依据**：`docs/上下文治理插件-架构说明-v1.0.md` §16.3；M1 `REQ-20261025-01`；`docs/M1-可行性复查-20261025.md`；账本 `DEC-20261025-37` / `ART-20261025-19`
+- **依据**：`docs/上下文治理插件-架构说明-v1.1.md` §16.3；M1 `REQ-20261025-01`；`docs/M1-可行性复查-20261025.md`；账本 `DEC-20261025-37` / `ART-20261025-19`
 - **优先级**：P1
 - **状态**：**已收口**（2026-10-25 用户拍板 T2=A），T2′ 出 **0.1.12**（`0.1.11` 冻结为 M1.2，两份复核基线分开钉 hash）；**0.1.12 = T2′ + 0.1.11 复核 6 条 P3**。原「工具输出折叠 + 批量测量」范围**取消**，只保留宿主 prune 观测。
 - **范围变更（2026-10-25）**：
