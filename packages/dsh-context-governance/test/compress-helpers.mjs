@@ -151,6 +151,7 @@ export function buildCompaction({
   shadowedSeqs,
   before = [],
   source = 'host',
+  manual = false,
 }) {
   const events = [...before];
   const nodes = before.map((item) => item.seq);
@@ -160,7 +161,7 @@ export function buildCompaction({
     end,
     shadowedSeqs: shadowedSeqs ?? nodes.filter((seq) => seq >= start && seq <= end),
   });
-  events.push(compactionStart(startSeq, compactionId), summaryEvent, checkpoint(checkpointSeq, compactionId), compactionEnd(endSeq, compactionId));
+  events.push(compactionStart(startSeq, compactionId, { manual }), summaryEvent, checkpoint(checkpointSeq, compactionId), compactionEnd(endSeq, compactionId));
   const session = fakeSession(events, nodes);
   const postSurface = expectedSurface(
     { nodes: [...nodes] },

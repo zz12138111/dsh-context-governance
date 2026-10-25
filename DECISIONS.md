@@ -225,3 +225,10 @@
 - 选择：batch 只从人类 `user/message` 与 `assistant/message` 正文取“数字/数字”明确比例（排除 `tool/*`、规则注入、JSON/代码块，日期不算）；`ratios=[]` 判 `skip` + `reason=no-ratio-in-user-messages`，写 `protection-skip` 审计（白名单加 `names`）；带比例的消息优先于仅关键字。能力探测加 `ctx.get('compaction', false)`：`obj`=有 impl 未 active / `undefined`=本 scope 未提供 / 不支持或抛错=`unknown`，不猜。
 - 影响：原先“假通过”样本变“真 skip”（预期行为变化，非回归）；`auditVersion` 维持 `cost-v1.2`；不改折叠/回注/记忆/成本路径。离线回放 6 场景 4 改判（`analysis/req-20261025-04/replay-diff.txt`）；全量 **189/189**。
 - 关联：`src/compress/protection.js`、`src/capabilities.js`、`src/audit.js`、`src/compress/runtime.js`、`test/compress-protection.test.mjs`、`test/compress-integration.test.mjs`、`test/perception-capabilities.test.mjs`、`docs/T3-压缩适配与保护.md`、`docs/T8-回注自愈与成本归属.md` §6.5、`docs/T5-状态命令与审计.md`；状态：active。
+
+## DEC-PLUGIN-20261025-31 [tech] 0.1.14：batch 比例同源约束（宁可 skip 不可 fail）
+
+- 背景：0.1.13 收窄后，助手/用户正文里的收口与测试计数（`2/6`、`183/183`）被当批次比例 → 判 `fail` 并写 `manual-compaction-loss` 假阳性（真机 `seq=11453`，`2/6` 来自评审语 `0 阻断 / 0 P2 / 6 P3`）；`YYYY/MM`、正文 `{511/958}` 也会误伤。
+- 选择：批次语义（`批次|进度|progress|batch`）必须与比例出现在**同一条** `user/message` 或 `assistant/message` 正文，跨消息拼凑不算；无关键字但有比例 → 不算候选，记 `batchRejected` 并 `skip(no-batch-semantics)`；`YYYY/MM`（19xx/20xx + 1–12）剔除后 `skip(date-like-ratio)`；`stripStructuredPayload` 只剥“像 JSON”的 `{…}`/`[…]`（含引号或冒号），保留正文比例；判据原则“宁可 skip 不可 fail”（fail 会触发 `manual-compaction-loss`）。
+- 影响：真实快照 A/B（`0.1.12 seq=11479 ratios=[] → pass`、`0.1.13 seq=11453 ratios=["2/6"] → fail`）在 0.1.14 均 `skip(no-batch-semantics)`、不进 failures；正例必须带关键字；`auditVersion` 维持 `cost-v1.2`。离线三列对照 `analysis/req-20261025-05/`；全量 **196/196**。
+- 关联：`src/compress/protection.js`、`test/compress-protection.test.mjs`、`test/compress-integration.test.mjs`、`test/compress-helpers.mjs`、`docs/T3-压缩适配与保护.md`、`docs/T5-状态命令与审计.md`、`analysis/req-20261025-05/`；状态：active。

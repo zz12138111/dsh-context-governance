@@ -1,15 +1,15 @@
 # DSH 插件开发 · 当前状态
 
 > 只放"现在还活着"的：在做什么、卡在哪、待谁决策。过期项直接删。
-> 更新：2026-10-25（**0.1.13 离线完成**：batch 判据收窄 + `get.compaction(strict=false)` 归因，189/189；0.1.12 已于 20:34:54 加载，20:46 首次真实手动压缩已验证 `cost-v1.2`）
+> 更新：2026-10-25（**0.1.14 离线完成**：batch 比例同消息绑定 + 日期排除 + 正文比例保留，196/196；真实快照 A/B 在 0.1.14 均 skip(no-batch-semantics)；0.1.12 真机首次手动压缩已验证 `cost-v1.2`）
 
 ## 在办
 
 | 会话 | 当前任务 | 状态 |
 |---|---|---|
-| 需求 | M1.1 T2′ 完成（0.1.12）；M1.2 冻结 0.1.11；0.1.13 已出单并离线完成；**0.1.14 已出单**（batch 比例同源修正：P2 + P3① + P3②）；M2 待真实压缩验证后评估 | 已出单 |
-| 开发 | **0.1.13 离线完成**（batch 判据收窄 + strict=false 归因）；0.1.12 已加载并完成首次真实手动压缩验证；未安装/未重启/未 push | 待审核 |
-| 审核打包 | 0.1.12 复核已出：0 阻断 / 0 P2 / 6 P3；**0.1.13 待复核** | 待复核 |
+| 需求 | M1.1 T2′ 完成（0.1.12）；M1.2 冻结 0.1.11；0.1.13 已出单并离线完成；0.1.14 已出单并**开发已交付**（batch 比例同源修正：P2 + P3① + P3②，依 `DEC-20261025-46`）；M2 待真实压缩验证后评估 | 0.1.14 待复核 |
+| 开发 | **0.1.14 离线完成**（batch 同消息绑定 + 日期排除 + 正文比例保留）；0.1.12 已加载并完成首次真实手动压缩验证；0.1.13/0.1.14 未安装/未重启/未 push | 待审核 |
+| 审核打包 | 0.1.12 复核已出：0 阻断 / 0 P2 / 6 P3；0.1.13 复核已出（0 阻断）；**0.1.14 待复核** | 待复核 |
 
 ## 进度
 
@@ -26,8 +26,8 @@
 - **M1.1 收口（2026-10-25，T2=A）**：B2 显示宿主 pruner 在压缩点已覆盖全部 >8k；49 会话统计白名单可折上限仅 15.3%，红线 `pwsh`+`read` 占 71.0% → **不做早折、不做 spill、不做批量测量**；M1.1 改为只做 **T2′ prune 观测与成本接入**（`compaction-cost` 增 `tokensPruned`/`pruneCount`/`pruneTools`，`auditVersion=cost-v1.2`）；**0.1.12 = T2′ + 0.1.11 复核 6 条 P3**。范围变更已改单：`REQUIREMENTS.md` REQ-20261025-02、`TASKS/REQ-20261025-02-M1.1-拆解.md`；账本 `DEC-20261025-37`/`ART-20261025-19`、`DEC-20261025-38`/`ART-20261025-20`。
 - **M1.1 T2′（v0.1.12）**：离线完成，只读观测宿主 `compaction/prune`：`prune-observed`（工具名按替换 `callId` 反查 `tool/call`，未知记 `unknown`；同 `shadowedRange` 去重；`cycle=current/outside`）；`compaction-cost` 增 `tokensPruned`(measured/null)/`pruneCount`/`pruneTools`(top5)，`auditVersion=cost-v1.2`；`/cg status [last-cost]` 显示 `pruned=<tokens> tools=<top5>`。生产代码零折叠/spill，T1 实验只在 `analysis/t1/`。记录 `analysis/t2prime/T2prime-交付记录.md`。
 - **0.1.12 P3 收口（6 条）**：P3-1 `ctx.inject` 返回 Fiber → `stop()` 调 `fiber.dispose()`（修实现）；P3-2 T5 文档同步 `last-cost`；P3-3 T8 文档 `cost-v1.2`；P3-4/5 文档写明成本行延迟；P3-6 读方按 `cost-v1` 前缀匹配 + 测试。另 3 条（tokenGuard 源码不可复核、baseline 时间闸、其余小项）不改。
-- **测试**：全量 **189/189 通过**（`node --test "test/*.test.mjs"`；T2′ 5 条 prune + P3-1 Fiber 1 条；**0.1.13 新增 6 条**：JSON 反例 skip、`8000/1500` 正例、关键字-only skip+reason、日期/助手正文、strict=false 三态、`protection-skip` 审计落盘）。
-- **真机**：已安装（deps 14 / bundles 17 / redirect 0.1.0-context-zip / junction 已建）。v0.1.6 已验证工具/感知/审计；**v0.1.12 已于 20:34:54 加载**，20:46 首次真实手动压缩已验证 `auditVersion=cost-v1.2`（`tokensBefore=407146`/`tokensAfter=3525`、`tokensPruned=null`、`pruneCount=0`——手动 `compactNow` 不调 pruner）；**`prune-observed` 正路径仍未验**，需自动压力/溢出压缩（0.1.13 未安装，等审后统一重启）。
+- **测试**：全量 **196/196 通过**（`node --test "test/*.test.mjs"`；0.1.13 为 189；**0.1.14 新增 7 条**：`2/6`/`183/183`/仅`8000/1500` 三种 skip+reason、`批次 8000/1500` 正例、`2026/10` 日期排除、`{511/958}` 保留、`protection-skip(no-batch-semantics)` 审计且无 `manual-compaction-loss`）。
+- **真机**：已安装（deps 14 / bundles 17 / redirect 0.1.0-context-zip / junction 已建）。v0.1.6 已验证工具/感知/审计；**v0.1.12 已于 20:34:54 加载**，20:46 首次真实手动压缩已验证 `auditVersion=cost-v1.2`（`tokensBefore=407146`/`tokensAfter=3525`、`tokensPruned=null`、`pruneCount=0`——手动 `compactNow` 不调 pruner）；**`prune-observed` 正路径仍未验**，需自动压力/溢出压缩（0.1.13/0.1.14 未安装，等审后统一重启）。
 - **T6/T7/T8**：均离线完成；真机验收项列在“下一步”。
 - **T8/T9**：T8-1 修 ROB-01/06；T8-2 实现 `compaction-cost`（A 口径）；**T9 已被 T8-2 吸收，不再排期**。
 
@@ -46,7 +46,8 @@ M1 成本“前后水位未知”原按降级接受，2026-10-25 复查为插件
 
 - **真插件安装**：已完成结构安装（junction 指向源码，改完重启即生效）；开发不重启。
 - M1.1：T2′ 已离线完成（v0.1.12）；**审核复核已出（0 阻断/0 P2/6 P3）**；真机已于 20:34:54 加载、20:46 首次真实手动压缩验证 `cost-v1.2`。
-- 0.1.13（REQ-20261025-04）：开发已交付（189/189，报告 `analysis/req-20261025-04/`），待审核复核；未安装/未重启。
+- 0.1.13（REQ-20261025-04）：开发已交付（189/189，报告 `analysis/req-20261025-04/`）；0.1.14 已覆盖其 batch 判据（不改 `get.compaction` 归因）。
+- 0.1.14（REQ-20261025-05）：开发已交付（196/196，报告 `analysis/req-20261025-05/`，含真实快照 A/B 三列对照）；待审核复核；未安装/未重启。
 - M1.2：离线完成（0.1.11 冻结）；已并入 0.1.12（已重启加载）。
 - M2：真实压缩验证后评估。
 - 暂存：GitHub 发布用的仓库地址与账号（发布前需要）。
@@ -60,8 +61,8 @@ M1 成本“前后水位未知”原按降级接受，2026-10-25 复查为插件
 1. 0.1.12 真机：20:46 首次真实手动压缩已验证 `cost-v1.2`（`tokensBefore/After` 非 null、`tokensPruned=null`/`pruneCount=0`）与 `/cg status` 的 `pruned=0 tools=-`；**`prune-observed` 只有自动压力/溢出压缩才出现**（宿主 `compactNow` 不调 pruner，与审核结论一致），等自然触发或审核离线回放，不催用户压缩。
 2. 用户按 `docs/T7-只读降级人工验证.md` 跑一次只读演练（制造不可写根 → read-only → 恢复）。
 3. S3 header 默认关闭；要启用需用户拍板改 `memoryHeader.enabled`。
-4. 审核打包独立复核 **0.1.13**（batch 判据收窄 + `get.compaction` 归因）；0.1.12 复核已出（0 阻断/0 P2/6 P3），00 转用户验收。
+4. 审核打包独立复核 **0.1.14**（batch 同消息绑定 + 日期排除 + 正文比例保留；真实快照 A/B）；0.1.12/0.1.13 复核已出（0 阻断），00 转用户验收。
 5. T2′ 已实现；审核复核时**必须核对“生产代码无折叠”**（`packages/` 内无 fold/spill/`[cg-fold]`/`fold.*`；证据 `analysis/t2prime/zero-fold-grep.txt`）。
 6. 重启验收后：`ctx.compaction` 在本部署仍不可得（apply/ready 的 `get.compaction` 均 absent），**不再按“可得”评估回注时点**；0.1.13 已实现 `ctx.get('compaction', false)`（`obj`=有 impl 未 active / `undefined`=本 scope 未提供 / 不支持=`unknown`），真机取值待重启后 `capability@apply` 行确认，再决定 P1 是否具备前提。M2 待 M1.2 验收后评估。
-7. **0.1.13（`REQ-20261025-04`）**：batch 假阳性真修（只看用户/助手消息、`ratios=[]` → `skip`、补 `x/y` 回归）+ `get.compaction` strict=false 归因；不改折叠/回注、`auditVersion` 维持 `cost-v1.2`。**开发已交付**（189/189；报告 `analysis/req-20261025-04/`），待审核复核；未安装/未重启/未 push。
-8. **0.1.14（`REQ-20261025-05`）**：batch 比例**同源修正**——P2 严格同消息绑定（`user`/`assistant` 正文都须带 `批次|进度|progress|batch` 关键字，无关键字 → `skip(no-batch-semantics)`，依 `DEC-20261025-46`）、P3① `YYYY/MM`（19xx/20xx + 1–12）排除、P3② 正文比例不被 `stripStructuredPayload` 吞（只剥含引号/冒号的 JSON 块）；验收必须四例逐一 + 三列对照（含“无关键字 → 必须 skip”反例）。P3③/④/⑤ 不纳入。
+7. **0.1.13（`REQ-20261025-04`）**：batch 假阳性真修（只看用户/助手消息、`ratios=[]` → `skip`、补 `x/y` 回归）+ `get.compaction` strict=false 归因；不改折叠/回注、`auditVersion` 维持 `cost-v1.2`。**已交付 + 复核已出（0 阻断）**（189/189；报告 `analysis/req-20261025-04/`）；其 batch 判据已被 0.1.14 取代。
+8. **0.1.14（`REQ-20261025-05`）**：batch 比例**同源修正**——P2 严格同消息绑定（`user`/`assistant` 正文都须带 `批次|进度|progress|batch` 关键字，无关键字 → `skip(no-batch-semantics)`，依 `DEC-20261025-46`）、P3① `YYYY/MM`（19xx/20xx + 1–12）排除、P3② 正文比例不被 `stripStructuredPayload` 吞（只剥含引号/冒号的 JSON 块）；验收四例逐一 + 三列对照（含“无关键字 → 必须 skip”反例）。P3③/④/⑤ 不纳入。**开发已交付**（196/196；报告 `analysis/req-20261025-05/`，真实快照 `snapshot-11509.json` + `replay-real.mjs`），待审核复核；未安装/未重启/未 push。

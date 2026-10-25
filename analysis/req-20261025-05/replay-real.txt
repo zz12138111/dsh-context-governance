@@ -1,0 +1,14 @@
+真实快照：summarySeq=11509 range=8538-11499 shadowedSeqs=856 summaryLen=4653
+关键字口径：0.1.12/0.1.13 = 批次|batch；0.1.14 = 批次|进度|progress|batch（且必须与比例同消息）。
+
+A：表面截至 seq=11479（评审口径）
+  0.1.12  batch-list=pass  picked=seq 11479 ratios=[]
+  0.1.13  batch-list=fail  picked=seq 11453 ratios=["2/6"]  [进入 failures/manual-compaction-loss]
+  0.1.14  batch-list=skip reason=no-batch-semantics  picked=null  rejected=seq 11453 ratios=["2/6"]
+
+B：完整周期（含 11487 等后续候选）
+  0.1.12  batch-list=pass  picked=seq 11479 ratios=[]
+  0.1.13  batch-list=fail  picked=seq 11453 ratios=["2/6"]  [进入 failures/manual-compaction-loss]
+  0.1.14  batch-list=skip reason=no-batch-semantics  picked=null  rejected=seq 11453 ratios=["2/6"]
+
+结论：0.1.14 两个表面都判 skip(no-batch-semantics)，均未进入 failures（不会写 manual-compaction-loss）；0.1.12 的 pass 是 ratios=[] 空泛通过；0.1.13 的 fail 正是本单要修的假阳性。

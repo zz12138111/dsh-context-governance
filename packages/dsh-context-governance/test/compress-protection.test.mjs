@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   expectedSurface,
   snapshotProtection,
+  stripStructuredPayload,
   summaryTextOf,
   verifyProtection,
 } from '../src/compress/protection.js';
@@ -215,6 +216,121 @@ test('日期/规则注入不当成进度比例；助手正文里的比例可识�
   // 日期 2026/10/25 不算比例；规则注入不取数；助手正文的 6000/1200 生效。
   assert.deepEqual(snapshot.batch.ratios, ['6000/1200']);
   assert.equal(snapshot.batch.seq, 3);
+});
+
+test('0.1.14 同源约束：助手正文 2/6 无批次语义 → skip(no-batch-semantics)', () => {
+  const before = [
+    systemPrompt(0),
+    userMessage(1, '继续。'),
+    assistantText(2, '已收口：0 阻断 / 0 P2 / 6 P3，未 push。'),
+    assistantText(3, '好。'),
+    userMessage(4, '最后一条用户消息：继续。'),
+  ];
+  const { snapshot, report } = reportFor({ before, summary: FREE_FORM_SUMMARY, start: 1, end: 3 });
+  assert.equal(snapshot.batch, null);
+  assert.equal(snapshot.batchRejected.seq, 2);
+  const check = report.checks.find((item) => item.name === 'batch-list');
+  assert.equal(check.status, 'skip');
+  assert.equal(check.reason, 'no-batch-semantics');
+  assert.deepEqual(check.seqs, [2]);
+});
+
+test('0.1.14 同源约束：183/183 无关键字 → skip(no-batch-semantics)', () => {
+  const before = [
+    systemPrompt(0),
+    userMessage(1, '继续。'),
+    userMessage(2, '测试 183/183 全部通过。'),
+    assistantText(3, '好。'),
+    userMessage(4, '最后一条用户消息：继续。'),
+  ];
+  const { snapshot, report } = reportFor({ before, summary: FREE_FORM_SUMMARY, start: 1, end: 3 });
+  assert.equal(snapshot.batch, null);
+  const check = report.checks.find((item) => item.name === 'batch-list');
+  assert.equal(check.status, 'skip');
+  assert.equal(check.reason, 'no-batch-semantics');
+});
+
+test('0.1.14 反例：仅 8000/1500、无关键字 → skip，不得 pass/fail', () => {
+  const before = [
+    systemPrompt(0),
+    userMessage(1, '继续。'),
+    userMessage(2, '8000/1500 已完成。'),
+    assistantText(3, '好。'),
+    userMessage(4, '最后一条用户消息：继续。'),
+  ];
+  const { snapshot, report } = reportFor({ before, summary: FREE_FORM_SUMMARY, start: 1, end: 3 });
+  assert.equal(snapshot.batch, null);
+  assert.equal(snapshot.batchRejected.ratios[0], '8000/1500');
+  const check = report.checks.find((item) => item.name === 'batch-list');
+  assert.equal(check.status, 'skip');
+  assert.equal(check.reason, 'no-batch-semantics');
+});
+
+test('0.1.14 正例：批次 8000/1500 → 覆盖 pass / 不覆盖 fail', () => {
+  const before = [
+    systemPrompt(0),
+    userMessage(1, '继续。'),
+    userMessage(2, '批次 8000/1500 进行中。'),
+    assistantText(3, '收到。'),
+    userMessage(4, '最后一条用户消息：继续。'),
+  ];
+  const covered = reportFor({ before, summary: '当前批次 8000/1500 已完成。', start: 1, end: 3 });
+  assert.deepEqual(covered.snapshot.batch.ratios, ['8000/1500']);
+  assert.equal(covered.report.checks.find((item) => item.name === 'batch-list').status, 'pass');
+
+  const lost = reportFor({ before, summary: '继续跑下一步。', start: 1, end: 3 });
+  assert.equal(lost.report.checks.find((item) => item.name === 'batch-list').status, 'fail');
+});
+
+test('0.1.14 日期：2026/10 有批次语义 → skip(date-like-ratio)', () => {
+  const before = [
+    systemPrompt(0),
+    userMessage(1, '继续。'),
+    userMessage(2, '批次归档：2026/10。'),
+    assistantText(3, '好。'),
+    userMessage(4, '最后一条用户消息：继续。'),
+  ];
+  const { snapshot, report } = reportFor({ before, summary: FREE_FORM_SUMMARY, start: 1, end: 3 });
+  assert.deepEqual(snapshot.batch.ratios, []);
+  assert.equal(snapshot.batch.dateLike, 1);
+  const check = report.checks.find((item) => item.name === 'batch-list');
+  assert.equal(check.status, 'skip');
+  assert.equal(check.reason, 'date-like-ratio');
+});
+
+test('0.1.14 正文保留：{511/958} 可识别；JSON 载荷不参选', () => {
+  const keep = reportFor({
+    before: [
+      systemPrompt(0),
+      userMessage(1, '继续。'),
+      userMessage(2, '批次进度 {511/958}，继续。'),
+      assistantText(3, '好。'),
+      userMessage(4, '最后一条用户消息：继续。'),
+    ],
+    summary: '批次 511/958 已完成。',
+    start: 1,
+    end: 3,
+  });
+  assert.deepEqual(keep.snapshot.batch.ratios, ['511/958']);
+  assert.equal(keep.report.checks.find((item) => item.name === 'batch-list').status, 'pass');
+
+  const json = reportFor({
+    before: [
+      systemPrompt(0),
+      userMessage(1, '继续。'),
+      userMessage(2, '批次 {"n": "511/958"} 已归档。'),
+      assistantText(3, '好。'),
+      userMessage(4, '最后一条用户消息：继续。'),
+    ],
+    summary: '批次 511/958 已完成。',
+    start: 1,
+    end: 3,
+  });
+  assert.deepEqual(json.snapshot.batch.ratios, []);
+  assert.equal(json.report.checks.find((item) => item.name === 'batch-list').reason, 'no-ratio-in-user-messages');
+
+  assert.equal(stripStructuredPayload('批次 {511/958}').includes('511/958'), true);
+  assert.equal(stripStructuredPayload('{"batch": "511/958"}').includes('511/958'), false);
 });
 
 test('回滚点被吞且摘要没覆盖：fail', () => {

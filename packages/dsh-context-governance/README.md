@@ -71,6 +71,7 @@ packages/dsh-context-governance/
 - M1.2：`capability@apply`/`capability@ready` 两行能力探测（诊断 + audit，只记类型）；`tokenMeter` 延迟获取 + `assistant/message.usage` 兜底；`compaction-cost` 增加 `tokensBefore/AfterSource`（`tokenMeter`/`usage`/`none`）与可选 parts，`auditVersion` 自 0.1.11 起为 `cost-v1.1`；`/cg status` 增加 `last-cost:` 行。
 - T2′（0.1.12）：只读观测宿主 `compaction/prune`，写 `prune-observed`（工具名、阴影范围、token、replacementSeq、cycle）；`compaction-cost` 增 `tokensPruned`/`pruneCount`/`pruneTools`，`auditVersion=cost-v1.2`；`/cg status [last-cost]` 显示 `pruned=<tokens> tools=<top5>`。**不折叠、不改 content、不写落盘文件**。
 - 0.1.13：`batch-list` 判据收窄——只从人类 `user/message` 与 `assistant/message` 正文取“数字/数字”比例（排除 `tool/*`、JSON/代码块、日期）；没有比例判 `skip` 并写 `protection-skip`（`reason=no-ratio-in-user-messages`），不再空泛 pass；能力探测加 `get.compaction(strict=false)`（`obj`=有 impl 未 active / `undefined`=本 scope 未提供 / 不支持=`unknown`）。
+- 0.1.14：`batch-list` 改为**同消息绑定**——批次语义（`批次|进度|progress|batch`）与比例必须在同一条对话正文里，否则 `skip(no-batch-semantics)`；`YYYY/MM` 不算比例（`date-like-ratio`）；`stripStructuredPayload` 只剥像 JSON 的 `{…}`/`[…]`，正文 `{511/958}` 保留。判据原则：宁可 `skip` 不可 `fail`。
 
 ## 配置（bundle patch）
 

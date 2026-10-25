@@ -36,13 +36,16 @@ const STATE_FILE_RE = /(?:[A-Za-z]:\\|TASKS[\\/])[^\s，。；;）)]*?-STATE\.md
 /**
  * 进度数字只认“数字/数字”的明确比例（`511/958`、`8000/1500`）。
  * 前后不许再贴数字或斜杠，避免把日期 `2026/10/25`、多级路径当比例。
+ * `YYYY/MM`（19xx/20xx + 1–12）单独出现也不算比例。
  */
 const RATIO_RE = /(?<![\d/／])(\d{1,6})\s*[／/]\s*(\d{1,6})(?![\d/／])/g;
-const BATCH_KEYWORD_RE = /批次|batch/i;
-/** 排除结构化载荷：围栏代码块、JSON 对象、JSON 数组。 */
+const YEAR_PREFIX_RE = /^(?:19|20)\d{2}$/;
+const BATCH_KEYWORD_RE = /批次|进度|progress|batch/i;
+/** 排除结构化载荷：围栏代码块、JSON 对象、JSON 数组（只剥“像 JSON”的，正文 `{511/958}` 保留）。 */
 const FENCE_RE = /```[\s\S]*?```/g;
 const JSON_OBJECT_RE = /\{[^{}]{0,400}\}/g;
 const JSON_ARRAY_RE = /\[[^\[\]]{0,400}\]/g;
+const STRUCTURED_HINT_RE = /["'：:]/;
 
 /** 取消息对象（user/message 直接放 data；system/assistant/tool 放在 data.message）。 */
 export function messageOf(event) {
@@ -161,22 +164,47 @@ export function isProgressMessage(event) {
   return event.type === 'assistant/message';
 }
 
-/** 去掉围栏代码块与 JSON/数组载荷，避免把结构化字段（如 `{"batch":…}`）当进度文本。 */
+/** 去掉围栏代码块与“像 JSON”的对象/数组载荷；正文里的 `{511/958}` 保留。 */
 export function stripStructuredPayload(text) {
   return String(text ?? '')
     .replace(FENCE_RE, ' ')
-    .replace(JSON_OBJECT_RE, ' ')
-    .replace(JSON_ARRAY_RE, ' ');
+    .replace(JSON_OBJECT_RE, (chunk) => (STRUCTURED_HINT_RE.test(chunk) ? ' ' : chunk))
+    .replace(JSON_ARRAY_RE, (chunk) => (STRUCTURED_HINT_RE.test(chunk) ? ' ' : chunk));
 }
 
+/**
+ * 抽取明确比例并剔除日期形态（`2026/10`）。
+ * @returns {{ratios: string[], dateLike: number}}
+ */
+function extractRatios(text) {
+  const ratios = [];
+  let dateLike = 0;
+  for (const match of text.matchAll(RATIO_RE)) {
+    const current = match[1];
+    const total = match[2];
+    if (YEAR_PREFIX_RE.test(current) && /^\d{1,2}$/.test(total) && Number(total) >= 1 && Number(total) <= 12) {
+      dateLike += 1;
+      continue;
+    }
+    const key = `${current}/${total}`;
+    if (!ratios.includes(key)) ratios.push(key);
+  }
+  return { ratios: ratios.slice(0, 8), dateLike };
+}
+
+/**
+ * 批次进度候选：只从对话正文取，且**必须同一条消息内**出现批次语义
+ * （`批次|进度|progress|batch`）；无关键字但有比例的消息记为“被拒候选”，
+ * 供 skip 时写 `no-batch-semantics` 原因。
+ */
 function batchMarkers(event) {
   if (!isProgressMessage(event)) return null;
   const text = stripStructuredPayload(textOf(event));
   if (text.trim() === '') return null;
-  const ratios = [...new Set([...text.matchAll(RATIO_RE)].map((match) => `${match[1]}/${match[2]}`))].slice(0, 8);
+  const { ratios, dateLike } = extractRatios(text);
   const keyword = BATCH_KEYWORD_RE.exec(text)?.[0]?.toLowerCase() ?? null;
-  if (ratios.length === 0 && keyword === null) return null;
-  return { ratios, keyword };
+  if (keyword === null && ratios.length === 0) return null;
+  return { ratios, keyword, dateLike };
 }
 
 function rollbackMarkers(event) {
@@ -212,6 +240,7 @@ export function snapshotProtection(session) {
   let latestUser = null;
   const rules = [];
   let batch = null;
+  let batchRejected = null;
   let rollback = null;
   for (let index = 0; index < nodes.length; index += 1) {
     const event = events[index];
@@ -227,8 +256,13 @@ export function snapshotProtection(session) {
     if (batchInfo !== null) {
       const statePath = (text.match(STATE_FILE_RE) ?? [])[0] ?? null;
       const candidate = { ...summarizeNode(event), ...batchInfo, statePath };
-      // 取最近一条；但“带比例”的进度优先于仅有关键字的消息，避免后文把 511/958 覆盖掉。
-      if (batch === null || batch.ratios.length === 0 || candidate.ratios.length > 0) batch = candidate;
+      if (candidate.keyword === null) {
+        // 有比例但没有批次语义：不算批次进度，只留最后一次做 skip 原因（no-batch-semantics）。
+        batchRejected = candidate;
+      } else if (batch === null || batch.ratios.length === 0 || candidate.ratios.length > 0) {
+        // 取最近一条；但“带比例”的进度优先于仅有关键字的消息，避免后文把 511/958 覆盖掉。
+        batch = candidate;
+      }
     }
     const rollbackInfo = rollbackMarkers(event);
     if (rollbackInfo !== null) rollback = { ...summarizeNode(event), ...rollbackInfo };
@@ -240,6 +274,7 @@ export function snapshotProtection(session) {
     latestUser,
     rules,
     batch,
+    batchRejected,
     rollback,
     unpairedCalls: unpairedCallsOf(events),
     balances,
@@ -417,9 +452,16 @@ export function verifyProtection({
     }
   }
 
-  // batch-list：没被 shadow 就直接通过；被 shadow 则要求摘要覆盖批次数字。
+  // batch-list：同消息含批次语义才算候选；宁 skip 不 fail。
   if (snapshot.batch === null) {
-    checks.push(check('batch-list', 'skip', 'no batch/progress marker on the captured surface'));
+    if (snapshot.batchRejected !== null) {
+      checks.push(check('batch-list', 'skip', 'progress ratio without batch semantics (批次/进度/progress/batch) in the same message; not treated as batch progress', {
+        seqs: [snapshot.batchRejected.seq],
+        reason: 'no-batch-semantics',
+      }));
+    } else {
+      checks.push(check('batch-list', 'skip', 'no batch/progress marker on the captured surface'));
+    }
   } else if (!shadowedSet.has(snapshot.batch.seq)) {
     checks.push(check('batch-list', 'pass', `batch message seq ${snapshot.batch.seq} retained outside the shadow range`));
   } else if (!summaryReadable) {
@@ -427,10 +469,10 @@ export function verifyProtection({
       seqs: [snapshot.batch.seq],
     }));
   } else if (snapshot.batch.ratios.length === 0) {
-    // 只命中关键字、没有明确比例：无法核对覆盖，判 skip 并留原因（不再空泛 pass）。
-    checks.push(check('batch-list', 'skip', 'batch/progress message has no numeric ratio; coverage cannot be verified', {
+    // 有批次语义但没有可用比例：无法核对覆盖，判 skip 并留原因（不再空泛 pass）。
+    checks.push(check('batch-list', 'skip', 'batch/progress message has no usable numeric ratio; coverage cannot be verified', {
       seqs: [snapshot.batch.seq],
-      reason: 'no-ratio-in-user-messages',
+      reason: snapshot.batch.dateLike > 0 ? 'date-like-ratio' : 'no-ratio-in-user-messages',
     }));
   } else if (ratiosCovered(snapshot.batch.ratios, summaryText)) {
     checks.push(check('batch-list', 'pass', `batch message seq ${snapshot.batch.seq} covered by summary`, {

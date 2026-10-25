@@ -1,11 +1,14 @@
 /**
  * REQ-20261025-04 / 0.1.13 证据：batch-list 改判前后对比（离线夹具，不碰真机）。
  *
- * 旧实现 = `HEAD` 的 `protection.js`（0.1.12，见 ./protection-0.1.12.js）
- * 新实现 = `packages/dsh-context-governance/src/compress/protection.js`（0.1.13）
+ * 旧实现 = 0.1.12（本目录 protection-0.1.12.js，即 0.1.13 提交时 HEAD 的快照）
+ * 新实现 = 0.1.13（按 commit 2cea1ca 用 git show 取源码；工作区升到 0.1.14 后仍可复现）
  *
  * 用法：node analysis/req-20261025-04/replay-diff.mjs
  */
+import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 
@@ -141,7 +144,20 @@ async function evaluate(modulePath, scenario) {
 }
 
 const oldPath = path.join(here, 'protection-0.1.12.js');
-const newPath = path.resolve(here, '../../packages/dsh-context-governance/src/compress/protection.js');
+// 0.1.13 源码按 commit 取，避免工作区升到 0.1.14 后本脚本结果漂移（P3④ 口径）。
+const gitRoot = path.resolve(here, '../..');
+const newPath = materialize('2cea1ca');
+function materialize(rev) {
+  const source = execFileSync(
+    'git',
+    ['-C', gitRoot, 'show', `${rev}:packages/dsh-context-governance/src/compress/protection.js`],
+    { encoding: 'utf8' },
+  );
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cg-013-'));
+  const file = path.join(dir, 'protection-0.1.13.js');
+  fs.writeFileSync(file, source);
+  return file;
+}
 
 const rows = [];
 for (const scenario of scenarios) {
