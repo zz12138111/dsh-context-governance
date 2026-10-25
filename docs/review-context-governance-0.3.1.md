@@ -16,7 +16,7 @@
 
 ## 1. 结论摘要
 
-- **阻断（P1）：0**；**应修（P2）：0**（3 条 P2 于 `b903af5` 闭环，见 §9）；**建议（P3）：8**（P3-6 标题注入面已闭环，其余 8 条为文档/显示/口径级）。
+- **阻断（P1）：0**；**应修（P2）：1**（T2 格式 P2 已闭环；**P2-4**：真机 header 内容为测试数噪音，写入侧规则过宽，见 §10）；**建议（P3）：8**。
 - 00 点名的两处：**[Old] 边界与 `oldLimit=0` 修复正确**；**`/cg header off` 真完全不注入**。
 - 但对照 REQUIREMENTS §S3 / 需求 v0.4 §4.2，**固定包裹格式与两条文案/配额规则未实现**（P2-1/2/3），且 **README 仍写“默认关、opt-in”**（P3-1）。
 
@@ -117,3 +117,62 @@ node .tmp/probe-t2b.mjs           # 文案/配额/状态/子会话/审计
 **计数更新**：**P1=0 / P2=0**（3 条 P2 全闭环）/ **P3=8**（P3-6 标题注入面已随本批闭环；其余 8 条为文档/显示/口径级）。
 
 **真机未验**：`agent/pre-step` 注入在真实决策链未上机；T2 安装前需用户知情（README 仍写默认关）。
+
+## 10. 真机 header 内容噪音（2026-10-26 18:0x）：测试数被写成 batch 进度（P2-4）
+
+**现象**：真机 header 注入（格式/顺序完全符合 §9 验收）内容为：
+
+```
+[CG-MEMORY · state-only · budget 8 lines]
+- MEM-20261025-1023 progress 批次进度：205/205
+- MEM-20261025-1019 progress 批次进度：216/216
+conflicts: 4 条被配额截断
+[Note: If this state conflicts with AGENTS.md, follow AGENTS.md]
+```
+
+`205/205`、`216/216` 是**测试通过数**，不是项目进度；header 的 8 行预算被噪音占满，`conflicts: 4` 是另外 4 条同类噪音被丢弃。
+
+### 10.1 谁、何时写入（`writer: rule`，不是 `mem_write`）
+全部由**插件保护机制**在手动压缩时自动写入（`protection-write`，`kinds` 含 `batch`），不是任何会话主动 `mem_write`：
+
+| 条目 | 标题 | 写入时间 | 会话 | 来源消息类型 | 该消息里的“信号” |
+|---|---|---|---|---|---|
+| MEM-20261025-1002 | 批次进度：171/171 | 11:49:22Z | `58a2e845` | assistant/message | `171/171` +（旧版无 keyword 要求） |
+| MEM-20261025-1006 | 批次进度：8000/1500 | 11:57:07Z | `f72e86a8` | assistant/message | `8000/1500`（旧版） |
+| MEM-20261025-1010 | 批次进度：2026/10×12 | 11:58:38Z | `5d1121ed` | tool/result（旧版未排除） | 仓库状态输出里的日期 |
+| MEM-20261025-1015 | 批次进度：有批次标记 | 12:46:42Z | `58a2e845` | tool/result（旧版） | 审计文本里的 `batch` 字样 |
+| MEM-20261025-1019 | 批次进度：216/216 | 15:52:52Z | `58a2e845` | assistant/message | `记录进度` + `216/216` |
+| MEM-20261025-1023 | 批次进度：205/205 | 15:56:07Z | `5d1121ed` | user/message | `赶进度` + `205/205` |
+
+- 1019/1023 是 **0.1.14 收紧之后**仍被接受的假阳性：关键词 `进度` 出现在普通句子里（“记录进度”“不用为赶进度省检查项”），比例是测试通过数。
+- 1002/1006/1010/1015 是**旧版规则遗留**（当时未要求 keyword / 未排除 tool/result / 未排除日期），条目仍 `active`。
+
+### 10.2 为什么“测试数”被 progress 接收
+**没有分类器**——是保护写入侧的**规则**（`src/compress/protection.js`）：
+1. `isProgressMessage(event)`：`user/message`（source.kind=user）或 `assistant/message`（旧版还含 tool/result）；
+2. `BATCH_KEYWORD_RE = /批次|进度|progress|batch/i` 命中即可——**普通词“进度”也算**；
+3. `extractRatios()` 用 `RATIO_RE = (\d{1,6})\s*[／/]\s*(\d{1,6})` 抓比例——**测试通过数 `205/205` 与真实进度 `3/8` 在形态上不可区分**；
+4. 两者同时出现 → 生成 `progress` 条目 `批次进度：…`。
+
+所以“谁写”不是用户/开发，是**规则在压缩时抓对话文本**；测试数只是恰好长得像比例。
+
+### 10.3 同类条目清点（`memory/governance/`）
+- **active 13 条 = progress 6 条（全部为上述噪音）+ fact 7 条**（`最后用户消息：…`，同样是保护机制自动写的 `latest-user`）。
+- **proposed 13 条** = criterion 5（`规则在场：…`）+ anchor 5（`回滚点：…`）+ decision 1 + 其他，均为保护机制自动写、未确认。
+- header 只取 `active` 且 `DYNAMIC_TYPES = todo/progress/decision/anchor`（**fact 被排除**）→ 当前候选只有 6 条 progress，配额 2 → 注入 2 条、`conflicts: 4`。**header 当前 100% 是噪音，没有任何真实 todo/decision/anchor**。
+- 每次手动压缩固定新增 4 条（latest-user/rules/batch/rollback），**无 supersede/去重** → 条目持续累积；旧 batch 条目不会被更新条目替代。
+
+### 10.4 影响与评级
+- **P2-4（功能/内容）**：header 正常注入但内容是噪音，用户会误以为“记忆在起作用”；预算被占满，真实状态反而进不去。
+- 与 0.1.14 `batch-list` 假阳性**同源**（判据过宽），但位置在**记忆写入侧**，影响面更大（会持久化、会被 header/检索反复使用）。
+- 附带风险：assistant 消息也被扫描；模型若在回复里引用 header/记忆（“批次进度：205/205”），可能被**再次抓取**形成自引用循环。
+
+### 10.5 建议
+1. **收紧 batch 判定**（写入侧）：比例语义必须相邻出现（如 `N/M` 后紧跟 `项|条|个|文件|任务|完成/总`），或要求显式 `[batch]`/`批次任务` 标记；排除测试语义词（`测试|通过|passed|tests|覆盖|coverage|commit|push` 等），并至少排除“版本/提交”语境。
+2. **只扫描 user 消息**（或排除含 memory header / `[CG-MEMORY` 的 assistant 消息），切断自引用。
+3. **写入侧去重/supersede**：同一 session 的 batch 进度只保留最新一条（旧条目 `superseded`），latest-user/rules/rollback 同理，避免每压一次 +4。
+4. **header 侧过滤**：注入前排除 `writer=rule` 的自动条目或明显噪音标题（`批次进度：纯数字/日期`）；当前 store 里没有真实 todo/decision/anchor —— 过滤后 header 会为空，这比注入噪音更诚实（零注入是允许的）。
+5. **历史数据清理**：6 条 progress 噪音 + 相关 fact 建议由开发/需求用 `mem_write` status 机制 `superseded`/`expired`（保留审计），不要在报告里假装修复。
+6. **回归用例**：`205/205`+“进度” 不入选；`赶进度`+测试数不入选；用户真实 `3/8 项完成` 入选；旧版 tool/result 输入不入选。
+
+**计数更新**：**P2-4**（1 条）加入待修；T2 格式/注入面 P2 仍为 0；P3=8 不变。
