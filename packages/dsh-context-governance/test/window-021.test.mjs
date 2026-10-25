@@ -344,3 +344,46 @@ test('0.2.1 P2-1 退化拒层必须落审计（policy-invalid reason=native-unco
     await fs.rm(rootDir, { recursive: true, force: true });
   }
 });
+
+test('0.2.1 P3-11 退化时 /cg set 被拒：审计恰 1 条 + warn + status 可见；成功路径不误写 policy-invalid', async () => {
+  const state = buildPolicyState(
+    resolveConfig({ projectRoot: 'D:/tmp/window', policy: { reservedTokens: 256_000 } }),
+    { readFile: () => { const error = new Error('missing'); error.code = 'ENOENT'; throw error; } },
+  );
+  state.setWindowProvider(() => ({
+    current: { sessionId: 'session-aaaaaaaa', tokens: 131_072, observedAt: '2026-10-26T00:00:00.000Z' },
+    conservative: { sessionId: 'session-aaaaaaaa', tokens: 131_072, observedAt: '2026-10-26T00:00:00.000Z' },
+    observed: [],
+    source: 'projection',
+    removed: false,
+  }));
+  const records = [];
+  const logs = [];
+  const audit = {
+    append: (event, details) => { records.push({ event, ...details }); },
+    entries: () => records,
+    file: null,
+    maxBytes: null,
+    sizeBytes: null,
+    rotations: 0,
+  };
+  const logger = { warn: (...args) => logs.push(args.join(' ')) };
+  const command = createStatusCommand({ policy: state, audit, logger, now: () => new Date('2026-10-26T00:00:00Z') });
+
+  const rejected = await command.handler({ rawInput: 'set compact.at=0.5' });
+  assert.equal(rejected.kind, 'error');
+  const invalid = records.filter((record) => record.event === 'policy-invalid');
+  assert.equal(invalid.length, 1, '退化拒绝设置必须恰 1 条 policy-invalid');
+  assert.equal(invalid[0].source, 'session');
+  assert.equal(invalid[0].code, 'compact.at');
+  assert.equal(invalid[0].reason, 'native-uncomputable');
+  assert.ok(logs.some((line) => /native-uncomputable/.test(line)), 'warn 必须出现');
+  const status = await command.handler({ rawInput: 'status' });
+  assert.match(status.text, /policy-invalid: 1 \(session\/compact\.at:native-uncomputable\)/);
+
+  // 成功路径：正常 /cg set 只写 policy-set，不得误写 policy-invalid
+  const ok = await command.handler({ rawInput: 'set compact.early=off' });
+  assert.equal(ok.kind, 'success');
+  assert.equal(records.filter((record) => record.event === 'policy-invalid').length, 1);
+  assert.ok(records.some((record) => record.event === 'policy-set' && record.source === 'session' && record.key === 'compact.early'));
+});

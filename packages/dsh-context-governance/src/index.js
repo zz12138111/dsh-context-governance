@@ -583,6 +583,7 @@ export async function apply(ctx, rawConfig = {}) {
     getGuard: () => guard,
     audit: guard?.auditLog ?? null,
     policy: policyState,
+    logger: ctx.logger,
   };
   const commandRef = { current: registerStatusCommand(ctx, commandOptions) };
   const retryStatusCommand = () => {

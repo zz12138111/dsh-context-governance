@@ -178,7 +178,7 @@ function statusText({ store, guard, audit, now, policy = null }) {
  *
  * @param {{store?:object|null, guard?:object|null, getGuard?:() => object|null, audit?:object|null, now?:() => Date}} options
  */
-export function createStatusCommand({ store = null, guard = null, getGuard = null, audit = null, policy = null, now = () => new Date() } = {}) {
+export function createStatusCommand({ store = null, guard = null, getGuard = null, audit = null, policy = null, now = () => new Date(), logger = null } = {}) {
   const currentGuard = () => (typeof getGuard === 'function' ? getGuard() : guard);
 
   const parseBoolean = (text) => {
@@ -263,6 +263,21 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
       // 0.2.1（DEC-66 ③ / DEC-68 A）：校验用保守窗口算出的 native；退化/不可计算 → 拒绝设置。
       const validationNative = typeof policy.validationNative === 'function' ? policy.validationNative() : policy.native;
       if (key === 'compact.at' && validationNative === null) {
+        // P3-11（口径 A）：设置被拒也是“配置被拒”事件——审计 + warn + 状态可见三处一致。
+        const alreadyReported = (policy.invalid ?? []).some((item) =>
+          item.source === 'session' && item.key === 'compact.at' && item.reason === 'native-uncomputable');
+        if (!alreadyReported) {
+          policy.invalid?.push({
+            source: 'session',
+            key: 'compact.at',
+            reason: 'native-uncomputable',
+            detail: '退化窗口下拒绝 /cg set compact.at',
+          });
+          audit?.append?.('policy-invalid', { source: 'session', reason: 'native-uncomputable', code: 'compact.at' });
+          logger?.warn?.(
+            '[context-governance] rejected /cg set compact.at: native-uncomputable（窗口退化，native 不可计算）',
+          );
+        }
         return {
           kind: 'error',
           text: 'context-governance set: compact.at 无法校验：窗口退化（native 不可计算，reason=native-uncomputable）；' +
