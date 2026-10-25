@@ -247,7 +247,7 @@ resolve+fresh {"event":"early-forced", "compaction":"committed","protection":"fa
 
 - **（已处理）** `armed=false` 时订阅处直接返回、不再排 50ms 定时器，且有单测断言 ✔
 - **（已处理）** `turnEnded/agentIdle` 恒 true 已加注释：“idle 是 turn/end 后的假设，靠宿主 busy 拒绝兜底（G2-B）” ✔
-- **P3（新）**：accepted 但无新报告时，`protection` 回退写 `'ok'`；此时保护校验其实**没有发生**，写 `ok` 偏乐观。建议改为 `null`（未知），与失败路径的 `null` 语义一致。当前仅在“compactNow 返回成功但 guard 没记录”的边缘路径出现，不阻塞。
+- **P3（已关闭，`0bcc8b1`）**：accepted 但无新报告时，`protection` 由 `'ok'` 改为 `null`（未校验）；实测 stale → `{compaction:'committed',protection:null,failures:[],reinjected:null}`，fresh → `{protection:'failed',failures:[...],reinjected:true}`；新增用例断言不得为 `'ok'`。三态口径自此统一：`ok`=通过 / `failed`=失败 / `null`=未校验或未知。
 - `shouldEscalateEarly` 本批未接入，需在下一批落实“`protection=failed` 不升级”的实际判定点。
 - `early-decision` 在每次 armed 检查都写一条（含 skip），属预期。
 
