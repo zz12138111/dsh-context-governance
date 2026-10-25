@@ -48,19 +48,28 @@ G4 材料随 **`e12d08a`** 提交（“docs: G4 结论落档”）；本记录�
    → 改后缀或把关键行嵌入文档。
    **复检**：已改名 `g4-probe.log.txt`（内容哈希不变 `0e25ceb1…`），文档 §2/§5 同步 ✔
 
-## 3. 五个边界（0.2.1 实现前要定；①②③ 归需求，④⑤ 归开发）
+## 3. 五个边界（①②③ 已由需求定；④⑤ 已进 DEC-40）
 
-| # | 边界 | 我的建议（决策归需求） |
-|---|---|---|
-| ① | **多会话/多模型**：投影是 per-session，`native`/策略是进程级；`/cg status` 用哪条会话的 W？ | 用“最近观察到的本项目会话”（`runtime` 已有 `#lastSession`），并在 `window=…` 后标 session 短 id；两个会话窗口不同则各自读数，不假装单一 native |
-| ② | **W 中途变化/消失**：`request/context` 带不同 window 会更新，不带会删除；换模型/路由会变 | 每次读取重算，不缓存 apply 时的值；W 变化/删除时 `native`、四段同快照更新并标注来源变化；`compact.at` 是比例、本身不变 |
-| ③ | **校验与显示同源**：`at ≤ native` 在 apply 时按配置算，0.2.1 的投影可能到命令时才可见 | 命令/决策时用“当前会话 W”做同一快照校验；apply 时只做配置层的保守校验并标注；或统一取 `min(config-native, projection-native)` 保守 |
-| ④ | **性能**：`stateOf` 会 `materializeCells(session)` | 每次 status/判定取一次并缓存，不按事件调用；返回的是 live 引用，不要修改或长期持有 |
-| ⑤ | **W 取值防御**：host state 由 apply 写入原始值 | 取用前校验 `Number.isInteger(W) && W > 0`，否则回退配置并标 reason |
+①②③ 的权威口径见 `REQUIREMENTS.md`（`8a8de91`）“### 窗口 W 的选取与校验口径（G4 结论，`DEC-20261025-65`）”与 `DEC-20261025-66`（记于 `STATUS.md` / `analysis/req-20261025-09/P3-闭环记录.md`）。复核时我按该口径对了一遍，结论如下：
+
+| # | 边界 | 决策（已定，2026-10-26） | 复核意见 |
+|---|---|---|---|
+| ① | **多会话/多模型**：投影 per-session、`native`/策略进程级 | `#lastSession`（最近观察到的本项目会话）+ `window=` 带 session 短 id；**展示用当前会话，不取最小窗口** | 与我的建议一致；`#lastSession` 只在 `#belongsToProject` 通过后赋值，不会取到别项目会话（已核 `runtime` 事件入口） |
+| ② | **W 中途变化/消失** | 每收到新窗口观察**立刻重算** `native`/四段/`at≤native`，不锁到下次 apply；`request/context` 不带 `contextWindow` → **删除并置 `unknown`**（显示 `window=unknown (removed by request/context)`），不沿用旧值；再观察自动恢复并记 `windowSource+observedAt` | 与我的建议一致。实现注意：`buildPolicyState` 现在只算一次，重算必须能改运行时 `native` 或按次计算——这是 0.2.1 结构性改动，不要做成“再算一次但缓存旧值” |
+| ③ | **校验与显示同源** | `conservativeWindow=min(已观察窗口)`；无观察 → `unknown`，允许设 `at` 但标“未经校验”；运行时 `at>native` → **拒层 + 审计**（不静默降级）；`/cg status` **双显 current/conservative** 并明示“校验按 conservative” | 比我的“同一快照”建议更严，接受。但 ④ 的验收用例受 §3.1 公式退化影响，见下 |
+| ④ | **性能**：`stateOf` 会 `materializeCells(session)` | 每次 status/判定取一次并缓存，不按事件调用；live 引用只读不改（已写入 `DEC-PLUGIN-20261025-40`） | 接受 |
+| ⑤ | **W 取值防御**：host state 由 apply 写入原始值 | `Number.isInteger(W) && W > 0`，否则回退并标 reason（已写入 `DEC-PLUGIN-20261025-40`） | 接受；建议回退时把 reason 进状态行/审计（补充建议） |
+
+### 3.1 追加边界（⑥）：`W ≤ O + 65536` 时 `nativeRatio` 退化，会让 ④ 的验收用例失效
+
+- 现行 `nativeRatio`（`src/policy.js`）：`tokens = floor(min(W×0.8, W−O−65536))`；**`tokens <= 0` 时返回 `NATIVE_DEFAULT_RATIO = 0.6785`**——这是一个**常数假设值，不是“native 不可算”**。
+- 例：另一会话 `W=131072`（128k）、`O=policy.reservedTokens=256000` → `W−O−65536 < 0` → `native=0.6785`。
+- 后果：保守值 `min(0.6934, 0.6785) = 0.6785` 被抬高；`compact.at=0.6` 会被判**合法**，与需求 ④ 验收“构造 1M+128k 用例：`at=0.6` 在保守值下**被拒或降级**”的期望**相反**；状态还会显示一个与真实窗口无关的 native。
+- 建议（决策归需求/开发）：该分支改为 **native 不可算（null/unknown）**，校验侧按“未经校验”处理；或另定 `O'` 的钳制公式（例如 `O'=min(O, W−65536−ε)`）。**不要把 fallback 常数当有效 native**。这条不阻塞 0.2.1 开工，但 ④ 的用例要先定公式才能写。
 
 **补充建议（不单列为边界）**：`/cg status` 的 `window=` 标注除 `(projection)` / `(config-fallback)` 外，把回退原因（服务 absent / key 未注册 / 无 `contextWindow` / 值非法）写进审计或日志，便于复盘。
 
-**落地状态（复核后跟进）**：④性能与⑤W 防御已写入 `DEC-PLUGIN-20261025-40` 的“选择”句（取一次缓存、live 引用只读不改、`Number.isInteger(W) && W > 0` 校验）；①②③（多会话 W / 中途变化 / 校验同源）00 已明确交需求定（`ART-20261025-70`），开发不自行拍。①②③ 的文档落地是本复核在 0.2.1 开工前的**待验项**。
+**落地状态（复核后跟进）**：④性能与⑤W 防御已写入 `DEC-PLUGIN-20261025-40`；①②③ 已由需求在 `8a8de91` 定稿并记 `DEC-20261025-66`（原 `ART-20261025-70` 待定项已关闭）。**新增 ⑥ 公式退化（§3.1）尚未定**——它直接影响需求 ④ 里“1M+128k、`at=0.6` 应被拒/降级”的验收用例，建议 0.2.1 动工前先给公式口径。
 
 ## 4. Q2：0.2.0 行为影响（进 0.2.1 变更说明）
 
@@ -84,9 +93,11 @@ G4 材料随 **`e12d08a`** 提交（“docs: G4 结论落档”）；本记录�
 
 - [ ] W 优先投影、缺失回退；`/cg status` 标 `window=<值> (projection|config-fallback)`
 - [ ] `native` 与压力分母取自**同一快照**；有“只改一处”的混搭回归用例
-- [ ] 多会话/多模型：标注所用 session；两条不同 W 的会话各自读数正确
-- [ ] W 中途变化/删除后，`native` 与四段同步变化并可辨识（不沿用 apply 时的值）
-- [ ] `at ≤ native` 校验与显示同源，无“显示允许 / apply 拒绝”矛盾
+- [ ] **双显** `window current=<值> (session 短 id) | conservative=<min>`；两者不一致时明示“校验按 conservative”
+- [ ] 多会话/多模型：展示用 `#lastSession`，取到别项目会话 = fail；两条不同 W 的会话各自读数正确
+- [ ] W 中途变化/删除后，`native` 与四段同步变化并可辨识（不沿用 apply 时的值）；删除后显示 `window=unknown (removed by request/context)`；再观察自动恢复并记 `observedAt`
+- [ ] 无观察时允许设 `at` 且标“未经校验”；运行时 `at>native` → 拒层 + 审计（不静默降级）
+- [ ] **§3.1 公式退化**：W ≤ O+65536（如 128k + O=256k）不得返回常数 0.6785 冒充 native；需求 ④ 的“1M+128k、at=0.6 被拒/降级”用例需随公式口径一起定
 - [ ] `stateOf` 每次 status 至多一次、不按事件；不修改返回对象
 - [ ] W 非整数/≤0 → 回退且可辨识
 - [ ] 文档/样本数字更新；变更说明写清 native 0.6785→0.6934 与比例分母变化
