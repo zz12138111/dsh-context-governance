@@ -1,8 +1,9 @@
 /**
- * 0.1.16 P3-1：控制字符闸（防复发）。
+ * 0.1.16 P3-1 / 0.1.17：控制字符闸（防复发）。
  *
  * 背景：README 曾被写入 0x08/0x07（某写入路径把 `\b`/`\a` 当转义），
- * 渲染成 `ackendInferred`/`uditVersion`。此测试扫包里所有文本文件，
+ * 渲染成 `ackendInferred`/`uditVersion`；AGENTS.md 也曾被 0x0C 吃掉一个字母。
+ * 0.1.17 起扫描范围扩到**仓库根**（排除 .tmp/node_modules/.git），
  * 命中 C0 控制字符（除 \t \n \r）或 DEL 即失败，并打印文件+偏移。
  */
 
@@ -12,9 +13,9 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const TEXT_EXTENSIONS = new Set(['.js', '.mjs', '.json', '.md', '.yml', '.yaml', '.txt']);
-const SKIP_DIRS = new Set(['node_modules', '.git']);
+const SKIP_DIRS = new Set(['node_modules', '.git', '.tmp']);
 
 function isForbidden(byte) {
   if (byte <= 0x08) return true;
@@ -35,14 +36,14 @@ function collectTextFiles(root) {
   return files;
 }
 
-test('0.1.16 P3-1：包内所有文本文件不得含 C0 控制字符/DEL', () => {
-  const files = collectTextFiles(PACKAGE_ROOT);
+test('0.1.17：仓库内文本文件不得含 C0 控制字符/DEL（排除 .tmp/node_modules/.git）', () => {
+  const files = collectTextFiles(REPO_ROOT);
   const violations = [];
   for (const file of files) {
     const buffer = fs.readFileSync(file);
     for (let offset = 0; offset < buffer.length; offset += 1) {
       if (isForbidden(buffer[offset])) {
-        violations.push(`${path.relative(PACKAGE_ROOT, file)} @${offset} byte=0x${buffer[offset].toString(16).padStart(2, '0')}`);
+        violations.push(`${path.relative(REPO_ROOT, file)} @${offset} byte=0x${buffer[offset].toString(16).padStart(2, '0')}`);
       }
     }
   }

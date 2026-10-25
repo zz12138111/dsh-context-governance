@@ -253,3 +253,10 @@
 - 选择：清 README 控制字符并加防复发测试（包内 `.md/.js/.mjs/.json/.yml` 禁 C0/DEL，命中列文件+偏移；自证注入→fail）；`compaction-cost` 拆 `backendKind`（枚举，与 `backend` 同值）+ `backendLabel`（展示串）+ `backendInferred`（仅实测 kind 为 none/unknown 且推断补位时 true，mixed 也算补位）；`backend` 恢复只写枚举；`auditVersion=cost-v1.4`（只增字段，`backend` 语义回退）；`/cg status` 改用 `backend-label=`。
 - 影响：下游按枚举聚合仍读 `backend`；读展示串改读 `backendLabel`；功能逻辑未改。
 - 关联：`src/compress/runtime.js`、`src/commands/cg-status.js`、`src/audit.js`、`test/no-control-chars.test.mjs`、`test/m1.3-inference.test.mjs`、`docs/T5`/`T8`、`README.md`；状态：active。
+
+## DEC-PLUGIN-20261025-35 [tech] 0.1.17：backend 枚举补 `none` + 控制字符闸扩到仓库根
+
+- 背景：0.1.16 把实测 `none` 折叠成 `unknown`，与真 unknown 不可区分（真机常态是 none，成本审计会堆假 unknown）；控制字符闸只覆盖包内，`AGENTS.md` 的 0x0C 逃过。
+- 选择：`backend`/`backendKind` 枚举扩为 `none`/`unknown`/`host-basic`/`context-zip`（实测 none 保留 none，未知 provider 才 unknown；mixed 仍 unknown+label）；`auditVersion` 维持 `cost-v1.4`（值域扩展非 schema 变更）；控制字符闸扫描仓库根（排除 `.tmp`/`node_modules`/`.git`，允许 `\n\t\r`），清 `AGENTS.md` 的 0x0C。
+- 影响：M2 账本按枚举聚合不再把常态 none 误记 unknown；闸覆盖仓库文档，防同类转义复发。
+- 关联：`src/compress/runtime.js`、`test/m1.3-inference.test.mjs`、`test/no-control-chars.test.mjs`、`AGENTS.md`、`docs/T5`/`T8`、`README.md`；状态：active。

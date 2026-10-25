@@ -802,12 +802,15 @@ export class CompressionGuard {
       .slice(0, 5)
       .map(([name, count]) => `${name}:${count}`);
     const occurredAt = cost.occurredAt ?? this.#now().toISOString();
-    // 0.1.16（cost-v1.4）：backend/backendKind 只写枚举；backendLabel 才是展示串（可含 ` (inferred)`）。
-    // backendInferred=true 仅当实测 kind 为 none/unknown 且由事件形态推断补位（含 mixed）。
+    // 0.1.16/0.1.17（cost-v1.4）：backend/backendKind 只写枚举（none/unknown/host-basic/context-zip）；
+    // backendLabel 才是展示串；实测 none 不折叠成 unknown（真机常态是 none）。
     const inference = this.#adapter.inference ?? null;
     const measuredKind = this.#adapter.kind;
-    const measuredEnum = measuredKind === 'host-basic' || measuredKind === 'context-zip' ? measuredKind : 'unknown';
-    const useInference = measuredEnum === 'unknown' && inference !== null && inference.kind !== 'unknown';
+    const measuredEnum = measuredKind === 'host-basic' || measuredKind === 'context-zip' || measuredKind === 'none'
+      ? measuredKind
+      : 'unknown';
+    const useInference = (measuredEnum === 'none' || measuredEnum === 'unknown')
+      && inference !== null && inference.kind !== 'unknown';
     const backendKind = useInference
       ? (inference.kind === 'mixed' ? 'unknown' : inference.kind)
       : measuredEnum;

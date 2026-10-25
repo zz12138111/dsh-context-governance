@@ -279,7 +279,7 @@ test('0.1.15 /cg status 标注 inferred（不冒充实测）', async () => {
   assert.match(result.text, /adapter=none backend-label=host-basic \(inferred\)/);
 });
 
-test('0.1.16 无观察：backend/backendKind/backendLabel=unknown、inferred=false', async () => {
+test('0.1.17 实测 none 不折叠：无观察 → backend/backendKind/backendLabel=none、inferred=false', async () => {
   await withStore(async (store, rootDir) => {
     const { ctx, guard } = guardWith(store, withInference(noneAdapter(), []));
     const built = buildCompaction({ before: healthyMessages(), summary: '', start: 2, end: 11 });
@@ -287,6 +287,24 @@ test('0.1.16 无观察：backend/backendKind/backendLabel=unknown、inferred=fal
     runCycle(ctx, session, built);
     await flush();
     assert.equal(guard.status.adapter.inference.kind, 'unknown');
+    const audit = await readAudit(rootDir);
+    const cost = audit.find((entry) => entry.event === 'compaction-cost');
+    assert.equal(cost.backend, 'none');
+    assert.equal(cost.backendKind, 'none');
+    assert.equal(cost.backendLabel, 'none');
+    assert.equal(cost.backendInferred, false);
+  });
+});
+
+test('0.1.17 实测 unknown（未知 provider）不折叠成 none：backend/kind=unknown', async () => {
+  await withStore(async (store, rootDir) => {
+    const unknownProvider = detectAdapter({ compaction: { compactNow: () => {} }, hostVersion: '0.2.1-rc.3' });
+    assert.equal(unknownProvider.kind, 'unknown');
+    const { ctx, guard } = guardWith(store, withInference(unknownProvider, []));
+    const built = buildCompaction({ before: healthyMessages(), summary: '', start: 2, end: 11 });
+    const session = liveSession(built);
+    runCycle(ctx, session, built);
+    await flush();
     const audit = await readAudit(rootDir);
     const cost = audit.find((entry) => entry.event === 'compaction-cost');
     assert.equal(cost.backend, 'unknown');

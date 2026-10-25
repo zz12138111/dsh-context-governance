@@ -73,3 +73,11 @@
 - **P3-2 成本字段拆分（cost-v1.4）**：`backend`/`backendKind` 只写枚举（`host-basic`/`context-zip`/`unknown`，不含括号/空格）；展示串在 `backendLabel`（`host-basic (inferred)`/`mixed (unverified)`）；`backendInferred=true` 仅当实测 kind 为 `none`/`unknown` 且由推断补位（`mixed` 也算补位）；无观察时三字段均 `unknown`、`inferred=false`；`/cg status` 显示 `backend-label=`。
 - **样例**（隔离/单测）：`backend:"host-basic"`, `backendKind:"host-basic"`, `backendLabel:"host-basic (inferred)"`, `backendInferred:true`, `auditVersion:"cost-v1.4"`；五段式 → `backend:"context-zip"`；混合 → `backend:"unknown"` + `backendLabel:"mixed (unverified)"` + `backendInferred:true`；无观察 → 全 `unknown` + `false`。
 - **测试**：全量 **204/204**（+2：控制字符闸、无观察字段）；版本 0.1.16；不改功能逻辑、未安装/未重启/未 push。
+
+## 10. 0.1.17 收口（2026-10-25）
+
+- **P3-2 枚举加 `none`**：`backend`/`backendKind` 枚举扩为 `none`/`unknown`/`host-basic`/`context-zip`；实测 `none` 不再折叠成 `unknown`——无观察且实测 kind=`none` 时 `backend=backendKind=backendLabel="none"`、`backendInferred=false`；实测未知 provider（kind=`unknown`）仍写 `unknown`；`mixed` 仍 `backend=unknown` + `backendLabel="mixed (unverified)"`；`auditVersion` 维持 `cost-v1.4`（值域扩展非 schema 变更）。
+- **P3-1 闸扩到仓库根**：`no-control-chars` 扫描范围改为仓库根，排除 `.tmp`/`node_modules`/`.git`，扩展名 `.md/.js/.mjs/.json/.yml/.yaml/.txt`，允许 `\n\t\r`；`AGENTS.md` 的 `0x0C` 已清（原为一处被转义吃掉的字母，已补回为 `feat/<插件>-<主题>`）。
+  - 闸输出：`scanned files=174 violations=0`。
+  - 自证：仓库根注入 `.control-selftest.md`（`0x0C`）→ `files=175 violations=1`、测试 fail 打印 `.control-selftest.md @2 byte=0x0c`；删除后恢复 `files=174 violations=0` pass。
+- **测试**：全量 **205/205**（+1：实测 `none` 与未知 provider 区分）；版本 0.1.17；不改功能逻辑、未安装/未重启/未 push。
