@@ -17,7 +17,7 @@
 
 ## 1. 结论摘要
 
-- **阻断（P1）：0**；**应修（P2）：1**（**P2-4**：真机验证发现“重启后窗口层 dormant”，覆盖缺口，见 §12；00 已认同定级）；**建议（P3）：0**——`1b6d054` 终验时 11 条全闭环。
+- **阻断（P1）：0**；**应修（P2）：0**（P2-4 回填闭环，见 §13）；**建议（P3）：2**（P3-12/13，回填标注可读性）。
 - 六条验收 **4 条完全成立、1 条部分（⑥ 的审计子项）、1 条报告证据不完整**；十项清单里 **⑩ 数字更新未做**（详见 §4）。
 - 代码检索与 spy 双证：**本版没有任何压缩调用路径**（我用自己的全量 pattern + 3 个真实 API 名 spy 复核，0 次）。
 
@@ -232,3 +232,35 @@ pressure: measured=0.563 estimated=0.393 adjusted=0.531(×1.35) effective=0.563 
 - 真机现有输出中 `pressure window=1M (config-fallback)` 与 `native (config-fallback)` 同源一致，P3-1 标注在真机生效。
 
 **当前计数更新**：P1=0 / **P2=1（P2-4 覆盖缺口）** / P3=0。0.2.1 未打 tag，回填小修后需按 12.4 重新验收窗口层。
+
+## 13. 回填终验（2026-10-26 17:2x，`9e9a593`，263/263）
+
+**基线**：`9e9a593` 快照 **263/263** ✔；独立探针 `.tmp/probe-021-backfill.mjs` **9/9**；工作树干净。
+
+### 五条验收（独立实测）
+| # | 验收点 | 实测 | 结论 |
+|---|---|---|---|
+| 1 | 既有会话回填：`projection(backfilled)`、`observedAt=历史时间`、native 0.6934、validated | 首事件后 `window: current=1M (session aaaaaaaa) observed 2026-10-25T03:30:05.241Z source=projection(backfilled) … native-current=0.6934(projection) native-conservative=0.6934 validated`；`policy:` 行 `native=0.6934 (projection(backfilled))`；`resolve().window.native===0.6934` | ✔ |
+| 2 | 实时优先 | 回填后喂真 `request/context` → `windowState.source='projection'`、`observedAt` 更新为非历史时间、`stateOf` 未再调用 | ✔ |
+| 3 | 反伪造（4 组） | `stateOf={}` → 仍 `unknown`；`'1M'/0/-5` → 不回填且 `windowInvalidObservations` 计数；有 W 无历史事件 → `observedAt=null`（不造时间） | ✔ |
+| 4 | 每会话一次 / 晚到重试 | 2 次事件 `stateOf` 只调 1 次；服务首次不可用 → 下一事件重试并回填（仍只 1 次） | ✔ |
+| 5 | 标注可辨 | `window:` 行 `source=projection(backfilled)` + `observed <历史 ISO>`；`policy:` 行 `(projection(backfilled))` | ✔（有两处小瑕疵，见 P3-12/13） |
+
+### 回归
+- 263/263 含删除语义、退化 A、跨 episode 审计、零压缩 spy；`#backfillWindow` 在 `#belongsToProject` 过滤之后调用（我造了别项目会话用例：`stateOf` 0 次、不回填）✔
+- `observedAt` 取 `session.ownEvents()` 里最后一条带合法 `contextWindow` 的 `request/context` 的 `time`；日志不可读时记 `null`，**不造时间**（与开发选择一致）✔
+
+### 新增 P3（标注，建议级）
+| 编号 | 位置 | 现象 | 建议 |
+|---|---|---|---|
+| **P3-12** | `summarizeWindow` 的 `native-current` | 回填时显示 `native-current=0.6934(projection)`，回填标记在 `native-current` 上丢失（`window:` 的 `source=` 和 `policy:` 行仍带 `projection(backfilled)`） | `native-current` 的括注也用 `currentSource`（可显示 `projection(backfilled)`） |
+| **P3-13** | `summarizePressure` 的 `window=` | 压力行只显示 `window=1M (session …)`，无 source 标注（live/backfilled/config-fallback 都不带） | 有 `windowSource` 时在压力行也带上（如 `window=1M (session …, backfilled)`），与 `window:` 行一致 |
+
+> 两条均为可读性，不影响来源判读（`window:` 行的 `source=` 已是权威依据）；是否在 0.2.1 修由 00 定。
+
+### 真机验证（待重启）
+当前真机仍加载 `1b6d054`（无回填）；重启加载 `9e9a593` 后预期：
+- 既有会话首个事件即回填：`window: current=1M (session …) observed <历史 request/context 时间> source=projection(backfilled)`、`native=0.6934`、`pressure … window=1M`；
+- 新建会话：真实 `request/context` → `source=projection`（实时），`observedAt` 为观察时间。
+
+**计数更新**：P1=0 / **P2=0**（P2-4 回填闭环）/ **P3=2**（P3-12/13，标注建议级）。
