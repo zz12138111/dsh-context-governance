@@ -36,8 +36,9 @@ function collectTextFiles(root) {
 }
 
 test('0.1.16 P3-1：包内所有文本文件不得含 C0 控制字符/DEL', () => {
+  const files = collectTextFiles(PACKAGE_ROOT);
   const violations = [];
-  for (const file of collectTextFiles(PACKAGE_ROOT)) {
+  for (const file of files) {
     const buffer = fs.readFileSync(file);
     for (let offset = 0; offset < buffer.length; offset += 1) {
       if (isForbidden(buffer[offset])) {
@@ -45,5 +46,6 @@ test('0.1.16 P3-1：包内所有文本文件不得含 C0 控制字符/DEL', () =
       }
     }
   }
+  console.log(`scanned files=${files.length} violations=${violations.length}`);
   assert.deepEqual(violations, [], `控制字符命中（文件 @偏移）：\n${violations.join('\n')}`);
 });
