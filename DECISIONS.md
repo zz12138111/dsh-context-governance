@@ -207,7 +207,7 @@
 - 关联：`src/index.js`、`src/compress/runtime.js`、`src/audit.js`、`src/commands/cg-status.js`、`cordis.patch.yml`、`test/t7-p2.test.mjs`、`test/t8-cost.test.mjs`；状态：active。
 ## DEC-PLUGIN-20261025-28 [tech] M1.2：能力探测双行 + tokenMeter 延迟获取 + usage 兜底 + cost-v1.1
 
-- 背景：M1 真机 `tokensBefore/After` 恒 null、能力行 `compaction=absent`；复查确认是插件侧时序（apply 一次探测/缓存），不是宿主限制；真机 `assistant/message` usage 齐全可兜底。
+- 背景：M1 真机 `tokensBefore/After` 恒 null、能力行 `compaction=absent`；复查确认是插件侧时序（apply 一次探测/缓存），不是宿主限制（后经真机推翻，见影响）；真机 `assistant/message` usage 齐全可兜底。
 - 选择：能力探测 apply 记 `capability@apply`、首个会话事件后记 `capability@ready`（诊断行 + audit，只记类型）；`tokenMeter` 不加硬 inject，`ctx.inject(['tokenMeter'], cb)` 可选注入 + 按需 `ctx.tokenMeter ?? ctx.get('tokenMeter')`（成功才缓存）；`assistant/message.usage` 按会话缓存，`tokensBefore/After` 优先 meter、退回 usage、全缺 `null`+`none`；新增 `tokensBeforeSource`/`tokensAfterSource`/`tokensBeforeParts`/`tokensAfterParts`，`auditVersion=cost-v1.1`，只增字段；`/cg status` 显示 `last-cost`。
 - 影响：真机重启后应能给出非 null 成本水位与来源；**`ctx.compaction` 真机纠正**：本部署插件 scope 拿不到（`capability@apply/@ready` 的 `get.compaction` 均 `absent`），插件不依赖它（压缩观测走 `session/event`），故“回注时点可修”的 P1 前提不成立；下次探测用 `ctx.get('compaction', false)` 区分“无提供”与“有 impl 未 active”。不改压缩后端/回注；两路都缺仍不伪造。
 - 关联：`src/capabilities.js`、`src/diagnostics.js`、`src/audit.js`、`src/index.js`、`src/compress/runtime.js`、`src/commands/cg-status.js`、`test/m1.2-cost.test.mjs`、`test/t8-cost.test.mjs`、`docs/T8-回注自愈与成本归属.md`；状态：active。
