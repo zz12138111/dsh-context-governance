@@ -17,7 +17,7 @@
 
 ## 1. 结论摘要
 
-- **阻断（P1）：0**；**应修（P2）：0**；**建议（P3）：0**——`1b6d054` 终验后 11 条全闭环（P3-4 的 TTL 明确留 0.2.2，属文档约定）。
+- **阻断（P1）：0**；**应修（P2）：1**（**P2-4**：真机验证发现“重启后窗口层 dormant”，覆盖缺口，见 §12；00 已认同定级）；**建议（P3）：0**——`1b6d054` 终验时 11 条全闭环。
 - 六条验收 **4 条完全成立、1 条部分（⑥ 的审计子项）、1 条报告证据不完整**；十项清单里 **⑩ 数字更新未做**（详见 §4）。
 - 代码检索与 spy 双证：**本版没有任何压缩调用路径**（我用自己的全量 pattern + 3 个真实 API 名 spy 复核，0 次）。
 
@@ -196,3 +196,39 @@ node .tmp/probe-021.mjs           # 审核侧探针 8/8（.tmp 已 gitignore）
 - 分支：本报告随 `feat/context-governance-m1` fast-forward 推送；**不打 tag、不发 Release**（归用户）。
 - 0.2.1 复核结论：**P1/P2/P3 全清**；是否上机由用户决定（上机即首次引入窗口层，建议先备份/留回滚点 `b0d6a3e^`）。
 - 若发 tag：建议 `v0.2.1` → 本报告提交后的 HEAD；zip 用 `git archive`。
+
+## 12. 真机验证发现（2026-10-26 17:0x，P2-4）：重启后窗口层 dormant
+
+**背景**：0.2.1 于 `16:58:54.389Z` 重启加载（`apply version=0.2.1`，pid 23760；`capability@ready` 探针含 `get.sessionProjections=obj`）。真机 `/cg status` 实际输出：
+
+```
+policy: compact.at=0.60 (source=builtin) native=0.6785 (config-fallback) early=on
+window: current=unknown source=config-fallback conservative=unknown native-current=0.6785 (config-fallback) native-conservative=- unvalidated (at 允许但未经窗口校验)
+pressure: measured=0.563 estimated=0.393 adjusted=0.531(×1.35) effective=0.563 ratio=1.43 window=1M (config-fallback) at=0.60 effective<at
+```
+
+`/cg policy show`：`native=0.6785 (config-fallback)`、`layers: plugin (empty) -> project (empty) -> session (empty)`、`invalid: none`。
+
+### 12.1 事实：宿主只按需追加 `request/context`
+- 宿主源码（asar `@deepseek-ai/dsh-agent-loop/lib/index.js`）：仅当 `provider` / `model` / `contextWindow` / `systemPromptUpdate` 任一变化时才 `session.append("request/context", requestContext)`；**同路由的普通消息不追加**。
+- 我解了 6 个本项目会话的 `request/context` 时间戳：**最新 `16:25:19.165Z`，全部早于 `16:58:54.389Z` 重启**；重启后 `events=220` 只有其它事件，没有新的 `request/context`。
+- 结论：`current=unknown` 不是“还没等到消息”，而是**既有会话在路由不变时不会再产生 `request/context`**，未知可能长期持续。
+
+### 12.2 影响
+- `window=projection` 可能**永不出现**（主会话不改路由/不新建会话的前提下）；
+- `native` 长期 `0.6785 (config-fallback)`，压力分母长期 `1,000,000`（真机实际窗口 `1,048,576`，比例高估约 4.86%）；
+- **0.2.1 的窗口层在重启后的既有会话里实际 dormant**；0.2.2 的提前压执行面依赖窗口，同样会“看不见窗口”。
+- 这是**覆盖缺口（P2-4），不是与已实现规格冲突的 bug**：规格只要求“观察事件”，未要求回填。
+
+### 12.3 修法建议（待 00 派单）
+- 首次收到某会话的任一事件时，用 `ctx.get('sessionProjections').stateOf(session, 'contextPressure')` 读历史 `contextWindow` 回填（G4 已证明 `stateOf` 可读到该字段；`materialize` 成本按会话一次可接受）；
+- 取用前 `Number.isInteger(W) && W > 0`；来源标 `projection`，`observedAt` 记回填时刻（或注明 backfilled）；
+- 备选：`session.requestContext()`（若在插件侧可达）；不硬 inject。
+- 回填成功前维持现有 config-fallback 行为（安全，但不展示真实窗口）。
+
+### 12.4 验证方式（已与 00 对齐）
+- **新建一个 `DSH插件开发` 工作区会话**（首次请求必发 `request/context`），发一条消息后在该会话执行 `/cg status`：应见 `window: current=1M (session …) source=projection`、`native=0.6934`、`pressure … window=1M`；
+- 或切换模型/路由触发 `request/context`；
+- 真机现有输出中 `pressure window=1M (config-fallback)` 与 `native (config-fallback)` 同源一致，P3-1 标注在真机生效。
+
+**当前计数更新**：P1=0 / **P2=1（P2-4 覆盖缺口）** / P3=0。0.2.1 未打 tag，回填小修后需按 12.4 重新验收窗口层。
