@@ -50,8 +50,12 @@ export function buildMemoryHeader(store, options = {}) {
   if (store === null || typeof store?.allEntries !== 'function') return null;
   const maxLines = Math.min(Math.max(Number(options.maxLines) || HEADER_DEFAULTS.maxLines, 1), 20);
   const maxChars = Math.min(Math.max(Number(options.maxChars) || HEADER_DEFAULTS.maxChars, 120), 2000);
-  const oldAgeDays = Math.max(Number(options.oldAgeDays) || HEADER_DEFAULTS.oldAgeDays, 0);
-  const oldLimit = Math.min(Math.max(Number(options.oldLimit) || HEADER_DEFAULTS.oldLimit, 0), 100);
+  const oldAgeDays = Number.isFinite(Number(options.oldAgeDays))
+    ? Math.max(Number(options.oldAgeDays), 0)
+    : HEADER_DEFAULTS.oldAgeDays;
+  const oldLimit = Number.isFinite(Number(options.oldLimit))
+    ? Math.min(Math.max(Number(options.oldLimit), 0), 100)
+    : HEADER_DEFAULTS.oldLimit;
   const now = Number.isFinite(options.now) ? options.now : Date.now();
   const hasRuleFile = options.hasRuleFile === true;
   const quota = { ...HEADER_DEFAULTS.quota };
