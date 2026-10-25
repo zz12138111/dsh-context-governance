@@ -315,7 +315,8 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
           `session: ${formatSession(policy.sessionLayer?.values)}`,
           ...policyTable(resolved),
           ...(rejected.length > 0
-            ? ['invalid:', ...rejected.map((item) => `${item.key} (source=${item.source}): ${item.reason}`)]
+            ? ['invalid:', ...rejected.map((item) =>
+              `${item.key} (source=${item.source}): ${item.reason}${item.detail === undefined ? '' : ` — ${item.detail}`}`)]
             : ['invalid: none']),
         ];
         return { kind: 'success', text: lines.join('\n') };
