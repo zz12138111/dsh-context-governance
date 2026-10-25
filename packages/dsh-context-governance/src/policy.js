@@ -187,7 +187,7 @@ export function profileLayer(profileName) {
 export function summarizePolicy(policy) {
   const at = policy.values['compact.at'];
   const source = policy.sources['compact.at'];
-  return `compact.at=${at.toFixed(2)} (source=${source}) native=${policy.native} early=${policy.early ? 'ready' : 'off'}`;
+  return `compact.at=${at.toFixed(2)} (source=${source}) native=${policy.native} early=${policy.early ? 'on' : 'off'}`;
 }
 
 /** 四层来源逐键展开（供 /cg policy show）。 */

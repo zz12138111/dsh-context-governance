@@ -76,6 +76,6 @@ test('0.2.0 /cg status：出现 policy 合成链行', async () => {
   const command = createStatusCommand({ guard: guardWithPressure(), policy: policyState(''), now: () => new Date('2026-10-25T00:00:00Z') });
   const result = await command.handler({ rawInput: 'status' });
   assert.equal(result.kind, 'success');
-  assert.match(result.text, /policy: compact\.at=0\.58 \(source=plugin\) native=0\.6785 early=ready/);
+  assert.match(result.text, /policy: compact\.at=0\.58 \(source=plugin\) native=0\.6785 early=on/);
   if (process.env.CG_SAMPLE === '1') console.log('### status tail ###\n' + result.text.split('\n').filter((line) => line.startsWith('compression:') || line.startsWith('policy:') || line.startsWith('degraded:')).join('\n'));
 });
