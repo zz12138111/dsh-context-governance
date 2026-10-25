@@ -179,3 +179,38 @@
 ### 任务拆解
 
 见 `TASKS/REQ-20261025-03-M1.2-拆解.md`。
+
+---
+
+## REQ-20261025-04 上下文治理插件 0.1.13 —— batch 假阳性修复 + `get.compaction` 归因
+
+- **依据**：0.1.12 复核 §11；用户 2026-10-25 拍板范围（只两件，不扩）；cordis `ctx.get(name, false)` strict=false 语义
+- **优先级**：P1
+- **状态**：已排期（待 00 派开发）
+- **版本**：0.1.13；`auditVersion` 维持 `cost-v1.2`（本单不改口径）
+- **背景/痛点**：
+  1. **batch 识别是假阳性**：`protection.js` 用宽正则 `/批次|batch/i` + 日期比例判定，本次“通过”是因为命中了审计 JSON dump 里的 `"batch"` 字段，取不到 `x/y` → `ratios=[]` → `ratiosCovered([])` 恒为 true（`protection.js:396`）→ **空泛 pass**。等于没真正校验批次进度。
+  2. **`get.compaction` 归因不足**：现在只知道 absent，分不清“有 impl 但未 active”还是“本 scope 未提供”。
+- **目标（可验收）**：
+  1. batch 识别**只从用户/助手消息正文**取进度数字；排除 `tool/*` 结果与 JSON 字段 `batch`；`ratios=[]` 判 **`skip`**，不得判 `pass`。
+  2. 能力探测加 `ctx.get('compaction', false)`（strict=false）：`obj` = 有 impl 但未 active（可能被 redirect/未装载）；`undefined` = 本 scope 未提供；结论写进报告与文档。
+- **边界（不做什么）**：
+  - 不改折叠、不改回注、不改记忆；
+  - 不改 `auditVersion`（维持 `cost-v1.2`）；
+  - tokenMeter `chars/4` 估算**只文档化**，不改代码；
+  - 不动 usage 兜底/延迟写路径（等真机自然触发）；
+  - 不处理 0.1.12 的 6 条新 P3（继续 backlog）；
+  - 不安装/不重启/不改 profile/不 push。
+- **验收标准**：
+  - ① **batch 收窄**：只在用户/助手消息正文取数；带 `x/y` 比例的样本能正确比对（真机样本或单测均可）。
+  - ② **假阳性回归**：构造一条含 `"batch"` JSON 字段的 tool 结果，证明不再被当成批次进度；`ratios=[]` 时判 `skip`。
+  - ③ **归因**：`ctx.get('compaction', false)` 的 `obj` / `undefined` 两种结论写清，报告与文档各一处；不支持 strict=false 时记 `unknown`，不猜。
+  - ④ **不回归**：全量测试通过；S4/回注/成本路径不受影响。
+- **依赖/风险**：
+  - `ctx.get(name, false)` 需本版 cordis 支持；不支持则 `unknown`。
+  - batch 进度形态多样（`8000/1500`、`511/958`、百分比）：**只认“数字/数字”的明确比例**，其余 `skip`；不猜格式。
+  - 收窄后可能从“假通过”变“真 skip”，属预期行为变化，需在报告里明确写出。
+
+### 任务拆解
+
+见 `TASKS/REQ-20261025-04-0.1.13-拆解.md`。
