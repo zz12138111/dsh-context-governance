@@ -77,6 +77,39 @@ test('0.2.2 引擎缺失 → no-engine（不猜、不降级）', async () => {
   assert.equal((await compactor.attempt({ turnEnded: true, agentIdle: true })).reason, EARLY_SKIP_REASONS.NO_ENGINE);
 });
 
+test('0.2.2 P3-1：宿主真实 idle 文案 / 小写 code 识别为 busy（G2-B 实测）', () => {
+  const real = new Error('manual compaction requires an idle agent with no waking queued work');
+  real.name = 'ManualCompactionError';
+  real.code = 'busy';
+  assert.equal(isBusyCompactionError(real), true);
+
+  const codeOnly = new Error('engine rejected');
+  codeOnly.code = 'Busy';
+  assert.equal(isBusyCompactionError(codeOnly), true);
+
+  const nameAndMessageOnly = new Error('manual compaction requires an idle agent with no waking queued work');
+  nameAndMessageOnly.name = 'ManualCompactionError';
+  assert.equal(isBusyCompactionError(nameAndMessageOnly), true);
+
+  const unrelated = new Error('summary model returned empty');
+  unrelated.name = 'ManualCompactionError';
+  assert.equal(isBusyCompactionError(unrelated), false, '不含 idle/busy 的 ManualCompactionError 仍归 failed');
+});
+
+test('0.2.2 P3-1 回归：attempt 对 G2-B 真实文案返回 busy 而非 failed', async () => {
+  const engine = {
+    async compactNow() {
+      const error = new Error('manual compaction requires an idle agent with no waking queued work');
+      error.name = 'ManualCompactionError';
+      error.code = 'busy';
+      throw error;
+    },
+  };
+  const compactor = new EarlyCompactor({ getEngine: () => engine, armed: true });
+  const result = await compactor.attempt({ turnEnded: true, agentIdle: true });
+  assert.deepEqual(result, { ok: false, reason: EARLY_SKIP_REASONS.BUSY });
+});
+
 test('0.2.2 ask/deny 语义：pre-execute 决策形状正确', () => {
   assert.deepEqual(preExecuteAsk(), { kind: 'ask', reason: 'context-governance requires confirmation' });
   assert.deepEqual(preExecuteDeny('rm -rf outside whitelist'), { kind: 'deny', reason: 'rm -rf outside whitelist' });
