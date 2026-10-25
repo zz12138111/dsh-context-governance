@@ -355,3 +355,35 @@ const service = this.#ctx?.sessionProjections        // ← 真机这里抛错
 - 新建会话：`source=projection`（实时）
 
 **计数**：**P1=0 / P2=0 / P3=0**。0.2.1 代码层与真机根因均已收口；剩余为重启后的真机读数确认。
+
+## 17. 真机生效确认（2026-10-26 17:2x，`ART-20261025-114`）
+
+**真机**：`apply version=0.2.1` pid 32368 @ `17:17:08.762Z`；`capability@ready` @ `17:17:23.890Z`。读数（`17:20` 前后）：
+
+```
+policy:   compact.at=0.60 (source=builtin) native=0.6934 (projection(backfilled)) early=on
+window:   current=1M (session 58a2e845) observed 2026-10-25T03:30:05.241Z source=projection(backfilled)
+          conservative=1M (session 5d1121ed) native-current=0.6934(projection(backfilled))
+          native-conservative=0.6934 validated
+pressure: … window=1M (session 58a2e845, backfilled) at=0.60 effective<at
+compression: … events=49 …
+```
+
+### 逐字核对（我解会话日志，独立于读数）
+- `session-58a2e845`：13,543 帧全部解压成功，**唯一一条** `request/context`：`seq=15`、`time=1792899005241` → **`2026-10-25T03:30:05.241Z`**、`contextWindow=1048576`。与真机 `observed` **逐字一致** ✔
+- `session-5d1121ed`：`request/context seq=15` → `2026-10-25T03:30:05.263Z`、`contextWindow=1048576`，与 conservative 条目一致 ✔
+- 回填值与历史事件同源，**`observedAt` 不是回填时刻**（本次读数时间约 `17:20Z`，差 14 小时）✔
+
+### 真机同时验证
+- **P2-5 修复生效**：属性 getter 抛错的真机形态下 `ctx.get` 被正确使用 → `current` 出现、`source=projection(backfilled)` ✔
+- **P3-12/13 真机验证**：`native-current=0.6934(projection(backfilled))`（不漏 backfilled）、`pressure … window=1M (session 58a2e845, backfilled)` ✔
+- `native=0.6934`（不是 0.6785）、`validated`、双显 current/conservative 均符合契约 ✔
+- `events=49`、`ignored-foreign=53/1`：过滤与计数正常（1 个 G 盘会话的 53 条事件被忽略）✔
+
+### 结论
+**0.2.1 复核全部收口：P1=0 / P2=0 / P3=0**；真机窗口层（回填/动态 native/双显/退化/审计/零压缩）已验证生效。
+
+### 发布建议（不代决）
+- tag 建议 **`v0.2.1` → 本报告提交后的 HEAD**；zip 用 `git archive` 生成（控制字符闸只扫 tracked）。
+- 回滚点：0.2.0 状态（`e6d859b` 代码线 / `b0d6a3e^`）；真机当前已是 0.2.1（未打 tag）。
+- 已知留待 0.2.2：`conservative` 全历史 min 的 TTL/`session/end` 口径（P3-4 已记）；执行面（提前压/`/cg compact now`/G2/G3）未做。
