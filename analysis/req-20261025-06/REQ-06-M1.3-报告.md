@@ -54,3 +54,14 @@
 - `analysis/req-20261025-06/native-test-audit.jsonl`（隔离实例 10 条审计）
 - 会话：`session-b2cd6d19-200c-459a-a527-a963c51dc167`（原生手动压缩 2 轮：summary 7,749 / 9,193 字符、0 五段标题；回注 seq=82）
 - 实例日志：`.tmp/native-test-ws/logs/governance.log`（原始）；`~/.dsh/profiles/native-test/`（隔离 profile，已停，可保留作复验）
+
+## 8. 0.1.15 修复与 D1-1 复验（2026-10-25）
+
+- **实现**：`inferBackendFromStyles` + `withInference`（`src/compress/adapters.js`）——free-form→`host-basic (inferred)`、five-section→`context-zip (inferred)`、混合→`mixed (unverified)`、无观察→`unknown`；`runtime.js` 在每次 `compaction/summary` 后更新 `adapter.inference` 并写 `adapter-inferred` 审计；`/cg status` 增加 `inferred=…`；`compaction-cost` 仅在实测 kind 为 `none/unknown` 时用推断补位，新增 `backendInferred`，`auditVersion=cost-v1.3`。
+- **硬约束**：推断不进任何行为分支（保护/回注/降级/成本计算仍读实测 kind 与既有来源）；单测「相反推断下选择器输出不变」；四种形态 + 混合 + `/cg status` 标注共 6 条新用例。
+- **隔离实例复验**：0.1.15 加载（`apply version=0.1.15`，15:10:05Z）后手动 `/compact`：
+  - `adapter-inferred`：`adapter="host-basic (inferred)"`、`inferred=true`、`kinds=["free-form"]`；
+  - `compaction-cost`：`backend="host-basic (inferred)"`、`backendInferred=true`、`auditVersion=cost-v1.3`；
+  - `/cg status`：`compression: mode=event-level adapter=none inferred=host-basic (inferred) perception=event … summary=readable/free-form`。
+- **证据**：`native-test-0.1.15-reverify.jsonl`、`native-test-0.1.15-cg-status.txt`。
+- **测试**：全量 **202/202** 通过（+6）；版本 0.1.15；未安装/未重启桌面、未 push；隔离实例已停（18765 无监听）。

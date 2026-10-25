@@ -27,6 +27,7 @@ import {
   applySummaryObservation,
   detectAdapter,
   runSelfCheck,
+  withInference,
 } from './adapters.js';
 import { buildProtectionItems } from './protection-memory.js';
 import { formatPointer } from '../memory/contract.js';
@@ -110,6 +111,8 @@ export class CompressionGuard {
   #backendVersion;
   #enabled;
   #adapter;
+  /** 观察到的摘要形态（0.1.15 推断展示用；不参与行为）。 */
+  #observedStyles = new Set();
   #selection;
   #store;
   #audit;
@@ -394,6 +397,7 @@ export class CompressionGuard {
         hooks: { ...this.#adapter.hooks },
         protectionRole: this.#adapter.protectionRole,
         summary: { ...this.#adapter.summary },
+        inference: { ...(this.#adapter.inference ?? { kind: 'unknown', label: 'unknown', inferred: false, styles: [] }) },
         matrix: { ...this.#adapter.matrix },
         selfCheck: {
           state: this.#adapter.selfCheck.state,
@@ -798,11 +802,17 @@ export class CompressionGuard {
       .slice(0, 5)
       .map(([name, count]) => `${name}:${count}`);
     const occurredAt = cost.occurredAt ?? this.#now().toISOString();
+    // 0.1.15：仅当实测探测不到后端（kind=none）时才用事件形态推断补位，且必须显式标 inferred（cost-v1.3）。
+    const inference = this.#adapter.inference ?? null;
+    const useInference = (this.#adapter.kind === 'none' || this.#adapter.kind === 'unknown')
+      && inference !== null && inference.kind !== 'unknown';
+    const inferredKind = useInference ? inference.label : null;
     this.#auditEvent('compaction-cost', {
       sessionId: state.sessionId,
       compactionId: state.compactionId,
       project: this.#projectName,
-      backend: this.#adapter.kind,
+      backend: inferredKind ?? this.#adapter.kind,
+      backendInferred: inferredKind !== null && inference.inferred === true,
       model: cost.model,
       trigger: cost.trigger,
       occurredAt,
@@ -824,7 +834,7 @@ export class CompressionGuard {
       backendCostSource: backendMeasured ? 'measured' : 'unknown',
       governanceCostSource: governanceEstimated ? 'estimated' : 'unknown',
       estimateMethod: governanceEstimated ? 'chars/4' : 'none',
-      auditVersion: 'cost-v1.2',
+      auditVersion: 'cost-v1.3',
     });
     this.#lastCost = {
       sessionId: state.sessionId,
@@ -1414,6 +1424,20 @@ export class CompressionGuard {
             });
           }
           this.#adapter = applySummaryObservation(this.#adapter, text);
+          // 0.1.15：事件形态推断只用于展示/归因（inferred），不参与任何行为分支。
+          const observedStyle = this.#adapter.summary.style;
+          if (observedStyle === 'five-section' || observedStyle === 'free-form') this.#observedStyles.add(observedStyle);
+          const previousInference = this.#adapter.inference?.label ?? null;
+          this.#adapter = withInference(this.#adapter, [...this.#observedStyles]);
+          if (this.#adapter.inference.label !== previousInference) {
+            this.#auditEvent('adapter-inferred', {
+              sessionId: this.#sessionKey(session),
+              adapter: this.#adapter.inference.label,
+              inferred: this.#adapter.inference.inferred,
+              kinds: this.#adapter.inference.styles,
+              reason: 'summary-shape',
+            });
+          }
           this.#adapter = runSelfCheck({
             adapter: this.#adapter,
             eventApi: typeof this.#ctx?.on === 'function',

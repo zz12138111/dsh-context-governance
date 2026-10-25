@@ -16,6 +16,8 @@ export const PERCEPTION_LEVELS = Object.freeze(['event', 'tool', 'state', 'none'
 export const SUMMARY_AUTHORITIES = Object.freeze(['exclusive', 'shared', 'unknown']);
 export const SUMMARY_READABILITY = Object.freeze(['readable', 'partial', 'unreadable', 'unknown']);
 export const SUMMARY_STYLES = Object.freeze(['five-section', 'free-form', 'unknown']);
+/** 事件形态推断的后端种类（0.1.15；只用于展示/归因，功能路径不读）。 */
+export const INFERENCE_KINDS = Object.freeze(['host-basic', 'context-zip', 'unknown', 'mixed']);
 export const REWRITE_BOUNDARIES = Object.freeze(['replace-span', 'append-checkpoint', 'unknown']);
 export const PROTECTION_ROLES = Object.freeze(['enforcer', 'validator', 'observer', 'unknown']);
 
@@ -187,6 +189,19 @@ export function validateAdapter(adapter) {
   if (!Array.isArray(adapter.selfCheck.checks)) {
     throw new AdapterContractError('ADAPTER_FIELD', 'selfCheck.checks must be an array');
   }
+  if (adapter.inference !== undefined) {
+    if (adapter.inference === null || typeof adapter.inference !== 'object') {
+      throw new AdapterContractError('ADAPTER_FIELD', 'inference must be an object');
+    }
+    assertEnum(adapter.inference.kind, 'inference.kind', INFERENCE_KINDS);
+    assertString(adapter.inference.label, 'inference.label');
+    if (typeof adapter.inference.inferred !== 'boolean') {
+      throw new AdapterContractError('ADAPTER_FIELD', 'inference.inferred must be a boolean');
+    }
+    if (!Array.isArray(adapter.inference.styles)) {
+      throw new AdapterContractError('ADAPTER_FIELD', 'inference.styles must be an array');
+    }
+  }
   return adapter;
 }
 
@@ -211,6 +226,7 @@ function baseAdapter(kind, { hostVersion = 'unknown', backendVersion = 'unknown'
     observability: { usage: true, range: true, artifact: true },
     matrix: { host: hostIn, backend: backendIn },
     selfCheck: { state: 'pending', checks: [] },
+    inference: { kind: 'unknown', label: 'unknown', inferred: false, styles: [] },
     notes: [],
   };
 }
@@ -308,6 +324,32 @@ export function classifySummaryText(summaryText) {
     style: headings >= 4 ? 'five-section' : 'free-form',
     headings,
   };
+}
+
+/**
+ * 事件形态推断（0.1.15，REQ-20261025-06 Q1=A）。
+ *
+ * 只用于展示与归因（`/cg status`/审计/`compaction-cost.backend`），**功能路径不得读取**：
+ * - free-form（无五段标题）→ `host-basic`；
+ * - five-section（命中≥4 个标题）→ `context-zip`；
+ * - 两种都不像 → `unknown`；
+ * - 同一组观察里同时出现两种形态 → `mixed`（`unverified`）。
+ *
+ * @param {string[]} styles 观察到的摘要形态（`classifySummaryText().style`）。
+ * @returns {{kind: string, label: string, inferred: boolean, styles: string[]}}
+ */
+export function inferBackendFromStyles(styles = []) {
+  const observed = [...new Set((styles ?? []).filter((style) => style === 'five-section' || style === 'free-form'))];
+  if (observed.length === 0) return { kind: 'unknown', label: 'unknown', inferred: false, styles: [] };
+  if (observed.length > 1) return { kind: 'mixed', label: 'mixed (unverified)', inferred: false, styles: observed };
+  if (observed[0] === 'free-form') return { kind: 'host-basic', label: 'host-basic (inferred)', inferred: true, styles: observed };
+  return { kind: 'context-zip', label: 'context-zip (inferred)', inferred: true, styles: observed };
+}
+
+/** 把推断挂到适配器上（不改 kind；kind 仍是实测探测结果）。 */
+export function withInference(adapter, styles = []) {
+  validateAdapter(adapter);
+  return validateAdapter({ ...adapter, inference: inferBackendFromStyles(styles) });
 }
 
 /**

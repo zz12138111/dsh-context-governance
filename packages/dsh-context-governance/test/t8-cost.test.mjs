@@ -142,7 +142,7 @@ test('T8-2 成本记录：主键/维度/数值/口径齐全，实测与估算分
     assert.equal(cost.backendCostSource, 'measured');
     assert.equal(cost.governanceCostSource, 'estimated');
     assert.equal(cost.estimateMethod, 'chars/4');
-    assert.equal(cost.auditVersion, 'cost-v1.2');
+    assert.equal(cost.auditVersion, 'cost-v1.3');
     assert.equal(cost.auditVersion.startsWith('cost-v1'), true, 'P3-6：读方按 cost-v1 前缀匹配仍应命中');
     assert.equal(cost.tokensPruned, null);
     assert.equal(cost.pruneCount, 0);

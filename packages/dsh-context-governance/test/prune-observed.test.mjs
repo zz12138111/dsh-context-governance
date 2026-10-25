@@ -168,7 +168,7 @@ test('T2′ prune 归因：每条 prune 一行，callId 反查 tool，replacemen
     assert.equal(observed.cycle, 'current');
     const cost = entries.find((entry) => entry.event === 'compaction-cost');
     assert.ok(cost);
-    assert.equal(cost.auditVersion, 'cost-v1.2');
+    assert.equal(cost.auditVersion, 'cost-v1.3');
     assert.equal(cost.tokensPruned, 4797);
     assert.equal(cost.pruneCount, 1);
     assert.deepEqual(cost.pruneTools, ['read:1']);

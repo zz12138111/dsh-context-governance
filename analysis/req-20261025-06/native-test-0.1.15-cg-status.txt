@@ -1,0 +1,1 @@
+compression: mode=event-level adapter=none inferred=host-basic (inferred) perception=event event-api=on events=29 summary=readable/free-form host=0.2.1-rc.3 backend=unknown

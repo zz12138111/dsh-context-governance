@@ -239,3 +239,10 @@
 - 事实：agent preset 把 `compaction-basic` 与 `tool-result-pruner` 放进 `cordis:group` 并设 `isolate: { compaction: true, toolResultPruner: true }`（本机可见的 `@local/dsh-computer-use/presets/cordis.patch.yml` 三套 custom preset 均带；`standard` 的 `@deepseek-ai/dsh-web-app/presets/standard.patch.yml` 同口径，见需求核对）→ 两个服务被隔离在 preset 组作用域内，根级插件不可见；与 token 拼写、挂载时机无关。
 - 影响：provider 路线在现有部署下**不可行**（要动需宿主级改动，M1 不做）；插件继续走 `session/event` 事件级；prune 观测走事件流，不依赖该服务；`/cg status` 的 `get.compaction=absent`、`get.compaction(strict=false)=undefined` 是设计行为，不再当异常。
 - 关联：`docs/T3-压缩适配与保护.md` §6.4、`docs/T8-回注自愈与成本归属.md` §6.5、`logs/governance.log` capability@apply/@ready；状态：active。
+
+## DEC-PLUGIN-20261025-33 [tech] 0.1.15：事件形态推断（inferred）+ cost-v1.3
+
+- 背景：REQ-20261025-06 D1-1 —— 原生下 `ctx.compaction` 被 preset `isolate` 隔离，`detectAdapter()` 恒 `none`；功能不受影响，但 `/cg status`/审计/`compaction-cost.backend` 无法区分原生。
+- 选择：`inferBackendFromStyles` 按 `classifySummaryText` 形态推断（free-form→host-basic、five-section→context-zip、混合→mixed/unverified、无观察→unknown），**只进展示/归因**：`/cg status` 显示 `inferred=…`，新增 `adapter-inferred` 审计；`compaction-cost` 仅在实测 kind 为 `none/unknown` 时用推断 label，新增 `backendInferred`，`auditVersion=cost-v1.3`（只增字段）。
+- 影响：功能路径（保护/回注/降级/成本计算）不读推断（单测「相反推断下选择器输出不变」）；迁移真实 kind 已知时不覆盖（保持 measured）；隔离实例复验 `host-basic (inferred)`。
+- 关联：`src/compress/adapters.js`、`src/compress/runtime.js`、`src/commands/cg-status.js`、`src/audit.js`、`test/m1.3-inference.test.mjs`、`docs/T3`/`T5`/`T8`、`analysis/req-20261025-06/`；状态：active。

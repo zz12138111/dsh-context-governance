@@ -31,8 +31,12 @@ function statusText({ store, guard, audit, now }) {
     lines.push('compression: disabled (observer not mounted)');
   } else {
     const adapter = status.adapter;
+    const inference = adapter.inference ?? { kind: 'unknown', label: 'unknown', inferred: false, styles: [] };
+    const inferredMark = (adapter.kind === 'none' || adapter.kind === 'unknown') && inference.kind !== 'unknown'
+      ? ` inferred=${inference.label}`
+      : '';
     lines.push(
-      `compression: mode=${status.mode} adapter=${adapter.kind} ` +
+      `compression: mode=${status.mode} adapter=${adapter.kind}${inferredMark} ` +
       `perception=${status.perception} event-api=${status.eventApi ? 'on' : 'off'} ` +
       `events=${status.stats.events}${status.stats.events === 0 ? '(no session/event observed yet)' : ''} ` +
       `summary=${adapter.summary.readability}/${adapter.summary.style} ` +
