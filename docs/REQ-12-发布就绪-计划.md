@@ -8,9 +8,9 @@
 
 | # | 任务 | 产出路径 | 依赖 0.2.4？ | 现在可做？ |
 |---|---|---|---|---|
-| T2 | CI 敏感扫描 | 草稿 `release-drafts/ci/gitleaks.yml` + `README.md`；批准后移到 `.github/workflows/security.yml` | **不依赖** | ✅ 草稿已出（需用户批第三方 Action + 仓库 Actions 可用） |
+| T2 | CI 敏感扫描 | `.github/workflows/security.yml`（已移入）+ `docs/CI-敏感扫描-接入说明.md` | **不依赖** | ✅ 用户已批准；**待 00 复核目录后随推送生效** |
 | T3 | 兼容矩阵 | `docs/兼容矩阵-1.0.md` | **不依赖** | ✅ 已出（待补 0.2.2/context-zip 复跑证据） |
-| T4 | 安装/卸载/回滚演练 | `docs/发布演练-安装卸载回滚.md`（方案）+ 证据 `analysis/req-20261025-12/drills/` | **不依赖**（用当前 HEAD 包或 v0.2.1 基线包即可预演） | ✅ 方案已出；执行需隔离 profile + 用户批准 |
+| T4 | 安装/卸载/回滚演练 | `docs/发布演练-安装卸载回滚.md`（方案）+ 证据 `analysis/req-20261025-12/drills/` | **不依赖**（用当前 HEAD 包或 v0.2.1 基线包即可预演） | ✅ 方案已出；隔离轮已批准，我用 `test-ui`（端口 18769） |
 | T5 | Release notes + 已知限制 | 草稿 `release-drafts/Release-notes-1.0-draft.md` | **依赖**：默认开文案（已有 §4.5 必需段落）、**最终命令名**、R-2 真机证据、0.2.4 四项复核结论 | ⚠️ 可先搭骨架（占位符） |
 | T6 | 发布 checklist + tag 流程 | `docs/发布checklist-1.0.md` | 部分依赖（版本号从 `package.json:0.2.1` → `1.0.0`；tag 需用户批） | ✅ 可出草稿，勾选项随 T1–T5 更新 |
 
