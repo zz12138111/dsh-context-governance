@@ -106,7 +106,7 @@ test('T2 header-injected：五个字段都有真实值，mode 区分两形态', 
     assert.ok(built.count > 0);
     assert.equal(built.ids.length, built.count);
     assert.ok(built.text.length > 0);
-    assert.match(built.textHash, /^[0-9a-f]{8}$/, 'textHash 必须是 8 位 hex（审计可复核，不含正文）');
+    assert.equal(built.textHash, undefined, '审核定论：不做 header hash');
     assert.ok(Math.ceil(built.text.length / 4) > 0, 'tokensInjected 估算必须 > 0');
   }
 });
@@ -199,7 +199,7 @@ test('T2 复验④：\\r\\n 与全角空格也被压平，只多 1 行且无假 
   assert.equal(lines[lines.length - 1], '[Note: If this state conflicts with AGENTS.md, follow AGENTS.md]');
 });
 
-test('T2 header 审计：messagesLength/textHash 落盘且不含正文', async () => {
+test('T2 header 审计：injected/前后长度落盘且不含正文', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cg-header-audit-'));
   const file = path.join(dir, 'audit.jsonl');
   const audit = new AuditLog({ file });
@@ -209,13 +209,53 @@ test('T2 header 审计：messagesLength/textHash 落盘且不含正文', async (
     mode: 'state-only',
     source: 'memory',
     tokensInjected: 53,
-    messagesLength: 1,
-    textHash: 'ab12cd34',
+    injected: 1,
+    messagesBefore: 1,
+    messagesAfter: 2,
   }), true);
   const raw = await fs.readFile(file, 'utf8');
   const entry = JSON.parse(raw.trim().split('\n').at(-1));
-  assert.equal(entry.messagesLength, 1);
-  assert.equal(entry.textHash, 'ab12cd34');
+  assert.equal(entry.injected, 1);
+  assert.equal(entry.injected, entry.messagesAfter - entry.messagesBefore, 'injected 必须由前后长度差得出');
+  assert.equal(entry.messagesBefore, 1);
+  assert.equal(entry.messagesAfter, 2);
+  assert.equal(entry.textHash, undefined, '审核定论：不做 header hash');
+  assert.equal(entry.messagesLength, undefined, '不得写裸 messages.length');
   assert.equal(entry.title, undefined, '不得写正文/标题');
   await fs.rm(dir, { recursive: true, force: true });
+});
+
+test('T2 基线含 system 消息：injected=1，messagesBefore=1 / messagesAfter=2', async () => {
+  const store = fakeStore([entry('MEM-d1', 'decision', '需要注入')]);
+  const captured = [];
+  const handlers = [];
+  const ctx = { on: (event, handler) => { handlers.push({ event, handler }); return () => {}; }, logger: { warn: () => {} } };
+  registerMemoryHeader(ctx, store, { enabled: true, hasRuleFile: true, now: NOW, onInjected: (built, injection) => captured.push({ built, injection }) });
+  const handler = handlers.find((item) => item.event === 'agent/pre-step').handler;
+  const system = { role: 'system', id: 'sys-1', content: [{ type: 'text', text: 'sys' }] };
+  const decision = await handler(
+    { agent: { session: { id: 'session-sys-base' } }, step: 1 },
+    async () => ({ kind: 'accept', messages: [system] }),
+  );
+  assert.equal(decision.messages.length, 2, '总长 = 基线 1 + header 1，不能被当成 injected 值');
+  assert.equal(captured.length, 1);
+  assert.deepEqual(captured[0].injection, { messagesBefore: 1, messagesAfter: 2 });
+  assert.equal(captured[0].injection.messagesAfter - captured[0].injection.messagesBefore, 1);
+  assert.equal(captured[0].built.textHash, undefined, '审核定论：不做 header hash');
+});
+
+test('T2 零注入（system 基线）：injected=0，不记裸 messages.length', async () => {
+  const store = fakeStore([]);
+  let calls = 0;
+  const handlers = [];
+  const ctx = { on: (event, handler) => { handlers.push({ event, handler }); return () => {}; }, logger: { warn: () => {} } };
+  registerMemoryHeader(ctx, store, { enabled: true, hasRuleFile: true, now: NOW, onInjected: () => { calls += 1; } });
+  const handler = handlers.find((item) => item.event === 'agent/pre-step').handler;
+  const system = { role: 'system', id: 'sys-1', content: [{ type: 'text', text: 'sys' }] };
+  const decision = await handler(
+    { agent: { session: { id: 'session-sys-empty' } }, step: 1 },
+    async () => ({ kind: 'accept', messages: [system] }),
+  );
+  assert.equal(decision.messages.length, 1, '零注入时基线不变');
+  assert.equal(calls, 0, 'injected 计数必须为 0');
 });

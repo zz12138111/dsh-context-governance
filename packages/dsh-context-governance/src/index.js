@@ -589,15 +589,21 @@ export async function apply(ctx, rawConfig = {}) {
     maxChars: config.memoryHeader.maxChars,
     oldAgeDays: config.memoryHeader.oldAgeDays,
     oldLimit: config.memoryHeader.oldLimit,
-    onInjected: (built) => {
+    onInjected: (built, injection = {}) => {
       guard?.auditLog?.append?.('header-injected', {
         count: built.count,
         lines: built.count,
         mode: built.mode,
         source: 'memory',
         tokensInjected: Math.ceil(built.text.length / 4),
-        messagesLength: 1,
-        textHash: built.textHash ?? null,
+        // 0.2.2：不记裸 messages.length（基线+1 会被误读成“注入 1 条”）；
+        // 只记前后长度，由两值差得 injected（0/1）+ header 指纹。
+        injected: Number.isFinite(injection.messagesAfter) && Number.isFinite(injection.messagesBefore)
+          ? injection.messagesAfter - injection.messagesBefore
+          : null,
+        messagesBefore: injection.messagesBefore ?? null,
+        messagesAfter: injection.messagesAfter ?? null,
+        // 审核定论（2026-10-26）：不做 header hash（32 bit 指纹对低熵 header 不抗猜测；需公开比对时用 HMAC/加盐另立项）。
       });
     },
   });

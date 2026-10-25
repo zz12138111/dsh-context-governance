@@ -11,7 +11,7 @@
  * - 不改 surface，仅在 `agent/pre-step` 决策消息前插入一条 user 消息。
  */
 
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 
 export const MEMORY_HEADER_SOURCE_KIND = 'plugin:context-governance';
 export const MEMORY_HEADER_FORM = 'memory-header';
@@ -126,7 +126,6 @@ export function buildMemoryHeader(store, options = {}) {
   const text = lines.join('\n').slice(0, maxChars);
   return {
     text,
-    textHash: createHash('sha256').update(text).digest('hex').slice(0, 8),
     ids: picked.map(({ entry }) => entry.id),
     mode,
     count: picked.length,
@@ -187,7 +186,11 @@ export function registerMemoryHeader(ctx, store, options = {}) {
         };
         seen.add(sessionId);
         try {
-          options.onInjected?.(header);
+          // 0.2.2：不记裸 messages.length（=基线+1）；改记前后长度，由审计计算 injected = after - before。
+          options.onInjected?.(header, {
+            messagesBefore: messages.length,
+            messagesAfter: messages.length + 1,
+          });
         } catch {
           /* 审计回调失败不影响注入 */
         }

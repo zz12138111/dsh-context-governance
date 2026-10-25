@@ -172,6 +172,7 @@ export class CompressionGuard {
     starts: 0,
     summaries: 0,
     ends: 0,
+    /** 0.2.2：暂未接线（当前恒 0）；接线后由 compactNow 失败累加，勿当 bug。 */
     compactionFailures: 0,
     protectionFailures: 0,
     observerErrors: 0,
