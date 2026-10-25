@@ -115,3 +115,27 @@
 - 未安装/重启/卸载、未改 profile、未动用户数据；只读 asar、会话日志与仓库。
 - 拓扑确认直线：`d8b5781 → 6a85ee9 → 2cea1ca`；本报告提交将在 `edf228f`（LICENSE）之上，fast-forward push，只推分支，不打 tag。
 - 基线口径：0.1.11=`01a7598`；0.1.12=`a75ce82`；0.1.13=`2cea1ca`。
+
+## 附录 A · 关闭 `isolate.compaction` 的影响评估（只读，2026-10-25 · `DEC-20261025-48` 已定案）
+
+> 问题：若把 preset 里的 `isolate.compaction` 设为 false，影响面是什么？**只做静态评估，未改配置。**
+
+**结论：不建议改。** 用户已定案（`DEC-20261025-48`）：该部署下「回注时点修正」不可行，原因为 **preset 作用域隔离（设计行为）**；**不再作为 M2 前置期待**，M2 不依赖 provider。
+
+**六条理由（按影响面）**
+
+1. **宿主压缩行为不变**：`isolate` 只影响服务可见性，不改变引擎执行；`compaction-basic` 仍在 preset 组内按 `thresholdRatio 0.8` + `headroomTokens 65536` ≈ **67.85%** 工作。
+2. **重复注册会撞车**：cordis `provide` 在同一 scope key 下重复注册会抛 `service "<name>" has been registered at <fiber>`（`reflect.ts:289-291`）。本机 `@local/dsh-computer-use/presets/cordis.patch.yml` 里有**两处** `- id: compaction` 组（三套 custom preset 各一份），若关闭隔离且同时挂载 → 第二个组直接装载失败；`toolResultPruner` 同理。
+3. **压力阈值不变**：阈值在 preset config 里，不由隔离决定。
+4. **审计时序不变**：`compaction/start|summary|end`、`compaction/prune` 的事件流与顺序不随隔离变化；`prune-observed` / `compaction-cost` 照旧。
+5. **插件侧会变（不是无害）**：`get.compaction` 从 `absent` 变 `obj` → `#detect()` 识别到 adapter → mode 从 `event-level` 变 **`full`**；`no-compaction-service` 冲突消失；**mode=full 下保护校验失败会进入 `degraded-protection`**（当前 event-level 不会）；若 adapter 自检 hard fail（版本矩阵）会转 `observe-only`。
+6. **收益≈0、风险额外**：插件不需要 provider（M1 已按事件级结案）；关闭隔离还会把 `compaction`/`toolResultPruner` 暴露给根级其他插件（未知消费者）。
+
+**若要验证的正确姿势**
+
+- 用**隔离 profile**，不要动本机安装态；
+- **只挂一套 preset**（避免第 2 条的重复 provide）；
+- 先确认**没有第二个 compaction provider**（`@local` 与 web-app 两处 preset 不同时生效）；
+- 观察点：`capability@apply` 的 `get.compaction(strict=false)` 应变为 `obj`；插件 `mode` 预期 `full`；触发一次压缩，看保护失败是否进 `degraded-protection`，以及 `/cg status` 的 adapter/mode。
+
+**证据**：`@local/dsh-computer-use/presets/cordis.patch.yml`（两处 `- id: compaction` + `isolate:{compaction,toolResultPruner}`）；`@deepseek-ai/dsh-web-app/presets/standard.patch.yml:66-82`（`cordis:group` + 两个 isolate，`minimal` 只隔离 compaction）；cordis `reflect.ts:289-291`（重复 provide 抛错）；真机 0.1.14 `capability@apply/@ready` 的 `get.compaction(strict=false)=undefined`。
