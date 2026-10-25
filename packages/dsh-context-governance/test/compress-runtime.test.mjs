@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 
 import { CompressionGuard } from '../src/compress/runtime.js';
@@ -99,6 +102,23 @@ test('保护失败：报告 fail、写 warn，但不向宿主抛错', () => {
   assert.equal(guard.status.stats.protectionFailures, 1);
   assert.equal(guard.status.stats.compactionFailures, 0);
   assert.ok(ctx.logs.some(([level, message]) => level === 'warn' && String(message).includes('protection failed')));
+});
+
+test('0.2.2 保护失败：diagnostics 文件留一行（宿主 logger 之外的复核证据）', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cg-diag-'));
+  const file = path.join(dir, 'governance.log');
+  const ctx = makeCtx(new BasicCompactionEngine());
+  const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.2', diagnosticsLogFile: file });
+  guard.start();
+  const built = buildCompaction({ before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 13 });
+  emitAll(ctx, built);
+  const text = await fs.readFile(file, 'utf8');
+  const line = text.split('\n').find((item) => item.includes('compaction protection failed'));
+  assert.ok(line, 'diagnostics 文件必须有保护失败行');
+  assert.match(line, /compaction protection failed \(\d+\): latest-user-message/);
+  assert.ok(line.length < 200, '只记 names，不写 detail/正文');
+  guard.stop();
+  await fs.rm(dir, { recursive: true, force: true });
 });
 
 test('插件在压缩事务中途挂上：用 summary 时补快照并标 lateSnapshot', () => {

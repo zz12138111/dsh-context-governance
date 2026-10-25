@@ -28,7 +28,7 @@
 packages/dsh-context-governance/
 ├─ src/
 │  ├─ index.js                 插件入口（配置 → 记忆库 → 工具 → 压缩观察）
-│  ├─ diagnostics.js           可选启动日志（首次安装验证）
+│  ├─ diagnostics.js           可选诊断日志（启动/能力 + 保护失败行）
 │  ├─ audit.js                 最小审计 JSONL（同步追加、字段白名单、不写正文）
 │  ├─ metrics.js               p50/p95 统计
 │  ├─ memory/                  契约、主题文件格式、原子写、写者锁、MemoryStore、保护 journal
@@ -110,6 +110,7 @@ config:
     backendVersion: ""                # 空 = 运行时识别，版本标 unknown
   diagnostics:
     logFile: "D:/DS-PROJECT/DSH插件开发/logs/governance.log"
+    # 0.2.2 起：除启动/能力行外，保护失败也写一行（只记检查名，不记 detail/正文）
   audit:
     maxBytes: 8388608                 # 8 MiB 后轮转 audit-YYYYMMDD.jsonl
   reinjection:

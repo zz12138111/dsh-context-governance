@@ -498,6 +498,7 @@ export async function apply(ctx, rawConfig = {}) {
         hostVersion,
         backendVersion,
         logger: ctx.logger,
+        diagnosticsLogFile: config.diagnostics.logFile,
         store,
         auditMaxBytes: config.audit.maxBytes,
         projectRoot: config.projectRoot,

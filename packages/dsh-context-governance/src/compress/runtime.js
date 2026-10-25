@@ -21,6 +21,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 import { AuditLog } from '../audit.js';
+import { appendDiagnosticLine } from '../diagnostics.js';
 import { calculateLatencyStats } from '../metrics.js';
 import {
   DEFAULT_MATRIX,
@@ -106,6 +107,8 @@ function coveredBySummary(meta, summaryText) {
 export class CompressionGuard {
   #ctx;
   #logger;
+  /** 0.2.2：`diagnostics.logFile` 的可选落点——宿主 logger 之外再留一份可复核的文件证据。 */
+  #diagnosticsLogFile = '';
   #now;
   #matrix;
   #hostVersion;
@@ -196,6 +199,7 @@ export class CompressionGuard {
   constructor(options = {}) {
     this.#ctx = options.ctx ?? {};
     this.#logger = options.logger ?? this.#ctx?.logger ?? null;
+    this.#diagnosticsLogFile = typeof options.diagnosticsLogFile === 'string' ? options.diagnosticsLogFile.trim() : '';
     this.#now = options.now ?? (() => new Date());
     this.#matrix = options.matrix ?? DEFAULT_MATRIX;
     this.#hostVersion = options.hostVersion ?? 'unknown';
@@ -1122,6 +1126,15 @@ export class CompressionGuard {
         `[context-governance] compaction protection failed (${enriched.failures.length}): ` +
         enriched.failures.map((failure) => `${failure.name}: ${failure.detail}`).join('; '),
       );
+      // G2 复核：`#logger` 是宿主 ctx.logger，默认不进 diagnostics 文件；
+      // 保护失败在 armed 后会真实发生，必须在可复核的文件里留一行（只记 names，不记 detail/正文）。
+      if (this.#diagnosticsLogFile !== '') {
+        appendDiagnosticLine(
+          this.#diagnosticsLogFile,
+          `compaction protection failed (${enriched.failures.length}): ` +
+          `${enriched.failures.map((failure) => failure.name).join(',')} compactionId=${String(enriched.compactionId ?? '')}`,
+        );
+      }
     }
     return enriched;
   }
