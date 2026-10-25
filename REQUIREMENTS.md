@@ -156,6 +156,7 @@
   2. **探测修正**：能力探测由“apply 一次”改为「apply 记 `capability@apply` + 首个会话事件后补 `capability@ready`」两行审计，不得因时序把可用服务记成 absent。
   3. **口径可追**：新增 `tokensBeforeSource` / `tokensAfterSource`（`tokenMeter` / `usage` / `none`），`auditVersion` 升 `cost-v1.1`；**只增字段、不改已有字段语义**，旧解析器仍可用。
   4. **provider 结论（已结案，2026-10-25）**：本部署下 `get.compaction(strict=false)=undefined`（`@apply` 13:18:10Z / `@ready` 13:18:23Z 一致）→ **该 scope 未提供 `compaction` 服务**。因此 **「回注时点修正」在该部署下不可行**，只能走事件时序推断（现方案）——**这是结论，不是待查项**。本轮不改压缩后端、不替换 provider；若未来宿主或部署方式变化，重新探测即可，但不再作为 M2 的前置期待。
+- **影响与定案（2026-10-25，`DEC-20261025-48`）**：**不改 `isolate.compaction`**（宿主 preset 作用域隔离，属设计行为）。理由：宿主压缩行为/压力阈值/审计时序均不变；`cordis provide` 同 scope key 重复注册会抛错（`@local/dsh-computer-use/presets/cordis.patch.yml` 有两处 compaction 组）；插件侧 `get.compaction` 变 `obj` 会使 mode 由 `event-level` 变 `full`（保护失败会进 `degraded-protection`）；收益≈0。**「回注时点修正」不可行，不再作为 M2 前置期待；M2 不依赖 provider。** 如需验证 provider 路径，只允许在**隔离 profile 实验**里进行，标注为实验、不在主线。
 - **边界（不做什么）**：
   - 不改回注逻辑、不改记忆、不做折叠（折叠已于 2026-10-25 取消）；
   - 不接 ACP、不做货币成本、不做跨周期聚合（留 M2）；
