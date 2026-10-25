@@ -40,7 +40,7 @@
 
 T4 回注时点：checkpoint→end 之间不可实现，改为 end 后首个 microtask（同 tick、下一轮前）；用户已接受，`DEC-PLUGIN-20261025-09`。
 
-M1 成本“前后水位未知”原按降级接受，2026-10-25 复查为插件侧可修（tokenMeter 读取时机），已由 M1.2 修（v0.1.11，离线 183/183）。**`ctx.compaction` 真机纠正（2026-10-25 20:34/20:35）**：`capability@apply` 与 `capability@ready` 的 `get.compaction` **均为 absent** → 本部署插件 scope 拿不到 `ctx.compaction`；插件不依赖它（压缩观测走 `session/event` 的 `compaction/start|summary|end`），**“回注时点可修”的 P1 前提不成立**。能力探测只看 `get.X` 列；裸属性 `throws` 不代表服务异常（反例：`tokenMeter=throws` 同时 `get.tokenMeter=obj`）。
+M1 成本“前后水位未知”原按降级接受，2026-10-25 复查为插件侧可修（tokenMeter 读取时机），已由 M1.2 修（v0.1.11，离线 183/183）。**`ctx.compaction` 已结案（2026-10-25）**：`get.compaction(strict=false)` 在 `@apply` 13:18:10Z / `@ready` 13:18:23Z **均 `undefined`** → 本部署插件 scope **未提供**该服务（有 impl 未 active 会返回 `obj`）；插件不依赖它（走 `session/event`），**「回注时点修正」在该部署下不可行**，只能走事件时序推断（现方案），不再是待查项。能力探测只看 `get.X` 列；裸属性 `throws` 不代表服务异常（反例：`tokenMeter=throws` 同时 `get.tokenMeter=obj`）。
 
 ## 等待用户/外部
 
@@ -63,6 +63,6 @@ M1 成本“前后水位未知”原按降级接受，2026-10-25 复查为插件
 3. S3 header 默认关闭；要启用需用户拍板改 `memoryHeader.enabled`。
 4. 审核打包独立复核 **0.1.14**（batch 同消息绑定 + 日期排除 + 正文比例保留；真实快照 A/B）；0.1.12/0.1.13 复核已出（0 阻断），00 转用户验收。
 5. T2′ 已实现；审核复核时**必须核对“生产代码无折叠”**（`packages/` 内无 fold/spill/`[cg-fold]`/`fold.*`；证据 `analysis/t2prime/zero-fold-grep.txt`）。
-6. 重启验收后：`ctx.compaction` 在本部署仍不可得（apply/ready 的 `get.compaction` 均 absent），**不再按“可得”评估回注时点**；0.1.13 已实现 `ctx.get('compaction', false)`（`obj`=有 impl 未 active / `undefined`=本 scope 未提供 / 不支持=`unknown`），真机取值待重启后 `capability@apply` 行确认，再决定 P1 是否具备前提。M2 待 M1.2 验收后评估。
+6. **`ctx.compaction` 已结案**：`get.compaction(strict=false)` 在 `@apply`(13:18:10Z) 与 `@ready`(13:18:23Z) 均 `undefined` → 本部署未提供该服务 → **「回注时点修正」不可行**，不再作为 P1 待查前提；`get.tokenMeter=obj` 稳定，M1.2 延迟获取无问题。M2 待 M1.2 验收后评估。
 7. **0.1.13（`REQ-20261025-04`）**：batch 假阳性真修（只看用户/助手消息、`ratios=[]` → `skip`、补 `x/y` 回归）+ `get.compaction` strict=false 归因；不改折叠/回注、`auditVersion` 维持 `cost-v1.2`。**已交付 + 复核已出（0 阻断）**（189/189；报告 `analysis/req-20261025-04/`）；其 batch 判据已被 0.1.14 取代。
 8. **0.1.14（`REQ-20261025-05`）**：batch 比例**同源修正**——P2 严格同消息绑定（`user`/`assistant` 正文都须带 `批次|进度|progress|batch` 关键字，无关键字 → `skip(no-batch-semantics)`，依 `DEC-20261025-46`）、P3① `YYYY/MM`（19xx/20xx + 1–12）排除、P3② 正文比例不被 `stripStructuredPayload` 吞（只剥含引号/冒号的 JSON 块）；验收四例逐一 + 三列对照（含“无关键字 → 必须 skip”反例）。P3③/④/⑤ 不纳入。**开发已交付**（196/196；报告 `analysis/req-20261025-05/`，真实快照 `snapshot-11509.json` + `replay-real.mjs`），待审核复核；未安装/未重启/未 push。
