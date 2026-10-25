@@ -66,26 +66,38 @@ export class EarlyCompactor {
    * @param {string|null} [input.sourceCommandId] 第三参（来源命令 id）
    * @param {boolean} input.turnEnded turn 是否已结束（事实，不是猜测）
    * @param {boolean} input.agentIdle agent 是否 idle（事实）
-   * @returns {Promise<{ok:boolean, reason?:string, error?:Error}>}
+   * @returns {Promise<{accepted:boolean, reason?:string, error?:Error}>}
    */
   async attempt({ agent = null, signal = null, sourceCommandId = null, turnEnded = false, agentIdle = false } = {}) {
-    if (!this.#armed) return { ok: false, reason: EARLY_SKIP_REASONS.DISABLED };
-    if (turnEnded !== true || agentIdle !== true) return { ok: false, reason: EARLY_SKIP_REASONS.NOT_IDLE };
+    if (!this.#armed) return { accepted: false, reason: EARLY_SKIP_REASONS.DISABLED };
+    if (turnEnded !== true || agentIdle !== true) return { accepted: false, reason: EARLY_SKIP_REASONS.NOT_IDLE };
     const engine = this.#getEngine();
     if (engine === null || engine === undefined || typeof engine.compactNow !== 'function') {
-      return { ok: false, reason: EARLY_SKIP_REASONS.NO_ENGINE };
+      return { accepted: false, reason: EARLY_SKIP_REASONS.NO_ENGINE };
     }
     try {
       // G2：宿主 compactNow(agent, signal, sourceCommandId) → runMaintenance(...) 返回 Promise；
-      // 必须 await，否则异步 rejected 逃出 catch（假 ok + unhandled rejection）。
+      // 必须 await，否则异步 rejected 逃出 catch（假 accepted + unhandled rejection）。
       await engine.compactNow(agent, signal, sourceCommandId);
-      return { ok: true };
+      return { accepted: true };
     } catch (error) {
-      if (isBusyCompactionError(error)) return { ok: false, reason: EARLY_SKIP_REASONS.BUSY };
+      if (isBusyCompactionError(error)) return { accepted: false, reason: EARLY_SKIP_REASONS.BUSY };
       this.#logger?.warn?.(`[context-governance] early compaction failed: ${String(error?.message ?? error)}`);
-      return { ok: false, reason: EARLY_SKIP_REASONS.FAILED, error };
+      return { accepted: false, reason: EARLY_SKIP_REASONS.FAILED, error };
     }
   }
+}
+
+/**
+ * 0.2.2 升级判据（纯函数，供接线使用）：
+ * - 只有 `compaction === 'failed'` 或 `reinjected === false` 才允许退避/关开关；
+ * - `protection === 'failed'` **不升级**（保护项丢失但已回注时仍算可用）。
+ *
+ * @param {{compaction?: 'committed'|'skipped'|'failed', protection?: 'ok'|'failed', reinjected?: boolean}} [input]
+ * @returns {boolean}
+ */
+export function shouldEscalateEarly({ compaction = 'committed', reinjected = true } = {}) {
+  return compaction === 'failed' || reinjected === false;
 }
 
 /**

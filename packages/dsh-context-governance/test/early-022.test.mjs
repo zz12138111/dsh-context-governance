@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { EARLY_SKIP_REASONS, EarlyCompactor, isBusyCompactionError, preExecuteAsk, preExecuteDeny } from '../src/compress/early.js';
+import { EARLY_SKIP_REASONS, EarlyCompactor, isBusyCompactionError, preExecuteAsk, preExecuteDeny, shouldEscalateEarly } from '../src/compress/early.js';
 
 function asyncEngine(mode = 'resolve') {
   const calls = [];
@@ -27,7 +27,7 @@ test('0.2.2 默认不执行：armed=false 时连引擎都不取', async () => {
   let engineTaken = 0;
   const compactor = new EarlyCompactor({ getEngine: () => { engineTaken += 1; return asyncEngine(); } });
   const result = await compactor.attempt({ turnEnded: true, agentIdle: true });
-  assert.deepEqual(result, { ok: false, reason: EARLY_SKIP_REASONS.DISABLED });
+  assert.deepEqual(result, { accepted: false, reason: EARLY_SKIP_REASONS.DISABLED });
   assert.equal(engineTaken, 0);
 });
 
@@ -46,7 +46,7 @@ test('0.2.2 三参对齐：compactNow(agent, signal, sourceCommandId)，成功 a
   const agent = { id: 'agent-1' };
   const signal = new AbortController().signal;
   const result = await compactor.attempt({ agent, signal, sourceCommandId: 'cmd-9', turnEnded: true, agentIdle: true });
-  assert.deepEqual(result, { ok: true });
+  assert.deepEqual(result, { accepted: true });
   assert.equal(fake.calls.length, 1);
   assert.equal(fake.calls[0].agent, agent);
   assert.equal(fake.calls[0].signal, signal);
@@ -56,7 +56,7 @@ test('0.2.2 三参对齐：compactNow(agent, signal, sourceCommandId)，成功 a
 test('0.2.2 G2 busy（async reject）：reason=busy，不抛宿主、不 unhandled', async () => {
   const compactor = new EarlyCompactor({ getEngine: () => asyncEngine('busy'), armed: true });
   const result = await compactor.attempt({ turnEnded: true, agentIdle: true });
-  assert.equal(result.ok, false);
+  assert.equal(result.accepted, false);
   assert.equal(result.reason, EARLY_SKIP_REASONS.BUSY);
   const error = new Error('compaction engine is busy');
   error.name = 'ManualCompactionError';
@@ -107,7 +107,15 @@ test('0.2.2 P3-1 回归：attempt 对 G2-B 真实文案返回 busy 而非 failed
   };
   const compactor = new EarlyCompactor({ getEngine: () => engine, armed: true });
   const result = await compactor.attempt({ turnEnded: true, agentIdle: true });
-  assert.deepEqual(result, { ok: false, reason: EARLY_SKIP_REASONS.BUSY });
+  assert.deepEqual(result, { accepted: false, reason: EARLY_SKIP_REASONS.BUSY });
+});
+
+test('0.2.2 升级判据：protection 失败不升级，compaction 失败/回注失败才升级', () => {
+  assert.equal(shouldEscalateEarly({ compaction: 'committed', protection: 'failed', reinjected: true }), false);
+  assert.equal(shouldEscalateEarly({ compaction: 'committed', protection: 'ok', reinjected: true }), false);
+  assert.equal(shouldEscalateEarly({ compaction: 'skipped', protection: 'failed', reinjected: true }), false);
+  assert.equal(shouldEscalateEarly({ compaction: 'failed', protection: 'ok', reinjected: true }), true);
+  assert.equal(shouldEscalateEarly({ compaction: 'committed', protection: 'ok', reinjected: false }), true);
 });
 
 test('0.2.2 ask/deny 语义：pre-execute 决策形状正确', () => {
