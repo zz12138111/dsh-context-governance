@@ -1,15 +1,15 @@
 # DSH 插件开发 · 当前状态
 
 > 只放"现在还活着"的：在做什么、卡在哪、待谁决策。过期项直接删。
-> 更新：2026-10-25 22:4x（**0.1.14 已加载**：batch 同消息绑定 + 日期排除 + 正文比例保留，196/196；真机 `get.compaction(strict=false)=undefined` 已实测结案；0.1.12 手动压缩验证 `cost-v1.2`）
+> 更新：2026-10-26 01:2x（**0.2.1 已收口**：窗口/校验层 + 历史回填，真机加载验证 `source=projection(backfilled)`/`native=0.6934`；全量 267/267；tag `v0.2.1` 本地+远端一致，Release 未发）
 
 ## 在办
 
 | 会话 | 当前任务 | 状态 |
 |---|---|---|
-| 需求 | M2 首批 REQ-20261025-09 已出正式单（含 0.2.0 验收与项目层 A+C 口径，`cc33a2a`）；等 0.2.0 复核结论 | 待复核 |
-| 开发 | **0.2.0 已交付**（策略层/项目层/压力四段/`/cg set`/文档；234/234，`e6d859b` + docs）；未 push、未安装未重启 | 待审核 |
-| 审核打包 | 0.1.x 复核链已出至 0.1.18（0 阻断）；**0.2.0 待复核**（含 DEC-20261025-60 六项与 62 A+C 对照） | 待复核 |
+| 需求 | M2 首批 REQ-20261025-09 已收口（0.2.0 + 0.2.1 窗口层/回填全部交付并复核）；M3 REQ-20261025-10 已出单（T0 门禁 + T2 header） | 0.2.1 收口 |
+| 开发 | **0.2.1 已交付 + 复核（P1=0/P2=0/P3=0）+ 真机加载验证**（窗口层回填生效）；`origin=f585434`（ahead 0）、tag `v0.2.1` 本地+远端一致；全量 **267/267**；Release **未发** | 0.2.1 收口 |
+| 审核打包 | 0.2.1 复核已出：P1=0 / P2=0 / P3=0；tag/发布素材已就位（`D:\DS-PROJECT\_backup\dsh-plugins-v0.2.1\`），Release 待批准 | 待发布批准 |
 
 ## 进度
 
@@ -26,8 +26,8 @@
 - **M1.1 收口（2026-10-25，T2=A）**：B2 显示宿主 pruner 在压缩点已覆盖全部 >8k；49 会话统计白名单可折上限仅 15.3%，红线 `pwsh`+`read` 占 71.0% → **不做早折、不做 spill、不做批量测量**；M1.1 改为只做 **T2′ prune 观测与成本接入**（`compaction-cost` 增 `tokensPruned`/`pruneCount`/`pruneTools`，`auditVersion=cost-v1.2`）；**0.1.12 = T2′ + 0.1.11 复核 6 条 P3**。范围变更已改单：`REQUIREMENTS.md` REQ-20261025-02、`TASKS/REQ-20261025-02-M1.1-拆解.md`；账本 `DEC-20261025-37`/`ART-20261025-19`、`DEC-20261025-38`/`ART-20261025-20`。
 - **M1.1 T2′（v0.1.12）**：离线完成，只读观测宿主 `compaction/prune`：`prune-observed`（工具名按替换 `callId` 反查 `tool/call`，未知记 `unknown`；同 `shadowedRange` 去重；`cycle=current/outside`）；`compaction-cost` 增 `tokensPruned`(measured/null)/`pruneCount`/`pruneTools`(top5)，`auditVersion=cost-v1.2`；`/cg status [last-cost]` 显示 `pruned=<tokens> tools=<top5>`。生产代码零折叠/spill，T1 实验只在 `analysis/t1/`。记录 `analysis/t2prime/T2prime-交付记录.md`。
 - **0.1.12 P3 收口（6 条）**：P3-1 `ctx.inject` 返回 Fiber → `stop()` 调 `fiber.dispose()`（修实现）；P3-2 T5 文档同步 `last-cost`；P3-3 T8 文档 `cost-v1.2`；P3-4/5 文档写明成本行延迟；P3-6 读方按 `cost-v1` 前缀匹配 + 测试。另 3 条（tokenGuard 源码不可复核、baseline 时间闸、其余小项）不改。
-- **测试**：全量 **234/234 通过**（`node --test "test/*.test.mjs"`；0.1.14 为 196；0.1.15 202；0.1.17 205；0.1.16 204；0.1.18 218；**0.2.0 收口 +16**：经 apply 集成①/①b、项目层 A+C 三拒、路径逃逸/64KB、`/cg set`×3、压力四段×3、guard.pressure、层级链、computePressure×2）。
-- **真机**：已安装（deps 14 / bundles 17 / redirect 0.1.0-context-zip / junction 已建）。v0.1.6 已验证工具/感知/审计；**v0.1.14 已于 21:18 重启加载**（`governance capability@apply version=0.1.14`、`get.compaction(strict=false)=undefined`）；v0.1.12 于 20:46 首次真实手动压缩验证 `auditVersion=cost-v1.2`（`tokensBefore=407146`/`tokensAfter=3525`、`tokensPruned=null`、`pruneCount=0`——手动 `compactNow` 不调 pruner）；**`prune-observed` 正路径仍未验**，需自动压力/溢出压缩。
+- **测试**：全量 **267/267 通过**（`node --test "test/*.test.mjs"`；0.2.1 收口 267；0.2.0 收口 234；0.1.18 218）。
+- **真机**：已安装（junction 指向源码）。**v0.2.1 已加载并验证**：窗口层回填生效，`/cg status` 出 `window: current=1M (session 58a2e845) observed=2026-10-25T03:30:05.241Z source=projection(backfilled)`、`native-current=0.6934(projection(backfilled))`（经 13,543 帧逐字核对）；`origin=f585434`（ahead 0），tag `v0.2.1` 本地+远端一致，素材在 `D:\DS-PROJECT\_backup\dsh-plugins-v0.2.1\`；**Release 未发**。
 - **T6/T7/T8**：均离线完成；真机验收项列在“下一步”。
 - **M1.3 原生后端验证（REQ-20261025-06，2026-10-25）**：隔离 profile `native-test`（web 模板、无 context-zip/redirect，端口 18765，已停）实跑——**D1-1 不通过**（原生下 `adapter=none`，根因 preset `isolate`；功能不受影响）；**D1-2/D1-4 通过**；**D1-3 手动链路通过、自动压力未触发**（≈678K tokens，记 backlog 等自然触发）；D1-5 隔离证据齐全。**0.1.15 已修**（`inferBackendFromStyles`：free-form→`host-basic (inferred)`、five-section→`context-zip (inferred)`、混合→`mixed (unverified)`；只进 `/cg status`/`adapter-inferred` 审计/`compaction-cost.backend`，新增 `backendInferred`，`auditVersion=cost-v1.3`；功能路径不读推断）；隔离实例复验 `/cg status` 显示 `adapter=none inferred=host-basic (inferred)`，全量 **202/202**。报告 `analysis/req-20261025-06/`；未安装/未重启桌面、未 push。
 - **M2 首批（REQ-20261025-09）**：**G1 通过**（agent 级 `agentPresets.serviceFor(agent,'compaction')=object`；`agentPresets` 约 2s 晚挂载；根级 `ctx.get('compaction')` absent 不阻塞；G2/G3 部分待 0.2.1）。**0.2.0 已交付**（`8275fb4`→`c6563d1`→`9a380ea`→`87134cd`→`e6d859b`）：四层合成、`/cg policy show`、`/cg set`、`/cg status` 的 policy/policy-invalid/policy-session/pressure 行、压力四段（只展示）、项目文件 A+C 加固；审核六项全修。**0.2.0 复核已出**（`docs/review-context-governance-0.2.0.md`：0 阻断/0 P2/9 P3），**P3 九条已闭环**（`analysis/req-20261025-09/P3-闭环记录.md`；全量 **240/240**）。**G4 已定并落档**（`e12d08a`：`DEC-PLUGIN-20261025-40`，窗口来源 = 宿主 `contextPressure.contextWindow`，真机 1,048,576 → native≈0.6934；配置仅回退；`DEC-20261025-66` 细化 `#lastSession`/中途重算/删除置 unknown/conservative=min/双显）。未安装/未重启/未 push。报告 `0.2.0-交付报告.md`、样例 `samples-0.2.0.txt`、G4 `G4-窗口来源结论.md`。
@@ -66,8 +66,7 @@ M1 成本“前后水位未知”原按降级接受，2026-10-25 复查为插件
 
 ## 下一步
 
-1. **审核复核 0.2.0**（`e6d859b` + 本轮 docs）：重点核对 ① 经 apply 的集成测试（真机链路等价）、② 项目层 A+C（整层拒绝/0.45 下限/路径与 64KB 闸）、压力四段只展示不压缩、`/cg set` 为**进程内**覆盖（0.2.0 不宣称按会话隔离）、`early=ready` 残留清零、本批未新增引擎引用（`src/` 仅存 M1 适配器探测 `compactNow`，`adapters.js` 未改）。
-2. **G4（窗口/native 来源）**：0.2.1 动工前必须给一句结论（当前 0.2.0 用 `policy.windowTokens/reservedTokens` 配置值算 native；需求建议在 G3 里试 `sessionProjections.contextPressure`）。
-3. **0.2.1 范围（未动工）**：`agentPresets.serviceFor(agent,'compaction')` 引擎接线、`early-channel`、冷却/增量门槛的实际判定；等 G4 + 0.2.0 复核通过。
-4. **真机安装/重启 0.2.0**：桌面实例仍 0.1.18（junction 指向源码），按红线需 00+用户批准后由用户执行；重启后验证 `/cg status` 的 `policy:`/`pressure:` 行、`/cg set compact.at=…`、项目 `.cg-policy.json` 生效与 `policy-invalid:` 可见性。
-5. 0.1.x 复核链已全部出结果（最新 `docs/review-context-governance-0.1.18.md`，0 阻断）；无遗留待复核版本。
+1. **0.2.1 已收口**：复核 P1=0/P2=0/P3=0，真机加载验证回填生效；Release 待用户批准（tag `v0.2.1` 已在本地+远端）。
+2. **M3（REQ-20261025-10）**：先做 T0 门禁——G-M3-1（`tools/pre-execute` + `ctx.tools.guard()` 真拦截）、G-M3-2（规则文件判定）、G-M3-3（header 注入顺序）；隔离实例用**方案 1**（临时工作区 + 正常 DSH_HOME，凭据不复制），跑完归档临时工作区会话。T2（header 默认开）待 T0 后做，`next()→undefined` 隐患已修。
+3. **0.2.2（提前压 + `/cg compact now`）**：等 M3 T0/T1 排期，不动。
+4. **0.2.3（成本账本，`cost-v1.4` 基线）**：随后。
