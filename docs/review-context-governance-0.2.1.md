@@ -151,6 +151,8 @@ node .tmp/probe-021.mjs           # 审核侧探针 8/8（.tmp 已 gitignore）
   1. 窗口恢复（1M）后 `/cg status` 仍显示 `policy-invalid: 1 (session/compact.at:native-uncomputable)`，`resolve()` 也仍带该条——**违反“W 恢复自动恢复可校验”**
   2. 恢复后再次退化，`set` 拒绝**不再写审计**（`alreadyReported` 读到旧条目；实测新增 0 条），审计跨 episode 永久丢事件
 - 修法建议：**不要 push 进 `policyState.invalid`**；用独立的 transient 记录“本 episode 已审计”，窗口恢复时清空；status 若要展示拒绝，用独立字段或随之清除。去重按“episode/用户动作”，不要按“进程内永久的 source|key|reason”。
+- **联动（00 2026-10-26 提醒）**：**P3-2 与 P2-3 同类**——`policy show` 的 `session:`/`policy-session:` 读的是原始 `sessionLayer.values`，被拒覆盖仍会显示。复验必须“status + show”一起看，避免“status 干净了但 show 还脏”。
+- **两条去重路径都要清**：① `apply` 里的 `windowViolations` Set（P3-7，over-native 运行时审计跨 episode 抑制）；② P3-11 的 `alreadyReported`（读 `policyState.invalid`，P2-3）。只修一处会留下另一半。
 
 ### P3-5 已闭环（顺带确认）
 `2f7e528` 已把证据 pattern 补全为 `compactNow|compactIfNeeded|compactRegion|ctx\.compaction|serviceFor|agentPresets`，`zero-compaction-grep.txt` 10 行、含 `adapters.js:266`；交付报告 §1 行 6 已更新 → **P3-5 关闭**。
