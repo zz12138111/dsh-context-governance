@@ -209,7 +209,7 @@ test('日期/规则注入不当成进度比例；助手正文里的比例可识�
     systemPrompt(0),
     agentInstructions(1, '规则：批次编号按 2026/10/25 归档。'),
     userMessage(2, '2026/10/25 的批次：已完成。'),
-    assistantText(3, '助手进度 6000/1200。'),
+    assistantText(3, '助手进度 6000/1200 项完成。'),
     userMessage(4, '最后一条用户消息：继续。'),
   ];
   const { snapshot } = reportFor({ before, summary: FREE_FORM_SUMMARY, start: 1, end: 3 });
@@ -266,7 +266,7 @@ test('0.1.14 反例：仅 8000/1500、无关键字 → skip，不得 pass/fail',
   assert.equal(check.reason, 'no-batch-semantics');
 });
 
-test('0.1.14 正例：批次 8000/1500 → 覆盖 pass / 不覆盖 fail', () => {
+test('0.1.14 正例作废（DEC-73）：批次 8000/1500 无单位 → skip(no-unit)', () => {
   const before = [
     systemPrompt(0),
     userMessage(1, '继续。'),
@@ -274,10 +274,24 @@ test('0.1.14 正例：批次 8000/1500 → 覆盖 pass / 不覆盖 fail', () => 
     assistantText(3, '收到。'),
     userMessage(4, '最后一条用户消息：继续。'),
   ];
+  const result = reportFor({ before, summary: '继续跑下一步。', start: 1, end: 3 });
+  const check = result.report.checks.find((item) => item.name === 'batch-list');
+  assert.equal(check.status, 'skip');
+  assert.equal(check.reason, 'no-unit');
+  assert.deepEqual(result.snapshot.batch?.ratios ?? [], [], '无单位不得成为 batch 候选');
+});
+
+test('0.1.14 正例（新口径）：批次 8000/1500 项完成 → 覆盖 pass / 不覆盖 fail', () => {
+  const before = [
+    systemPrompt(0),
+    userMessage(1, '继续。'),
+    userMessage(2, '批次 8000/1500 项完成，进行中。'),
+    assistantText(3, '收到。'),
+    userMessage(4, '最后一条用户消息：继续。'),
+  ];
   const covered = reportFor({ before, summary: '当前批次 8000/1500 已完成。', start: 1, end: 3 });
   assert.deepEqual(covered.snapshot.batch.ratios, ['8000/1500']);
   assert.equal(covered.report.checks.find((item) => item.name === 'batch-list').status, 'pass');
-
   const lost = reportFor({ before, summary: '继续跑下一步。', start: 1, end: 3 });
   assert.equal(lost.report.checks.find((item) => item.name === 'batch-list').status, 'fail');
 });
@@ -303,7 +317,7 @@ test('0.1.14 正文保留：{511/958} 可识别；JSON 载荷不参选', () => {
     before: [
       systemPrompt(0),
       userMessage(1, '继续。'),
-      userMessage(2, '批次进度 {511/958}，继续。'),
+      userMessage(2, '批次进度 {511/958} 项完成，继续。'),
       assistantText(3, '好。'),
       userMessage(4, '最后一条用户消息：继续。'),
     ],

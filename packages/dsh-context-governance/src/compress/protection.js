@@ -208,8 +208,17 @@ function batchMarkers(event) {
   // P2-4 第 2 条：模型回引 header 不得再被当成新进度。
   if (event.type === 'assistant/message' && /\[CG-MEMORY/i.test(text)) return null;
   const { ratios, dateLike } = extractRatios(text);
-  const keyword = BATCH_KEYWORD_RE.exec(text)?.[0]?.toLowerCase() ?? null;
+  const explicit = /\[batch\]/i.test(text);
+  const keyword = BATCH_KEYWORD_RE.exec(text)?.[0]?.toLowerCase() ?? (explicit ? 'batch' : null);
   if (keyword === null && ratios.length === 0) return null;
+  if (keyword === null) return { ratios, keyword: null, dateLike };
+  // P2-4 第 1 条（DEC-20261025-73 A）：比例须带语义单位或显式 [batch]；缺单位 → skip(no-unit)，不是 null。
+  if (!explicit && ratios.length > 0) {
+    const hasUnit = [...text.matchAll(RATIO_RE)].some((match) => (
+      /^\s*[}】)\]]*\s*(?:项|条|个|文件|任务|完成)/.test(text.slice(match.index + match[0].length))
+    ));
+    if (!hasUnit) return { ratios, keyword, dateLike, missingUnit: true };
+  }
   return { ratios, keyword, dateLike };
 }
 
@@ -267,7 +276,10 @@ export function snapshotProtection(session) {
     if (batchInfo !== null) {
       const statePath = (text.match(STATE_FILE_RE) ?? [])[0] ?? null;
       const candidate = { ...summarizeNode(event), ...batchInfo, statePath };
-      if (candidate.keyword === null) {
+      if (candidate.missingUnit === true) {
+        // P2-4：有比例+批次语义但缺语义单位 → 不算候选，skip(no-unit)。
+        batchRejected = candidate;
+      } else if (candidate.keyword === null) {
         // 有比例但没有批次语义：不算批次进度，只留最后一次做 skip 原因（no-batch-semantics）。
         batchRejected = candidate;
       } else if (batch === null || batch.ratios.length === 0 || candidate.ratios.length > 0) {
@@ -468,7 +480,7 @@ export function verifyProtection({
     if (snapshot.batchRejected !== null) {
       checks.push(check('batch-list', 'skip', 'progress ratio without batch semantics (批次/进度/progress/batch) in the same message; not treated as batch progress', {
         seqs: [snapshot.batchRejected.seq],
-        reason: 'no-batch-semantics',
+        reason: snapshot.batchRejected.missingUnit === true ? 'no-unit' : 'no-batch-semantics',
       }));
     } else {
       checks.push(check('batch-list', 'skip', 'no batch/progress marker on the captured surface'));

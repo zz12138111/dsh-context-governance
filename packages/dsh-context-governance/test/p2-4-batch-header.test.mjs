@@ -52,3 +52,14 @@ test('P2-4 真实状态仍可注入', () => {
   assert.match(header.text, /补 T0 headless 用例/);
   assert.ok(!header.text.includes('[preference·非硬规则]'));
 });
+
+test('P2-4 假阳性（新口径）：205/205 无单位、赶进度+测试数、tool/result 都不成候选', () => {
+  const fp1 = batchCandidate(userEvent('进度：205/205 测试通过'));
+  assert.equal(fp1 === null || fp1.missingUnit === true, true, '205/205 不得成为候选');
+  const fp2 = batchCandidate(userEvent('赶进度 205/205'));
+  assert.equal(fp2 === null || fp2.missingUnit === true, true, '赶进度 205/205 不得成为候选');
+  const toolMsg = { type: 'tool/result', data: { content: [{ type: 'text', text: '批次 3/8 项完成' }] } };
+  assert.equal(batchCandidate(toolMsg), null, 'tool/result 不参与');
+  const ok = batchCandidate(userEvent('批次 3/8 项完成'));
+  assert.deepEqual(ok?.ratios, ['3/8'], '真实进度入选');
+});
