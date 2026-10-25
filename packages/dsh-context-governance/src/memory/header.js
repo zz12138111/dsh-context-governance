@@ -33,8 +33,12 @@ function ageDays(entry, now) {
 }
 
 function lineOf(entry, old) {
-  const title = String(entry.title ?? '').trim().slice(0, 120);
-  return `- ${old ? '[Old] ' : ''}${entry.id} ${entry.type} ${title}`;
+  // P3（注入面）：标题里的换行/控制空白必须压成单空格——否则可伪造 header 行（例如塞一条假 [Note…]）。
+  const title = String(entry.title ?? '').replace(/\s+/g, ' ').trim().slice(0, 120);
+  const tags = [];
+  if (old) tags.push('[Old]');
+  if (entry.type === 'preference') tags.push('[preference·非硬规则]');
+  return `- ${tags.length > 0 ? `${tags.join(' ')} ` : ''}${entry.id} ${entry.type} ${title}`;
 }
 
 /**
@@ -89,16 +93,33 @@ export function buildMemoryHeader(store, options = {}) {
     picked.push({ entry, old });
   }
   if (picked.length === 0) return null;
+  // P2-3：某类不足时，空位让给 todo/decision（按时间序补足预算，不越过 maxLines）。
+  const leftover = maxLines - picked.length;
+  if (leftover > 0) {
+    const pickedIds = new Set(picked.map(({ entry }) => entry.id));
+    for (const entry of candidates) {
+      if (picked.length >= maxLines) break;
+      if (pickedIds.has(entry.id)) continue;
+      if (entry.type !== 'todo' && entry.type !== 'decision') continue;
+      const old = ageDays(entry, now) > oldAgeDays;
+      if (old && oldUsed >= oldLimit) continue;
+      if (old) oldUsed += 1;
+      picked.push({ entry, old });
+      pickedIds.add(entry.id);
+    }
+  }
   // 新条目在前，[Old] 统一排末尾
   picked.sort((left, right) => Number(left.old) - Number(right.old));
   const dropped = Math.max(0, candidates.length - picked.length);
 
   const mode = hasRuleFile ? 'state-only' : 'state-only+preference';
   const lines = [
-    `[CG-MEMORY · state-only · budget ${maxLines} lines]`,
+    `[CG-MEMORY · ${mode} · budget ${maxLines} lines]`,
     ...picked.slice(0, maxLines).map(({ entry, old }) => lineOf(entry, old)),
   ];
+  // 截断行在 Note 之前；P2-1 的固定冲突声明必须是**最后一行**。
   if (dropped > 0) lines.push(`conflicts: ${dropped} 条被配额截断`);
+  lines.push('[Note: If this state conflicts with AGENTS.md, follow AGENTS.md]');
   const text = lines.join('\n').slice(0, maxChars);
   return {
     text,
