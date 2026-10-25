@@ -2,12 +2,13 @@
  * T7 回放 fixture 提取器（离线、只读）。
  *
  * 从 DSH 的 `session.v4.jsonl.zstd`（多 zstd frame 追加）里取一个**真实压缩周期**，
- * 做结构保留、文本脱敏后写成 JSON fixture：
- * - 保留：事件 type/seq/time、compactionId、shadowedRange/shadowedSeqs、summary 分节标题、
- *   source.kind、usage 数字、checkpoint 事件、end 事件；
- * - 脱敏：所有 message 文本替换为 `[redacted:<原长度>]`，标题/路径/正文不落盘。
+ * 保留结构（事件 type/seq/time、compactionId 占位、shadowedRange/shadowedSeqs、usage 数字），
+ * 并对**所有字符串**做递归脱敏（不依赖 key 白名单）：
+ * - 含 CJK / 绝对路径（Windows 盘符、UNC、/usr|/home|…） / URL / 长 token 的整串 → `[redacted:N]`；
+ * - 其余字符串里的 `session-<uuid>` → `[session-id]`，裸 uuid → `[uuid]`；
+ * - 数字/布尔/结构不变。
  *
- * 用法：node analysis/t7/extract-replay-fixture.mjs <session.v4.jsonl.zstd> [outFile]
+ * 用法：node analysis/t7/extract-replay-fixture.mjs <session.v4.jsonl.zstd> [outFile] [--manual]
  */
 
 import fs from 'node:fs';
@@ -15,6 +16,68 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 
 const MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
+
+/** CJK 及全角标点（含日文假名、韩文、CJK 统一表意、兼容表意、全角块）。 */
+const CJK_RE = /[\u2e80-\u2fdf\u3000-\u303f\u3040-\u30ff\u3100-\u312f\u31a0-\u31bf\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\ufe30-\ufe4f\uff00-\uffef]/;
+/** Windows 盘符绝对路径、UNC。 */
+const ABS_PATH_RE = /(?:[A-Za-z]:[\\/]|\\\\[A-Za-z0-9._-]+[\\/])/;
+/** POSIX 绝对路径（常见根）。 */
+const POSIX_PATH_RE = /\/(?:usr|home|etc|var|tmp|opt|mnt|root|Users)\//;
+const URL_RE = /(?:https?|ftp|file):\/\/[^\s"'<>]+/i;
+const SESSION_SOURCE = 'session-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
+const UUID_SOURCE = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
+const SESSION_RE = new RegExp(SESSION_SOURCE, 'g');
+const UUID_RE = new RegExp(UUID_SOURCE, 'g');
+const SESSION_TEST_RE = new RegExp(SESSION_SOURCE);
+const UUID_TEST_RE = new RegExp(UUID_SOURCE);
+/** 长 token（base64/hex/长 id 片段）。 */
+const LONG_TOKEN_RE = /[A-Za-z0-9+/_=-]{64,}/;
+
+/** 一组字符串“按序拼起来”是否会组成敏感内容（token 数组绕过单串检查的根因）。 */
+function joinedLooksSensitive(items) {
+  const joined = items.join('');
+  if (joined === '') return false;
+  if (CJK_RE.test(joined) || ABS_PATH_RE.test(joined) || POSIX_PATH_RE.test(joined) || URL_RE.test(joined)) return true;
+  if (SESSION_TEST_RE.test(joined) || UUID_TEST_RE.test(joined) || LONG_TOKEN_RE.test(joined)) return true;
+  return false;
+}
+
+/** 大量短片段（stream/token 数组）：拼起来可能还原路径/正文，整组替换。 */
+function isFragmentStream(items) {
+  if (items.length < 20) return false;
+  const total = items.reduce((sum, item) => sum + item.length, 0);
+  return total / items.length <= 6;
+}
+
+function sanitizeString(raw) {
+  const text = String(raw);
+  if (text === '') return text;
+  if (CJK_RE.test(text) || ABS_PATH_RE.test(text) || POSIX_PATH_RE.test(text) || URL_RE.test(text) || LONG_TOKEN_RE.test(text)) {
+    return `[redacted:${text.length}]`;
+  }
+  return text.replace(SESSION_RE, '[session-id]').replace(UUID_RE, '[uuid]');
+}
+
+/** 递归脱敏：**所有字符串**都过一遍，不依赖 key 白名单。 */
+export function sanitizeDeep(value) {
+  if (typeof value === 'string') return sanitizeString(value);
+  if (Array.isArray(value)) {
+    if (value.length > 0 && value.every((item) => typeof item === 'string')) {
+      // 先看“原数组按序 join”是否敏感；token 数组/短片段流整组替换。
+      if (joinedLooksSensitive(value) || isFragmentStream(value)) {
+        return [`[redacted:${value.join('').length}]`];
+      }
+      return value.map((item) => sanitizeString(item));
+    }
+    return value.map((item) => sanitizeDeep(item));
+  }
+  if (value !== null && typeof value === 'object') {
+    const out = {};
+    for (const [key, child] of Object.entries(value)) out[key] = sanitizeDeep(child);
+    return out;
+  }
+  return value;
+}
 
 function decodeZstdFrames(buffer) {
   const offsets = [];
@@ -34,35 +97,8 @@ function decodeZstdFrames(buffer) {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-const REDACT_KEYS = new Set([
-  'text', 'title', 'detail', 'output', 'stdout', 'stderr', 'command', 'summary',
-  'prompt', 'description', 'content', 'arguments', 'query', 'message', 'messages',
-  'path', 'paths', 'file', 'files', 'cwd', 'root', 'workdir', 'url', 'body', 'input',
-  'oldText', 'newText', 'patch', 'diffs', 'diff', 'proposal', 'reason', 'note',
-]);
-
-function redactDeep(value, key) {
-  if (typeof value === 'string') return REDACT_KEYS.has(key) ? `[redacted:${value.length}]` : value;
-  if (Array.isArray(value)) return value.map((item) => redactDeep(item, key));
-  if (value !== null && typeof value === 'object') {
-    const out = {};
-    for (const [childKey, child] of Object.entries(value)) out[childKey] = redactDeep(child, childKey);
-    return out;
-  }
-  return value;
-}
-
-function redactContent(content) {
-  if (!Array.isArray(content)) return content;
-  return content.map((block) => {
-    if (block === null || typeof block !== 'object') return block;
-    if (typeof block.text === 'string') return { ...block, text: `[redacted:${block.text.length}]` };
-    return block;
-  });
-}
-
 function redactEvent(event) {
-  return { type: event.type, seq: event.seq, time: event.time, data: redactDeep(event.data ?? {}, 'data') };
+  return sanitizeDeep({ type: event.type, seq: event.seq, time: event.time, data: event.data ?? {} });
 }
 
 function main() {
@@ -122,11 +158,11 @@ function main() {
   const cycle = events.slice(chosen.startIndex, chosen.endIndex + 1).map(redactEvent);
   const checkpoint = cycle.find((event) => event.type === 'user/message' && event.data?.source?.kind === 'compact-checkpoint');
 
-  const fixture = {
+  const fixture = sanitizeDeep({
     meta: {
       source: path.basename(source),
       extractedAt: new Date().toISOString(),
-      note: 'real session/event sequence, texts redacted; structure preserved',
+      note: 'real session/event sequence, all strings recursively redacted; structure preserved',
       compactionId: chosen.id,
       manual: chosen.manual,
       synthetic: false,
@@ -140,11 +176,11 @@ function main() {
     preSurface: before,
     preMessages,
     events: cycle,
-  };
+  });
   const out = process.argv[3] ?? path.join('test', 'fixtures', 'replay-compaction.json');
   fs.mkdirSync(path.dirname(out), { recursive: true });
   fs.writeFileSync(out, `${JSON.stringify(fixture, null, 2)}\n`, 'utf8');
-  console.log(`wrote ${out}: ${cycle.length} events, shadowed=${shadowed.length}, preSurface=${fixture.preSurface.length}, preMessages=${preMessages.length}, id=${chosen.id}`);
+  console.log(`wrote ${out}: ${cycle.length} events, shadowed=${shadowed.length}, preSurface=${fixture.preSurface.length}, preMessages=${preMessages.length}`);
 }
 
 main();

@@ -46,3 +46,8 @@
 - 2026-10-25 · 复核 P2 修复：① `onlyProject`（默认 true，按 `session.header.cwd` 比对 projectRoot，外来会话忽略并计数，`/cg status` 有 `scope:` 行）② 隐私口径改正 + `captureTitle`（默认 true，false 只存通用标签与指针）③ Runbook §6 改为“只还原实际改过项”：manifest 只删本插件条目、patch/lock 默认不还原、junction 退出码断言、`.ignored` 取版本匹配副本、备份保留 3 份、回滚点记 ARTIFACTS ④ 版本单一来源：`PLUGIN_VERSION` 运行时读 package.json，测试/README/STATUS/Runbook 不再硬编码
 - 2026-10-25 · P3 顺手修：COMPAT-02（删 defineTool）、COMPAT-03（engines 与矩阵统一 `<0.2.2-0`）、COMPAT-05（readability 去死分支）、COMPAT-06（events=0 提示）、ROB-03（删 dispose 死兜底）、ROB-04（审计失败标注 this-process）、ROB-07（由 schema 契约覆盖）、ROB-08（格式）；其余 13 条保留并在 `docs/T7-复核修复-0.1.6.md` 写明原因
 - 2026-10-25 · 全量测试 **159/159**（新增 P1 5 + P2 5；版本断言改为读 `PLUGIN_VERSION`）
+- 2026-10-25 · 复核二轮阻断修复（v0.1.7）：fixture 脱敏改**递归所有字符串**（CJK/绝对路径/URL/session-uuid/长 token → 占位；字符串数组按 join 与短片段流整组替换，不依赖 key）；重生成两份 fixture，`analysis/t7/scan-fixture.mjs` 扫描 strings=4111/1851、violations=0，raw 无 CJK/19091/session-53ece2c2/DS-PROJECT；T7-R2 改递归+join+join-tight+raw 硬断言；回放 15/15 通过
+- 2026-10-25 · 复核二轮 P3：SPEC-05 `inject=['tools']`（commands 可选，缺服务仍 apply，只 warn）；ROB-10 README/契约写明“手改索引会被覆盖”；REQ-02 新增 `reinjection-shadowed` 审计（回注 seq 被下一次压缩 shadow 时记录，stats.reinjectionShadowed）；成本归属仍待需求定字段
+- 2026-10-25 · Runbook §6 收尾：改 manifest 前留 `.cg-bak-<时间戳>`、写后断言插件条目已消失；redirect 读取前 `Test-Path`；已含只删本插件条目/patch-lock 不还原/junction 退出码/.ignored 判据/备份保留 3 份/回滚点记录
+- 2026-10-25 · 已知风险落文件：ROB-01/06（一次 append 失败永久关停保护预写）写入 STATUS“已知风险”，列为 T8 第一项；本轮不修
+- 2026-10-25 · 全量测试 **161/161**（新增 SPEC-05 与 REQ-02 用例）

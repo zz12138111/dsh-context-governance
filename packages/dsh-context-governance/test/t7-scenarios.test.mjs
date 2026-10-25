@@ -427,3 +427,43 @@ test('S7 版本单一来源：PLUGIN_VERSION 等于 package.json，且源码不�
   const source = await fs.readFile(path.resolve(import.meta.dirname, '..', 'src', 'diagnostics.js'), 'utf8');
   assert.equal(/PLUGIN_VERSION\s*=\s*['"]\d/.test(source), false, 'PLUGIN_VERSION 仍有手写字面量');
 });
+
+test('REQ-02 回注被吞：下一次压缩 shadow 掉回注 seq → reinjection-shadowed 审计', async () => {
+  await withStore(async (store) => {
+    const ctx = makeCtx();
+    const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.3', store, logger: ctx.logger });
+    guard.start();
+    const built = buildCompaction({ before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 11 });
+    const session = liveSession(built);
+    runCycle(ctx, session, built);
+    await flush();
+    const [injected] = injectedOf(session);
+    assert.ok(injected, 'REQ-02 前置：本次没有回注');
+
+    // 第二次压缩把上一次回注 seq 包含进 shadowedSeqs
+    const built2 = buildCompaction({
+      compactionId: 'cmp-shadow',
+      startSeq: 300,
+      summarySeq: 301,
+      checkpointSeq: 302,
+      endSeq: 303,
+      before: healthyMessages(),
+      summary: FIVE_SECTION_SUMMARY,
+      start: 2,
+      end: 11,
+      shadowedSeqs: [injected.seq],
+    });
+    const session2 = liveSession(built2);
+    const handler = ctx.handlers[0].handler;
+    handler(session2, eventOf(built2, 'compaction/start'));
+    handler(session2, eventOf(built2, 'compaction/summary'));
+    await flush();
+    const audit = await readAudit(store);
+    const shadowed = audit.find((entry) => entry.event === 'reinjection-shadowed');
+    assert.ok(shadowed, 'REQ-02 失败：缺 reinjection-shadowed 审计');
+    assert.equal(shadowed.seq, injected.seq);
+    assert.equal(shadowed.compactionId, 'cmp-shadow');
+    assert.equal(guard.status.stats.reinjectionShadowed, 1);
+    guard.stop();
+  });
+});

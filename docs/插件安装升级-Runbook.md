@@ -232,8 +232,11 @@ $link = Join-Path $prof 'node_modules\dsh-context-governance'
 if (Test-Path $link) { cmd /c rmdir "$link"; if ($LASTEXITCODE -ne 0) { throw "删除 junction 失败: $link" } }
 if (Test-Path $link) { throw "junction 仍存在: $link" }
 
-# 2) manifest：只删本插件的 dependency + bundle（保留其它插件后来加的条目）
+# 2) manifest：先留 .bak，再只删本插件的 dependency + bundle（保留其它插件后来加的条目）
 $env:CG_PROFILE_JSON = Join-Path $prof 'package.json'
+$manifestBak = "$env:CG_PROFILE_JSON.cg-bak-$(Get-Date -Format yyyyMMdd-HHmmss)"
+Copy-Item $env:CG_PROFILE_JSON $manifestBak -Force
+Write-Host "manifest 已备份: $manifestBak"
 node -e @'
 const fs = require('node:fs');
 const file = process.env.CG_PROFILE_JSON;
@@ -249,16 +252,24 @@ if (Array.isArray(bundles) && bundles.includes('dsh-context-governance')) {
   removed.push('bundle');
 }
 fs.writeFileSync(file, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
-console.log('removed:', removed.join(',') || 'none');
+const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+const stillDependency = saved.dependencies && Object.hasOwn(saved.dependencies, 'dsh-context-governance');
+const stillBundle = Array.isArray(saved?.dsh?.profile?.bundles) && saved.dsh.profile.bundles.includes('dsh-context-governance');
+if (stillDependency || stillBundle) throw new Error('manifest 断言失败：dsh-context-governance 仍存在');
+console.log('removed:', removed.join(',') || 'none', '| assert: dsh-context-governance absent');
 '@
+if ($LASTEXITCODE -ne 0) { throw 'manifest 回滚失败；.bak 未丢失，可人工恢复' }
 
-# 3) redirect：只有当前值与备份不同才还原（相同说明本插件没动过它）
+# 3) redirect：先确认文件存在；只有当前值与备份不同才还原（相同说明本插件没动过它）
 $redirectDir = Join-Path $prof 'node_modules\@deepseek-ai\dsh-compaction-basic'
-$redirectVersion = (Get-Content (Join-Path $redirectDir 'package.json') -Raw -Encoding UTF8 | ConvertFrom-Json).version
+$redirectPkg = Join-Path $redirectDir 'package.json'
+if (-not (Test-Path $redirectPkg)) { throw "redirect 缺 package.json: $redirectPkg" }
+$redirectVersion = (Get-Content $redirectPkg -Raw -Encoding UTF8 | ConvertFrom-Json).version
 if ($redirectVersion -ne '0.1.0-context-zip') {
   New-Item -ItemType Directory -Force $redirectDir | Out-Null
   Copy-Item (Join-Path $backup 'dsh-compaction-basic\*') $redirectDir -Recurse -Force
-  $redirectVersion = (Get-Content (Join-Path $redirectDir 'package.json') -Raw -Encoding UTF8 | ConvertFrom-Json).version
+  if (-not (Test-Path $redirectPkg)) { throw "还原后 redirect 缺 package.json: $redirectPkg" }
+  $redirectVersion = (Get-Content $redirectPkg -Raw -Encoding UTF8 | ConvertFrom-Json).version
 }
 if ($redirectVersion -ne '0.1.0-context-zip') { throw "redirect 版本不对: $redirectVersion" }
 

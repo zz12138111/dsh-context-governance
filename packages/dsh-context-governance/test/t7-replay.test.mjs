@@ -113,24 +113,30 @@ test('T7-R1 真实压缩回放：start/summary/checkpoint/end 全程无抛错，
   }
 });
 
-test('T7-R2 fixture 已脱敏：文本只剩 [redacted:N]，无原始消息内容', async () => {
-  const fixture = await loadFixture();
-  const raw = await fs.readFile(FIXTURE, 'utf8');
-  assert.ok(raw.length > 0);
-  assert.equal(raw.includes('"text": "'), true, 'redacted marker must be present');
-  const allowed = /^\[redacted:\d+\]$/;
-  const walk = (value, trail) => {
-    if (Array.isArray(value)) { value.forEach((item, index) => walk(item, `${trail}[${index}]`)); return; }
-    if (value === null || typeof value !== 'object') return;
-    for (const [key, child] of Object.entries(value)) {
-      if (key === 'text' && typeof child === 'string') assert.match(child, allowed, `unredacted text at ${trail}.text`);
-      walk(child, `${trail}.${key}`);
+test('T7-R2 fixture 已脱敏：递归所有字符串 + join 整串 都无 CJK/路径/会话 id/URL', async () => {
+  const files = [FIXTURE, path.join(path.dirname(FIXTURE), 'replay-compaction-manual.json')];
+  const { scanFixture, collectStrings, FORBIDDEN } = await import('../../../analysis/t7/scan-fixture.mjs');
+  for (const file of files) {
+    const result = scanFixture(file);
+    assert.equal(result.violations.length, 0, `${path.basename(file)} 泄漏：\n${result.violations.join('\n')}`);
+    assert.ok(result.strings > 0, `${path.basename(file)} 没有可扫描字符串`);
+
+    const fixture = JSON.parse(await fs.readFile(file, 'utf8'));
+    assert.equal(fixture.meta.note.includes('redacted'), true);
+    assert.ok(Array.isArray(fixture.preMessages) && fixture.preMessages.length > 0);
+
+    const strings = collectStrings(fixture).map((entry) => entry.value);
+    const joined = strings.join('\n');
+    const joinedTight = strings.join('');
+    for (const [label, pattern] of FORBIDDEN) {
+      if (label === 'long-token') continue; // 正常枚举值相连可能触发，单串层面已查
+      assert.equal(pattern.test(joined), false, `${path.basename(file)} join 后出现 ${label}`);
+      assert.equal(pattern.test(joinedTight), false, `${path.basename(file)} join-tight 后出现 ${label}`);
     }
-  };
-  walk(fixture, 'fixture');
-  assert.equal(fixture.meta.note.includes('redacted'), true);
-  assert.ok(Array.isArray(fixture.preMessages) && fixture.preMessages.length > 0);
-  for (const needle of ['DS-PROJECT', 'C:\\\\Users', '19091', 'AGENTS.md']) {
-    assert.equal(raw.includes(needle), false, `fixture leaks ${needle}`);
+    // 审核点名的真实会话 id / 工作区路径不得出现（raw 文本复检）
+    const raw = await fs.readFile(file, 'utf8');
+    for (const needle of ['session-53ece2c2', '19091', 'DS-PROJECT', 'AGENTS.md']) {
+      assert.equal(raw.includes(needle), false, `${path.basename(file)} leaks ${needle}`);
+    }
   }
 });

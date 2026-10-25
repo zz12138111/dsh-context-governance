@@ -1,6 +1,6 @@
 {
   "name": "dsh-context-governance",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "private": true,
   "license": "MIT",
   "description": "上下文治理（M1）：任务态记忆文件 + 压缩前后不断线。零硬依赖薄治理层，压缩沿用宿主或 context-zip。",

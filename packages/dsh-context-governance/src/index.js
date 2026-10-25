@@ -23,8 +23,12 @@ import { MEM_QUERY_NAME, MEM_WRITE_NAME, registerMemoryTools } from './tools/mem
 
 export const name = 'dsh-context-governance';
 
-/** 本插件消费宿主工具面与命令面；压缩服务不可作为硬依赖（本机实测会 pending）。 */
-export const inject = ['tools', 'commands'];
+/**
+ * 只把 `tools` 作为硬依赖：记忆工具必须有工具面。
+ * `commands` 仅用于 `/cg status`，走可选探测（`ctx.get('commands')`）——缺它时插件照常 apply，
+ * 只是不注册命令、留一条 warn（SPEC-05：硬 inject 会让插件直接 inactive）。
+ */
+export const inject = ['tools'];
 
 export const DEFAULT_CONFIG = Object.freeze({
   enabled: true,

@@ -9,8 +9,9 @@ import test from 'node:test';
 
 import { CompressionGuard } from '../src/compress/runtime.js';
 import { buildProtectionItems } from '../src/compress/protection-memory.js';
-import { resolveConfig } from '../src/index.js';
+import { apply, inject, resolveConfig } from '../src/index.js';
 import { MemoryStore } from '../src/memory/store.js';
+import { MEM_QUERY_NAME, MEM_WRITE_NAME } from '../src/tools/mem-tools.js';
 import { buildProtectionSnapshotFixture } from './p2-helpers.mjs';
 import { tempDir } from './helpers.mjs';
 
@@ -139,4 +140,26 @@ test('P2-2：默认 captureTitle 开启；配置非法布尔直接拒绝', () =>
   assert.equal(resolveConfig({ captureTitle: false }).captureTitle, false);
   assert.throws(() => resolveConfig({ captureTitle: 'yes' }), /captureTitle must be a boolean/);
   assert.throws(() => resolveConfig({ onlyProject: 1 }), /onlyProject must be a boolean/);
+});
+
+test('SPEC-05：commands 不再是硬 inject；缺命令服务仍 apply，只跳过 /cg status', async () => {
+  assert.deepEqual(inject, ['tools']);
+  const rootDir = await tempDir();
+  const registered = [];
+  const warnings = [];
+  const disposers = [];
+  const ctx = {
+    tools: { register: (definition) => registered.push(definition.name) },
+    logger: { info: () => {}, warn: (...args) => warnings.push(args.join(' ')) },
+    get: () => undefined, // 没有 commands 服务
+    effect: (callback) => { disposers.push(callback()); },
+  };
+  try {
+    await apply(ctx, { projectRoot: rootDir, project: 'test-project', compression: { enabled: false } });
+    assert.deepEqual(registered, [MEM_WRITE_NAME, MEM_QUERY_NAME]);
+    assert.ok(warnings.some((warning) => warning.includes('/cg status was not registered')));
+  } finally {
+    for (const dispose of disposers) await dispose();
+    await fs.rm(rootDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }).catch(() => {});
+  }
 });

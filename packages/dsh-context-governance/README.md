@@ -96,7 +96,7 @@ config:
 
 ```
 <projectRoot>/<memoryRoot>/
-├─ MEMORY.md      派生索引（一行一条，不手改）
+├─ MEMORY.md      派生索引（一行一条，不手改；手改会在下次写入时被覆盖）
 ├─ .writer.json   进程间写者锁
 ├─ audit.jsonl    审计（T4 起；只写元数据，不写正文）
 ├─ protection/    压缩前同步落盘的保护 journal（物化成功后清理）

@@ -132,6 +132,7 @@ export class CompressionGuard {
   #onlyProject = false;
   #captureTitle = true;
   #foreignSessions = new Set();
+  #lastInjection = new Map();
   #stats = {
     events: 0,
     starts: 0,
@@ -154,6 +155,7 @@ export class CompressionGuard {
     readOnlyRecoveries: 0,
     ignoredForeignEvents: 0,
     unattributedEvents: 0,
+    reinjectionShadowed: 0,
   };
 
   constructor(options = {}) {
@@ -706,6 +708,10 @@ export class CompressionGuard {
       const appended = session.append('user/message', message, { surfaceOp: 'append' });
       state.reinjection = { status: 'injected', seq: appended?.seq ?? null, lines: lines.length };
       this.#stats.reinjections += 1;
+      if (state.sessionId !== null && appended?.seq !== undefined) {
+        // REQ-02：记住本次回注 seq，下一次压缩若把它 shadow 掉就记 `reinjection-shadowed`。
+        this.#lastInjection.set(state.sessionId, { seq: appended.seq, cycle: state.compactionId });
+      }
       this.#auditEvent('reinjection', {
         sessionId: state.sessionId,
         compactionId: state.compactionId,
@@ -856,6 +862,20 @@ export class CompressionGuard {
           const text = summaryTextOf(event);
           state.summaryText = text;
           state.summaryReadable = text.trim() !== '';
+          // REQ-02：上一次回注的指针被本次压缩 shadow 掉 → 记“回注被吞”。
+          const shadowedSeqs = Array.isArray(event?.data?.shadowedSeqs) ? event.data.shadowedSeqs : [];
+          const lastInjection = state.sessionId === null ? undefined : this.#lastInjection.get(state.sessionId);
+          if (lastInjection !== undefined && shadowedSeqs.includes(lastInjection.seq)) {
+            this.#lastInjection.delete(state.sessionId);
+            this.#stats.reinjectionShadowed += 1;
+            this.#auditEvent('reinjection-shadowed', {
+              sessionId: state.sessionId,
+              compactionId: id,
+              seq: lastInjection.seq,
+              cycle: lastInjection.cycle,
+              reason: 'shadowed-by-next-compaction',
+            });
+          }
           this.#adapter = applySummaryObservation(this.#adapter, text);
           this.#adapter = runSelfCheck({
             adapter: this.#adapter,

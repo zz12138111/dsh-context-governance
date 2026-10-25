@@ -62,6 +62,7 @@ export const AUDIT_EVENTS = Object.freeze([
   'reinjection-skipped',
   'reinjection-failed',
   'reinjection-budget',
+  'reinjection-shadowed',
   'manual-compaction-loss',
   'duplicate-cycle-start',
   'cycle-interrupted',

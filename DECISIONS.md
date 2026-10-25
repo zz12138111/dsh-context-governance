@@ -160,3 +160,16 @@
 - 选择：`onlyProject` 默认 true，按 `session.header.cwd`（退回 `session.cwd`）与 `projectRoot` 归一化比较，不匹配则忽略并计数（cwd 缺失则放行但计入 `unattributedEvents`）；`captureTitle` 默认 true，false 时保护项只写通用标签 + 指针，不写首行/路径；README 隐私口径改成“首行 ≤200 + 指针，凭据拒写”。
 - 影响：默认行为更保守（不串项目）；关标题后详情只能靠 `mem_query` 回原文；`/cg status` 增加 `scope:` 行。版本 `0.1.6`。
 - 关联：`src/compress/runtime.js`、`src/compress/protection-memory.js`、`src/commands/cg-status.js`、`README.md`、`docs/T7-复核修复-0.1.6.md`；状态：active。
+## DEC-PLUGIN-20261025-21 [tech] fixture 脱敏不依赖 key：递归所有字符串 + 字符串数组按 join 判定
+
+- 背景：二轮复核发现 `data.stream[].args[]`/`texts[]` 的短片段按序 join 能还原正文/路径/会话 id；旧实现按 key 白名单脱敏，T7-R2 只查 `key=text`，因此“深度脱敏”不成立。
+- 选择：`extract-replay-fixture.mjs` 的 `sanitizeDeep` 对所有字符串做正则脱敏（CJK/盘符与 UNC 绝对路径/POSIX 常见根/URL/长 token → 占位；session-uuid/uuid → 占位）；字符串数组先 join 判断敏感或为短片段流时整组替换；独立 `scan-fixture.mjs` 做“递归字符串 + join(带/不带分隔符) + raw”三层扫描，T7-R2 复用同一判据。
+- 影响：fixture 仍保留 seq/结构/usage，但 token/stream 内容只剩占位；回放功能 15/15 不受影响；fixture 约 570KB/475KB。
+- 关联：`analysis/t7/extract-replay-fixture.mjs`、`analysis/t7/scan-fixture.mjs`、`test/t7-replay.test.mjs`；状态：active。
+
+## DEC-PLUGIN-20261025-22 [tech] `commands` 移出硬 inject；新增 `reinjection-shadowed` 审计
+
+- 背景：SPEC-05 指出 `inject=['tools','commands']` 缺 commands 时插件直接 inactive；REQ-02 明确要求“回注被吞”审计。
+- 选择：`inject=['tools']`，`/cg status` 用 `ctx.get('commands')` 可选注册（已有 `registered:false` 降级）；`CompressionGuard` 记住每次回注 seq，在下一次 `compaction/summary` 检查 `shadowedSeqs`，命中即写 `reinjection-shadowed`（sessionId/compactionId/seq/cycle/reason）并计数。
+- 影响：缺 commands 不再阻断插件；回注被吞可审计。成本归属审计仍未实现，需需求定义字段（不自行标“未列”）。
+- 关联：`src/index.js`、`src/compress/runtime.js`、`src/audit.js`、`test/t7-p2.test.mjs`、`test/t7-scenarios.test.mjs`；状态：active。
