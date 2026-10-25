@@ -160,12 +160,17 @@ node --test "test/*.test.mjs"          # 290/290 pass
 | ③ logger（`3179ddf`） | **通过** | `#logger = ctx.logger`（`index.js:500` 传入）→ 不进 `governance.log` 属**设计**；新增 `diagnosticsLogFile` 落点（只记 names + compactionId，<200 字符），单测覆盖；README/T5 已同步 |
 | ④ audit（`629a3a0`） | **不通过（`messagesLength`）** | `messagesLength: 1` 是 `index.js` 里的**硬编码常量**，不读决策数组，不随基线变化——无法证明“注入形态”，也回答不了 T3 的原始证据缺口 |
 
-### 9.1 对第 4 步的两条决定
+### 9.1 对第 4 步的两条审核结论
 
-1. **`messagesLength` 不可接受，改为真实差值**：`onInjected` 目前只收到 `header`，拿不到决策消息数组。建议把 `onInjected` 扩为 `(header, { messagesBefore, messagesAfter })`（`header.js` 里两值现成），审计写 `injected = messagesAfter - messagesBefore`（0/1），或直接记 `messagesBefore`/`messagesAfter` 两个字段。无候选时不会触发 `onInjected`，`injected=0` 由“无该事件”表达，与 T3 口径一致。
-2. **`textHash` 改为不做（00 定，2026-10-26）**：sha256 前 8 位 = 32 bit，对低熵文本（header 来自少量记忆标题）持有候选者可验证猜测；只够会话内去重、不适合作标识。而 `injected=0|1` + `messagesBefore/After` + `count=N` 已能回答“注没注、注了几条”，内容一致性当前无真实需求。**结论：第 4 步不做 header hash**——需移除 `header.js` 的 `createHash`/`textHash`、`audit.js` 白名单的 `textHash`、`index.js` 的 `textHash` 写入及对应测试断言；保留 `injected`/`messagesLength` 的真实差值。若将来确有需要，用 HMAC/加盐并明确仅内部使用。
+1. **`messagesLength` 不可接受，改为真实差值**：`onInjected` 目前只收到 `header`，拿不到决策消息数组。应把 `onInjected` 扩为 `(header, { messagesBefore, messagesAfter })`（`header.js` 里两值现成），审计写 `injected = messagesAfter - messagesBefore`（0/1），或直接记 `messagesBefore`/`messagesAfter` 两个字段。无候选时不会触发 `onInjected`，`injected=0` 由“无该事件”表达，与 T3 口径一致。
+2. **审核结论：不做 header hash**（本记录的判断，非转述）。理由：
+   - **无消费者**：注入形态由 `injected=0|1`（或 `messagesBefore/After`）+ `count=N` + `tokensInjected` 已能完整回答“注没注、注了几条、多大”；内容一致性当前没有真实需求。
+   - **32 bit + 低熵**：sha256 前 8 位对低熵文本（header 来自少量记忆标题）可被持有候选文本者验证猜测，只够会话内去重、不适合作标识。
+   - **少一个字段少一条边界**：删除比“限定内部使用”更省事，也避免 audit 被带出本机时多一处可确认信息。
+   - 将来确有“内容一致性”需求时：用 **HMAC（每安装盐）** 取 8–16 位，并在文档写明仅内部。
+   - **开发执行清单**：移除 `header.js` 的 `createHash`/`textHash`、`audit.js` 白名单的 `textHash`、`index.js` 的 `textHash` 写入、测试里对 `textHash` 的断言；保留 `messagesLength` → 真实差值。
 
-### 9.1.1 文档补句（00 要求）
+### 9.1.1 文档补句（供 T5/README 引用）
 
 写入 T5/README：「**audit 是权威记录，warn 只是提示**；保护失败的持久证据是 `manual-compaction-loss`（带 `failures`），日志不是唯一观测点。」
 
