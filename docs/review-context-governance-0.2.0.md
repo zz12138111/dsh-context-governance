@@ -171,3 +171,22 @@ node .tmp/probe-020.mjs              # 审核侧独立探针 27/27（.tmp 已 gi
 **Q2 `self-check-failed(error)`**：适配器自检的 `compaction-service` 检查失败（detail `no usable ctx.compaction provider`）——宿主没挂 `ctx.compaction`（audit `get.compaction=absent`、日志 `compaction-service=absent(token=compaction)`、`warning=provider-unavailable`）。**M1 起既有**：0.1.18 的 `cg-status.js` 同样有 conflicts 行、同样的自检，同样会打印这条；`selectMode` 对 `kind='none'` 显式特判为 `event-level`（`selection.js:97-105`），因此不是降级、也不是 0.2.0 回归。另：代码里 conflict code 是连字符（`self-check-failed`、`backend-version-unverified`），真机粘贴里是点号，属转写差异。
 
 **Q3 `summary=unknown/unknown`**：取自适配器字段——`kind='none'` 时固定 `unknown`，与“是否压过”无关；0.1.18 真机同样是 `unknown/unknown`（见 0.1.18 复核报告 §2.2），不是 0.2.0 新逻辑。只有真正观察到压缩摘要后才会变 `readable|partial|unreadable` + `five-section|free-form`（`runtime.js:1445 applySummaryObservation`）。**但** dev 的 `samples-0.2.0.txt` 写 `adapter=none … summary=readable/free-form` 且 `conflicts: none`，与代码/真机矛盾，落 P3-9。
+
+
+## 9. P3 闭环预检（2026-10-26 00:4x，复核提交 `d4d680d`，测试快照 `ae34f34`）
+
+预检口径：`git archive ae34f34` 快照内全量 **240/240**；P3-8 用真机同形 `14990B/42 行` 文件独立复跑（不看开发单测）；P3-2/3/5/6 在快照代码上跑端到端。
+
+| 编号 | 状态 | 复核证据 |
+|---|---|---|
+| P3-1 使用说明声称未实现功能 | **部分闭环（需再修）** | v0.3 顶部新增版本可用性矩阵（0.2.0 只有 status/policy show/set）✔；但正文仍在声称：`:42` “装完即生效，默认已开启提前压”、`:54` “`/cg set compact.at=0.5` → **本会话**改成 50% 就压”、`:55/61` 列 `/cg cost`、`/cg compact now` 无行内版本标记、`:136/138` FAQ 仍以其为已实现；`docs/M2-使用说明-草案-v0.1.md` 整份未动（`:21` 每个会话单独设定、`:30` 装完即生效、`:42` 本会话、`:43/49` 两个未实现命令），也无“已被 v0.3 取代”标记。**未满足“不再声称已实现”** |
+| P3-2 `/cg set` 被配置层遗留 unacked 误挡 | 已闭环 | 快照实测：插件层 `at=0.25`（unacked，policy-invalid 在）时 `/cg set compact.early=off` **成功**；代码只判 `source==='session'` 的 unacked，报错文案用 `next/previous` 回退值 |
+| P3-3 压力行不带窗口 | 已闭环 | 实测 `pressure: … ratio=1.46 window=1.00M at=0.52 effective<at`；`formatWindow` 输出 `1.00M/256k` |
+| P3-4 containment 词法层 | 已闭环（文档） | README/T5 均补“词法层，不解析 junction/symlink” |
+| P3-5 交付报告写有 `list` | 已闭环 | 交付报告 §1 改为“空参（`set show`、`set list` 同义）/ `reset`”；`/cg set list` 已作为别名实现 ✔ |
+| P3-6 重复键 last-wins | 已闭环 | 实测 `set compact.at=0.5 compact.at=0.4` → 报错“重复键 compact.at（一条命令里每个键只能设一次）” |
+| P3-7 改项目文件需重启未写 | 已闭环 | README/T5 §1.2 已补“只在 `apply` 读一次：改文件后需重启插件才生效” |
+| P3-8 `audit size=` 是本进程写入量 | 已闭环 | `audit.js` 三处 `#sizeBytes = 0` → `null`（getter 真 stat；轮转/追加后重新 stat）。**独立复跑**：真机同形 42 行/14990B → `sizeBytes=14990`，追加后 15059=真实；65500B 历史文件 + 69B 追加 → `rotations=1`、当前文件 69B（旧代码从 0 起算不会轮转）。开发 3 条单测覆盖“历史大小/追加/跨 64KB 轮转” |
+| P3-9 样例不可复现 | 已闭环（标注法） | `samples-0.2.0.txt` 首行加 `# sample: 示意/裁剪，非实跑（mock guard；真机 adapter=none 时 summary=unknown/unknown、conflicts 非空）` |
+
+**结论**：8/9 已闭环；**P3-1 部分闭环**（v0.3 顶部矩阵到位，正文与 v0.1 仍含旧声称）。建议：v0.3 §3 标“0.2.1 起”、§4 命令表加版本列或行内“计划”、`本会话改成` 改“进程内覆盖（重启失效，不按会话隔离）”；`v0.1` 顶部标“已被 v0.3 取代”或删除。
