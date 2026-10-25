@@ -7,7 +7,7 @@
 
 | 会话 | 当前任务 | 状态 |
 |---|---|---|
-| 需求 | M1.1 T2′ 完成（0.1.12）；M1.2 冻结 0.1.11；**0.1.13 已出单**（batch 假阳性 + `get.compaction` 归因）；M2 待真实压缩验证后评估 | 已出单 |
+| 需求 | M1.1 T2′ 完成（0.1.12）；M1.2 冻结 0.1.11；0.1.13 已出单并离线完成；**0.1.14 已出单**（batch 比例同源修正：P2 + P3① + P3②）；M2 待真实压缩验证后评估 | 已出单 |
 | 开发 | **0.1.13 离线完成**（batch 判据收窄 + strict=false 归因）；0.1.12 已加载并完成首次真实手动压缩验证；未安装/未重启/未 push | 待审核 |
 | 审核打包 | 0.1.12 复核已出：0 阻断 / 0 P2 / 6 P3；**0.1.13 待复核** | 待复核 |
 
@@ -64,3 +64,4 @@ M1 成本“前后水位未知”原按降级接受，2026-10-25 复查为插件
 5. T2′ 已实现；审核复核时**必须核对“生产代码无折叠”**（`packages/` 内无 fold/spill/`[cg-fold]`/`fold.*`；证据 `analysis/t2prime/zero-fold-grep.txt`）。
 6. 重启验收后：`ctx.compaction` 在本部署仍不可得（apply/ready 的 `get.compaction` 均 absent），**不再按“可得”评估回注时点**；0.1.13 已实现 `ctx.get('compaction', false)`（`obj`=有 impl 未 active / `undefined`=本 scope 未提供 / 不支持=`unknown`），真机取值待重启后 `capability@apply` 行确认，再决定 P1 是否具备前提。M2 待 M1.2 验收后评估。
 7. **0.1.13（`REQ-20261025-04`）**：batch 假阳性真修（只看用户/助手消息、`ratios=[]` → `skip`、补 `x/y` 回归）+ `get.compaction` strict=false 归因；不改折叠/回注、`auditVersion` 维持 `cost-v1.2`。**开发已交付**（189/189；报告 `analysis/req-20261025-04/`），待审核复核；未安装/未重启/未 push。
+8. **0.1.14（`REQ-20261025-05`）**：batch 比例**同源修正**——P2 比例须同消息带批次语义（默认只取 `user/message`）、P3① `YYYY/MM` 排除、P3② 正文比例不被 `stripStructuredPayload` 吞；判据原则**宁可 skip 不可 fail**；验收必须真实快照 A/B（`0.1.12 seq=11479`、`0.1.13 seq=11453` 两例均不得再 fail）。P3③/④/⑤ 不纳入。
