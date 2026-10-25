@@ -42,6 +42,9 @@ export const AUDIT_FIELD_WHITELIST = Object.freeze({
   entries: 'number',
   omitted: 'number',
   lines: 'number',
+  /** 0.2.2：header 注入审计的可复核字段（不写正文）。 */
+  messagesLength: 'number',
+  textHash: 'text',
   mode: 'text',
   adapter: 'text',
   backend: 'text',

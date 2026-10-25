@@ -11,7 +11,7 @@
  * - 不改 surface，仅在 `agent/pre-step` 决策消息前插入一条 user 消息。
  */
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 export const MEMORY_HEADER_SOURCE_KIND = 'plugin:context-governance';
 export const MEMORY_HEADER_FORM = 'memory-header';
@@ -126,6 +126,7 @@ export function buildMemoryHeader(store, options = {}) {
   const text = lines.join('\n').slice(0, maxChars);
   return {
     text,
+    textHash: createHash('sha256').update(text).digest('hex').slice(0, 8),
     ids: picked.map(({ entry }) => entry.id),
     mode,
     count: picked.length,

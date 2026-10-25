@@ -178,6 +178,8 @@ test('p50/p95：偶数/奇数样本与空样本', () => {
 test('审计字段白名单：未知字段/正文/标题被丢弃，敏感字符串被替换', () => {
   assert.ok(AUDIT_FIELD_WHITELIST.sessionId);
   assert.equal(AUDIT_FIELD_WHITELIST.title, undefined);
+  assert.equal(AUDIT_FIELD_WHITELIST.messagesLength, 'number');
+  assert.equal(AUDIT_FIELD_WHITELIST.textHash, 'text');
   const sanitized = sanitizeAuditDetails({
     sessionId: 'session-1',
     compactionId: 'cmp-1',

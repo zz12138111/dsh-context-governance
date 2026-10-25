@@ -596,6 +596,8 @@ export async function apply(ctx, rawConfig = {}) {
         mode: built.mode,
         source: 'memory',
         tokensInjected: Math.ceil(built.text.length / 4),
+        messagesLength: 1,
+        textHash: built.textHash ?? null,
       });
     },
   });

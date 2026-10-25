@@ -3,8 +3,12 @@
  * 用轻量 fake store（只依赖 allEntries）把条目时间完全控制在测试里。
  */
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 
+import { AuditLog } from '../src/audit.js';
 import { createStatusCommand } from '../src/commands/cg-status.js';
 import { buildPolicyState, resolveConfig } from '../src/index.js';
 import { buildMemoryHeader, registerMemoryHeader } from '../src/memory/header.js';
@@ -102,6 +106,7 @@ test('T2 header-injected：五个字段都有真实值，mode 区分两形态', 
     assert.ok(built.count > 0);
     assert.equal(built.ids.length, built.count);
     assert.ok(built.text.length > 0);
+    assert.match(built.textHash, /^[0-9a-f]{8}$/, 'textHash 必须是 8 位 hex（审计可复核，不含正文）');
     assert.ok(Math.ceil(built.text.length / 4) > 0, 'tokensInjected 估算必须 > 0');
   }
 });
@@ -192,4 +197,25 @@ test('T2 复验④：\\r\\n 与全角空格也被压平，只多 1 行且无假 
   assert.equal(entryLines.length, 1);
   assert.match(entryLines[0], /line1 line2 \[Note: fake\]/);
   assert.equal(lines[lines.length - 1], '[Note: If this state conflicts with AGENTS.md, follow AGENTS.md]');
+});
+
+test('T2 header 审计：messagesLength/textHash 落盘且不含正文', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cg-header-audit-'));
+  const file = path.join(dir, 'audit.jsonl');
+  const audit = new AuditLog({ file });
+  assert.equal(audit.append('header-injected', {
+    count: 2,
+    lines: 2,
+    mode: 'state-only',
+    source: 'memory',
+    tokensInjected: 53,
+    messagesLength: 1,
+    textHash: 'ab12cd34',
+  }), true);
+  const raw = await fs.readFile(file, 'utf8');
+  const entry = JSON.parse(raw.trim().split('\n').at(-1));
+  assert.equal(entry.messagesLength, 1);
+  assert.equal(entry.textHash, 'ab12cd34');
+  assert.equal(entry.title, undefined, '不得写正文/标题');
+  await fs.rm(dir, { recursive: true, force: true });
 });
