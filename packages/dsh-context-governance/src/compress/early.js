@@ -1,0 +1,88 @@
+/**
+ * 0.2.2 提前压执行骨架（DEC-20261025-79）——**只做判断/封装/失败处理，默认不执行**。
+ *
+ * 安全约束（G2 已确认）：
+ * - `compactNow` 在非 idle 时抛 `ManualCompactionError('busy')`；
+ * - 因此只在“turn 已结束 + agent idle”时调用，**turn 中不试探**；
+ * - 执行开关默认关（`armed=false`），等真机窗口验过 safe timing 再打开。
+ *
+ * 本模块不订阅事件、不改 surface、不写记忆；调用方（未来 0.2.2 接线）负责提供
+ * “turn 是否结束 / agent 是否 idle”这两个事实，本模块不猜。
+ */
+
+export const EARLY_SKIP_REASONS = Object.freeze({
+  DISABLED: 'disabled',
+  NOT_IDLE: 'not-idle',
+  NO_ENGINE: 'no-engine',
+  BUSY: 'busy',
+  FAILED: 'failed',
+});
+
+/** G2：CompactNow 抛错形态识别（不依赖具体错误类，宿主可能跨包实例化）。 */
+export function isBusyCompactionError(error) {
+  if (error === null || typeof error !== 'object') return false;
+  const name = String(error.name ?? '');
+  const code = String(error.code ?? '');
+  const message = String(error.message ?? '');
+  return name === 'ManualCompactionError' && /busy/i.test(message)
+    || code === 'BUSY'
+    || /not\s+idle|busy/i.test(message) && /compaction/i.test(message);
+}
+
+/**
+ * 提前压执行器（骨架）。默认 armed=false → 任何调用都只返回 disabled，不触碰引擎。
+ */
+export class EarlyCompactor {
+  #getEngine;
+  #logger;
+  #armed;
+
+  constructor({ getEngine, logger = null, armed = false } = {}) {
+    this.#getEngine = typeof getEngine === 'function' ? getEngine : () => null;
+    this.#logger = logger;
+    this.#armed = armed === true;
+  }
+
+  get armed() { return this.#armed; }
+
+  /** 只有真机窗口验证过 safe timing 后才允许打开。 */
+  arm() { this.#armed = true; }
+  disarm() { this.#armed = false; }
+
+  /**
+   * 尝试一次提前压。
+   * @param {object} input
+   * @param {object} [input.session]
+   * @param {boolean} input.turnEnded turn 是否已结束（事实，不是猜测）
+   * @param {boolean} input.agentIdle agent 是否 idle（事实）
+   * @returns {{ok:boolean, reason?:string, error?:Error}}
+   */
+  attempt({ session = null, turnEnded = false, agentIdle = false } = {}) {
+    if (!this.#armed) return { ok: false, reason: EARLY_SKIP_REASONS.DISABLED };
+    if (turnEnded !== true || agentIdle !== true) return { ok: false, reason: EARLY_SKIP_REASONS.NOT_IDLE };
+    const engine = this.#getEngine();
+    if (engine === null || engine === undefined || typeof engine.compactNow !== 'function') {
+      return { ok: false, reason: EARLY_SKIP_REASONS.NO_ENGINE };
+    }
+    try {
+      engine.compactNow(session);
+      return { ok: true };
+    } catch (error) {
+      if (isBusyCompactionError(error)) return { ok: false, reason: EARLY_SKIP_REASONS.BUSY };
+      this.#logger?.warn?.(`[context-governance] early compaction failed: ${String(error?.message ?? error)}`);
+      return { ok: false, reason: EARLY_SKIP_REASONS.FAILED, error };
+    }
+  }
+}
+
+/**
+ * `tools/pre-execute` 的 ask/deny 语义（供未来动作校验/权限交互复用；本版不接线）。
+ * 宿主约定：需要等待用户确认时返回 `{kind:'ask'}`；硬拒绝返回 `{kind:'deny'}`。
+ */
+export function preExecuteAsk(reason) {
+  return { kind: 'ask', reason: String(reason ?? 'context-governance requires confirmation') };
+}
+
+export function preExecuteDeny(reason) {
+  return { kind: 'deny', reason: String(reason ?? 'context-governance denied this call') };
+}
