@@ -248,3 +248,18 @@ P2-1（扫描）与 P3-2/P3-3（cleanup）修复有效；6 条降级口径未漂
 | P3-2 | `src/compress/early.js` | `getEngine()` 在 `try` 外 | 访问器抛错会外泄给调用方 | 0.2.2 接线时修 |
 | P3-4 | `scripts/compliance-scan.mjs` | `selfRegexLiteral` 仍是**行级**判定（仅 `contract.js` 与扫描脚本两个自述文件） | 真 token 落在含正则字面量的行上会被降 info | 与扫描规则一并改 |
 | P3-5 | `scripts/memory-cleanup.mjs` | dry-run 非纯只读（见 9.1） | 无数据风险；头注释不准确 | 窗口后修 |
+
+### 9.4 扫描器的两条 `review` 都是“文档在描述凭据形态”（非真实凭据）
+
+现状（HEAD `c470e89`，`node scripts/compliance-scan.mjs` → `blocker=0 review=2 info=86`，222 文本文件）：
+
+| 位置 | 内容 | 为什么被判 review |
+|---|---|---|
+| `docs/review-context-governance-0.3.2.md:166` | 本报告回归验证表里的**合成示例值**（形如 `password = 合成值`） | 形似赋值；白名单只按命中串判定，而示例值本身不是脱敏串，故未覆盖 |
+| `analysis/req-20261025-09/G2-G3-真机验证报告.md:117` | 开发的“无凭据确认”行，列出了 `sk-`、`ghp_`、`AKIA`、`password` 赋值、`token` 赋值、`PRIVATE KEY` 等检索模式 | 列举的模式串本身形似赋值（等号后接 6+ 非空白字符），且 `analysis/` 不在 `HISTORICAL_REVIEW_FILE` |
+
+口径：
+
+- 两条都是**示意串被判成待复核**，属**白名单未覆盖**，**不是真实凭据**；扫描器只取命中串前 4 字符 + `***` 展示，所以明细里看起来像 `pass***`。
+- 处理：**不改证据文件**；`--strict` 只在 blocker > 0 时退出 1（`scripts/compliance-scan.mjs:231`），review 不阻断发布；发布前人工确认这两行即可。
+- backlog（可选）：对“列举凭据模式的文档行”或“无凭据确认”这类自证句加窄白名单；或在文档里用代码块/转义分隔，避免形似赋值。
