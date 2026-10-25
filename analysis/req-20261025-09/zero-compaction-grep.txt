@@ -1,0 +1,2 @@
+packages/dsh-context-governance/src/compress/adapters.js:287:  const hasServiceApi = typeof compaction.compactNow === 'function';
+packages/dsh-context-governance/src/compress/adapters.js:293:      notes: ['ctx.compaction exists but does not expose compactNow()'],

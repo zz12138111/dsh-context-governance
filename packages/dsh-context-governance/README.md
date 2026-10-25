@@ -3,7 +3,7 @@
 上下文治理插件（DSH / DeepSeek Harness）。M1 目标：**压缩前后不断线**——任务态记忆落项目文件，压缩后只回注 ID/状态/指针，详情按需取。
 
 > 版本：**以 `package.json` 为唯一来源**（本文与代码都不再重复版本号；启动行/审计里的 version 由运行时读取）。
-> 当前进度：**T2–T8 + M1.2 + T2′ 离线完成**——记忆文件与契约、`mem_write`/`mem_query`、压缩适配与保护校验、压缩前固化与回注、`/cg status` 与审计正式化、故障注入/轮转/只读降级、S1–S6 验收场景 + 真实自动/手动压缩双样本回放 + 回注自愈 + 成本归属审计（T8）；M1.2 增加 `capability@apply/@ready`、`tokenMeter` 延迟获取、usage 兜底与 `cost-v1.1` 来源字段；T2′ 增加宿主 `compaction/prune` 观测与 `cost-v1.2` 成本视图（不折叠、不落盘）；**M2 0.2.0 策略层**——四层配置合成（内置/profile/插件/项目 `.cg-policy.json`/会话）、`/cg policy show`、`/cg set` 会话覆盖、`/cg status` 的 `policy`/`policy-invalid`/`pressure` 行、项目文件按不可信输入加固（A+C 口径）；**全部测试通过（数量见 `node --test` 输出）**。
+> 当前进度：**T2–T8 + M1.2 + T2′ 离线完成**——记忆文件与契约、`mem_write`/`mem_query`、压缩适配与保护校验、压缩前固化与回注、`/cg status` 与审计正式化、故障注入/轮转/只读降级、S1–S6 验收场景 + 真实自动/手动压缩双样本回放 + 回注自愈 + 成本归属审计（T8）；M1.2 增加 `capability@apply/@ready`、`tokenMeter` 延迟获取、usage 兜底与 `cost-v1.1` 来源字段；T2′ 增加宿主 `compaction/prune` 观测与 `cost-v1.2` 成本视图（不折叠、不落盘）；**M2 0.2.0 策略层**——四层配置合成（内置/profile/插件/项目 `.cg-policy.json`/会话）、`/cg policy show`、`/cg set` 会话覆盖、`/cg status` 的 `policy`/`policy-invalid`/`pressure` 行、项目文件按不可信输入加固（A+C 口径）；**M2 0.2.1 窗口/校验层**——宿主 `contextPressure.contextWindow` 观察、dynamic native 同源、conservative 校验、`/cg status` 的 `window:` 双显，**本版不触发任何压缩**；**全部测试通过（数量见 `node --test` 输出）**。
 > 真机：已安装（junction 指向源码目录）；最近一次真机验证记录见 `memory/ARTIFACTS.md`，待验收项见 `STATUS.md`（本文不写具体版本/数字）。S3 新会话 header 默认关闭，需用户拍板后再开。
 > 安装方式：`docs/插件安装升级-Runbook.md`（`file:` 声明 + junction + bundle；不用 pnpm）。本机已按该方式安装（junction 指向源码），其它机器按 Runbook 操作。
 
@@ -89,12 +89,13 @@ packages/dsh-context-governance/
   - **禁** `compact.lowThresholdAck` / `compact.estimateSafety`（`project-denied`），`compact.at` 下限 **0.45**（`below-min`），上限 `native`；
   - 任一键被拒 → **整层拒绝**（不逐键降级）→ 退回下一层；`source=project` + 键 + 原因进 `policy-invalid` 审计，并在 `/cg status` 的 `policy-invalid:` 行可见；
   - **只在 `apply` 读一次**：改文件后需重启插件才生效。
-- 压力四段（只展示，不据此压缩）：`measured`（最近 `assistant/message.usage` 的 input+cacheRead+cacheWrite 占窗口）、`estimated`（`tokenMeter` 估算）、`adjusted = estimated × estimateSafety`、`effective = max(measured, adjusted)`；`ratio = measured/estimated` 用来判断估算是否偏低；行内带 `window=1.00M`（分母可见）。任一来源缺失写 `-`，不伪造。
+- **窗口来源与校验（0.2.1）**：`current` = `#lastSession` 的 `request/context.contextWindow`，`conservative = min(已观察窗口)`；`native` 每次用同一个 `W` 现算（`nativeFromWindow`），无观察回退配置并标 `config-fallback`；`request/context` 不带 `contextWindow` → **删除旧值置 unknown（不沿用）**；校验按 conservative，运行时 `at > native` → 拒绝该层 + `policy-invalid` 审计。**本版不触发任何压缩**（`src/` 无 `compactNow`/`compactRegion` 调用）。
+- 压力四段（只展示，不据此压缩）：`measured`（最近 `assistant/message.usage` 的 input+cacheRead+cacheWrite 占窗口）、`estimated`（`tokenMeter` 估算）、`adjusted = estimated × estimateSafety`、`effective = max(measured, adjusted)`；`ratio = measured/estimated` 用来判断估算是否偏低；行内带 `window=1M (session 58a2e845)`（分母 + 会话可见）。任一来源缺失写 `-`，不伪造。
 - `/cg set <key>=<value>` / `/cg set reset`：写会话层（最高优先级）。只允许 `compact.at`/`compact.early`/`compact.cooldownMin`/`compact.minDeltaTokens`/`cost.remainingTurns`；`estimateSafety`/`lowThresholdAck` 明确拒绝（只能改配置文件）。覆盖是**进程内**的，重启即失效。
 
-样例输出（带 fixture 头）见 `../../analysis/req-20261025-09/samples-0.2.0.txt`（**示意/裁剪，非实跑**）；完整口径见 `../../docs/T5-状态命令与审计.md` §1.1–§1.4。
+样例输出（带 fixture 头）见 `../../analysis/req-20261025-09/samples-0.2.0.txt`（**示意/裁剪，非实跑**）；完整口径见 `../../docs/T5-状态命令与审计.md` §1.1–§1.5。
 
-**命令可用性（与使用说明 v0.3 一致）**：0.2.0 只有 `/cg status` / `/cg policy show` / `/cg set`；`/cg compact now` 计划 0.2.1、`/cg cost` 计划 0.2.2——当前对未知参数只返回 usage，不假装执行。
+**命令可用性（与使用说明 v0.3 一致）**：0.2.x 目前只有 `/cg status` / `/cg policy show` / `/cg set`；`/cg compact now` 计划 0.2.2（提前压执行）、`/cg cost` 计划 0.2.3——当前对未知参数只返回 usage，不假装执行。
 
 ## 配置（bundle patch）
 

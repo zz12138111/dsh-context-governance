@@ -67,6 +67,61 @@ export function nativeRatio({ windowTokens, reservedTokens } = {}) {
   return Math.round((tokens / window) * 10000) / 10000;
 }
 
+/**
+ * 观测窗口（0.2.1，DEC-20261025-66）的 native：
+ *   - W 非法（非正整数）→ { native: null, reason: 'window-invalid' }（unknown，回退配置）
+ *   - W ≤ O + 65536（预留比窗口还大）→ { native: 0, reason: 'window-too-small' }（任何 at>0 都不该放）
+ *   - 否则 floor(min(W×0.8, W−O−65536))/W
+ * 与 `nativeRatio` 的差别：观测窗口不能拿“默认 0.6785”糊弄，必须显式 unknown / 拒绝。
+ */
+export function nativeFromWindow({ windowTokens, reservedTokens } = {}) {
+  const window = Number(windowTokens);
+  if (!Number.isInteger(window) || window <= 0) return { native: null, reason: 'window-invalid' };
+  const reserved = Number.isFinite(Number(reservedTokens)) ? Number(reservedTokens) : 0;
+  const headroom = Math.min(window * NATIVE_RATIO_CAP, window - reserved - NATIVE_HEADROOM_TOKENS);
+  if (!(headroom > 0)) return { native: 0, reason: 'window-too-small' };
+  return { native: Math.round((Math.floor(headroom) / window) * 10000) / 10000, reason: null };
+}
+
+/** 短 session id（DEC-66：window= 后面必须带）。 */
+export function shortSessionId(sessionId) {
+  if (typeof sessionId !== 'string' || sessionId === '') return '-';
+  const raw = sessionId.startsWith('session-') ? sessionId.slice('session-'.length) : sessionId;
+  return raw.slice(0, 8);
+}
+
+/** `/cg status` 的 window 行（current / conservative / 来源 / 时间 / 校验口径）。 */
+export function summarizeWindow(window) {
+  const fmtWindow = (tokens, sessionId) => (tokens === null || tokens === undefined
+    ? 'unknown'
+    : `${formatWindow(tokens)} (session ${shortSessionId(sessionId)})`);
+  const current = window === null || window === undefined
+    ? 'window: current=unknown'
+    : `window: current=${fmtWindow(window.currentTokens, window.currentSessionId)}` +
+      (window.currentObservedAt === null || window.currentObservedAt === undefined ? '' : ` observed ${window.currentObservedAt}`) +
+      ` source=${window.currentSource}` +
+      (window.removed === true ? ' (removed by request/context)' : '');
+  if (window === null || window === undefined) {
+    return `${current} conservative=unknown native-current=- (config-fallback)`;
+  }
+  const conservative = window.conservativeTokens === null || window.conservativeTokens === undefined
+    ? 'unknown'
+    : `${formatWindow(window.conservativeTokens)} (session ${shortSessionId(window.conservativeSessionId)})`;
+  const nativeCurrent = window.native === null || window.native === undefined ? '-' : Number(window.native).toFixed(4);
+  const nativeConservative = window.nativeConservative === null || window.nativeConservative === undefined
+    ? '-'
+    : Number(window.nativeConservative).toFixed(4);
+  const validated = window.validated === true
+    ? 'validated'
+    : 'unvalidated (at 允许但未经保守窗口校验)';
+  const mismatch = window.conservativeTokens !== null && window.conservativeTokens !== window.currentTokens
+    ? ' 校验按 conservative'
+    : '';
+  const nativeSource = window.currentSource === 'projection' ? 'projection' : 'config-fallback';
+  return `${current} conservative=${conservative} native-current=${nativeCurrent}(${nativeSource}) ` +
+    `native-conservative=${nativeConservative} ${validated}${mismatch}`;
+}
+
 function isInteger(value) {
   return typeof value === 'number' && Number.isInteger(value);
 }
@@ -215,7 +270,13 @@ export function profileLayer(profileName) {
 export function summarizePolicy(policy) {
   const at = policy.values['compact.at'];
   const source = policy.sources['compact.at'];
-  return `compact.at=${at.toFixed(2)} (source=${source}) native=${policy.native} early=${policy.early ? 'on' : 'off'}`;
+  // 0.2.1：有窗口观测时 native 用现算值，并标来源（config-fallback 必须可辨）。
+  const window = policy.window ?? null;
+  const nativeValue = window?.native ?? policy.native;
+  const nativeText = window === null || window === undefined
+    ? String(nativeValue)
+    : `${nativeValue === null ? '-' : nativeValue} (${window.currentSource === 'projection' ? 'projection' : 'config-fallback'})`;
+  return `compact.at=${at.toFixed(2)} (source=${source}) native=${nativeText} early=${policy.early ? 'on' : 'off'}`;
 }
 
 /** 四层来源逐键展开（供 /cg policy show）。 */
@@ -311,25 +372,31 @@ export function computePressure({
   };
 }
 
-/** 窗口展示：1.00M / 256k（P3-3：压力行必须能看出分母）。 */
+/** 窗口展示：1M / 128k（2 的幂优先），否则 1.00M / 256k；P3-3：压力行必须能看出分母。 */
 function formatWindow(value) {
   if (!Number.isFinite(value) || value <= 0) return '-';
+  if (value >= 1024 * 1024 && value % (1024 * 1024) === 0) return `${value / (1024 * 1024)}M`;
+  if (value >= 1024 && value % 1024 === 0) return `${value / 1024}k`;
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`;
   if (value >= 1000) return `${Math.round(value / 1000)}k`;
   return String(value);
 }
 
 /** 压力行（`/cg status`）：缺失项写 `-` 并标原因，不写假数字。 */
-export function summarizePressure(pressure, { at = null } = {}) {
+export function summarizePressure(pressure, { at = null, sessionId = null } = {}) {
   const known = pressure !== null && typeof pressure === 'object';
   const fmt = (value) => (value === null || value === undefined ? '-' : Number(value).toFixed(3));
   const safety = known && pressure.adjusted !== null && pressure.safety !== null ? `(×${pressure.safety})` : '';
   const ratio = known && pressure.ratio !== null ? pressure.ratio.toFixed(2) : '-';
-  const window = known ? formatWindow(pressure.windowTokens) : '-';
+  const windowValue = known ? formatWindow(pressure.windowTokens) : '-';
+  // DEC-20261025-66：window= 后带 session 短 id。
+  const window = sessionId === null || sessionId === undefined
+    ? `window=${windowValue}`
+    : `window=${windowValue} (session ${shortSessionId(sessionId)})`;
   const head = `measured=${fmt(known ? pressure.measured : null)} ` +
     `estimated=${fmt(known ? pressure.estimated : null)} ` +
     `adjusted=${fmt(known ? pressure.adjusted : null)}${safety} ` +
-    `effective=${fmt(known ? pressure.effective : null)} ratio=${ratio} window=${window}`;
+    `effective=${fmt(known ? pressure.effective : null)} ratio=${ratio} ${window}`;
   if (!known || pressure.effective === null) return `pressure: ${head} (no usage/tokenMeter yet)`;
   const threshold = Number.isFinite(at) ? ` at=${Number(at).toFixed(2)} effective${pressure.effective >= at ? '>=' : '<'}at` : '';
   return `pressure: ${head}${threshold}`;

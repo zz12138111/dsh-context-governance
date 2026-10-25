@@ -16,6 +16,7 @@ import {
   policyTable,
   summarizePolicy,
   summarizePressure,
+  summarizeWindow,
   validateLayer,
 } from '../policy.js';
 
@@ -53,6 +54,8 @@ function statusText({ store, guard, audit, now, policy = null }) {
   if (policy !== null && typeof policy.resolve === 'function') {
     resolvedPolicy = policy.resolve();
     lines.push(`policy: ${summarizePolicy(resolvedPolicy)}`);
+    // 0.2.1（DEC-20261025-66）：current / conservative / 来源 / 时间；不一致时明示校验口径。
+    if (resolvedPolicy.window !== undefined) lines.push(summarizeWindow(resolvedPolicy.window));
     const rejected = collectInvalid(policy, resolvedPolicy);
     if (rejected.length > 0) lines.push(`policy-invalid: ${rejected.length} (${formatInvalid(rejected)})`);
     const overrides = formatSession(policy.sessionLayer?.values);
@@ -82,10 +85,13 @@ function statusText({ store, guard, audit, now, policy = null }) {
       computePressure({
         measuredTokens: status.pressure?.measuredTokens ?? null,
         estimatedTokens: status.pressure?.estimatedTokens ?? null,
-        windowTokens: policy?.windowTokens,
+        windowTokens: resolvedPolicy?.window?.currentTokens ?? policy?.windowTokens,
         estimateSafety: resolvedPolicy?.values?.['compact.estimateSafety'],
       }),
-      { at: resolvedPolicy?.values?.['compact.at'] ?? null },
+      {
+        at: resolvedPolicy?.values?.['compact.at'] ?? null,
+        sessionId: resolvedPolicy?.window?.currentSessionId ?? null,
+      },
     ));
     if (status.degradedReasons.length > 0) lines.push(`degraded: ${status.degradedReasons.join(', ')}`);
     else lines.push('degraded: none');
@@ -254,7 +260,9 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
       }
       const parsed = parseValue(key, rawValue);
       if (parsed.error !== undefined) return { kind: 'error', text: `context-governance set: ${key} ${parsed.error}` };
-      const checked = validateLayer({ [key]: parsed.value }, { source: 'session', native: policy.native, sessionLayer: true });
+      // 0.2.1（DEC-66 ③）：校验用保守窗口算出的 native；无观察时退回配置并标 unvalidated。
+      const validationNative = typeof policy.validationNative === 'function' ? policy.validationNative() : policy.native;
+      const checked = validateLayer({ [key]: parsed.value }, { source: 'session', native: validationNative, sessionLayer: true });
       if (checked.invalid.length > 0) {
         const item = checked.invalid[0];
         const detail = item.detail === undefined ? '' : `（${item.detail}）`;

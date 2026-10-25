@@ -134,6 +134,11 @@ export class CompressionGuard {
   #lastUsage = new Map();
   /** 0.2.0 压力观测：最近一次本项目会话事件所属的 session（只读引用，不持有消息）。 */
   #lastSession = null;
+  /** 0.2.1（DEC-20261025-66）：每会话最近一次 request/context.contextWindow。 */
+  #windows = new Map();
+  /** 被显式移除（request/context 不带 contextWindow）的会话，用于状态里区分 unknown 与 removed。 */
+  #removedWindows = new Set();
+  #windowListeners = new Set();
   #pendingCosts = new Map();
   #lastCost = null;
   #toolNames = new Map();
@@ -349,6 +354,7 @@ export class CompressionGuard {
     this.#unsubscribe = null;
     this.#started = false;
     this.#lastSession = null;
+    this.#windowListeners.clear();
     try {
       // ctx.inject 返回 cordis Fiber（不是 dispose 函数）；调用 fiber.dispose()，
       // 不是把返回值当函数调用。父 fiber 仍兜底。
@@ -550,6 +556,65 @@ export class CompressionGuard {
       measuredTokens: Number.isFinite(usage?.tokens) ? usage.tokens : null,
       estimatedTokens: this.#measureTokens(session),
     };
+  }
+
+  /**
+   * 窗口观察状态（0.2.1，DEC-20261025-66）：
+   *   current      = `#lastSession` 最近观察到的 contextWindow（展示/压力分母用）
+   *   conservative = min(已观察窗口)（校验用）
+   *   observed     = 每会话一条 {sessionId, tokens, observedAt}
+   * 无观察 → current/conservative 均为 null（显示 unknown，不沿用旧值）。
+   */
+  get windowState() {
+    const sessionId = this.#sessionKey(this.#lastSession);
+    const entry = sessionId === null ? null : this.#windows.get(sessionId) ?? null;
+    const observed = [...this.#windows.entries()]
+      .map(([id, window]) => ({ sessionId: id, tokens: window.tokens, observedAt: window.observedAt }))
+      .sort((left, right) => left.tokens - right.tokens);
+    const conservative = observed.length === 0 ? null : { ...observed[0] };
+    return {
+      current: entry === null || sessionId === null
+        ? null
+        : { sessionId, tokens: entry.tokens, observedAt: entry.observedAt },
+      conservative,
+      observed,
+      source: entry === null ? 'unknown' : 'projection',
+      removed: entry === null && sessionId !== null && this.#removedWindows.has(sessionId),
+    };
+  }
+
+  /** 订阅窗口变化（apply 用来在窗口变化时立刻重算 native/校验；DEC-66 ②）。 */
+  onWindowChange(listener) {
+    if (typeof listener !== 'function') return () => {};
+    this.#windowListeners.add(listener);
+    return () => this.#windowListeners.delete(listener);
+  }
+
+  /** request/context：有有效 contextWindow 就更新，没有就删除该会话旧值（不沿用）。 */
+  #observeWindow(session, event) {
+    const key = this.#sessionKey(session);
+    if (key === null) return;
+    const observed = event?.data?.contextWindow;
+    const previous = this.#windows.get(key) ?? null;
+    let changed = false;
+    if (Number.isInteger(observed) && observed > 0) {
+      if (previous === null || previous.tokens !== observed) changed = true;
+      this.#windows.set(key, { tokens: observed, observedAt: this.#now().toISOString() });
+      this.#removedWindows.delete(key);
+    } else if (previous !== null) {
+      this.#windows.delete(key);
+      this.#removedWindows.add(key);
+      changed = true;
+    }
+    if (!changed) return;
+    const snapshot = this.windowState;
+    for (const listener of this.#windowListeners) {
+      try {
+        listener(snapshot);
+      } catch (error) {
+        this.#logger?.warn?.(`[context-governance] window observer failed: ${String(error?.message ?? error)}`);
+      }
+    }
   }
 
   #sessionKey(session) {
@@ -1265,6 +1330,11 @@ export class CompressionGuard {
       }
       const id = event?.data?.compactionId ?? null;
       switch (event?.type) {
+        case 'request/context': {
+          // 0.2.1：路由窗口来源（DEC-20261025-66）。不带 contextWindow = 显式移除。
+          this.#observeWindow(session, event);
+          return;
+        }
         case 'tool/call': {
           const callId = event?.data?.callId;
           const toolName = event?.data?.name;

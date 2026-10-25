@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { registerStatusCommand } from './commands/cg-status.js';
-import { POLICY_FILE_MAX_BYTES, nativeRatio, profileLayer, resolvePolicy, validateLayer } from './policy.js';
+import { POLICY_FILE_MAX_BYTES, nativeFromWindow, nativeRatio, profileLayer, resolvePolicy, validateLayer } from './policy.js';
 import { detectHostVersion, normalizeBackendVersion } from './compress/adapters.js';
 import { CompressionGuard } from './compress/runtime.js';
 import { formatCapability, probeCapability } from './capabilities.js';
@@ -277,6 +277,58 @@ export function buildPolicyState(config, deps = {}) {
   // 会话层（`/cg set`）：最高优先级；0.2.0 起为进程内覆盖，重启即失效。
   const sessionLayer = { source: 'session', values: {} };
   layers.push(sessionLayer);
+  // 0.2.1（DEC-20261025-66）：窗口由运行时观察提供；每次 resolve 现算 native（不锁 apply）。
+  let windowProvider = () => null;
+  const resolveWithWindow = () => {
+    const win = windowProvider() ?? null;
+    const configWindow = config.policy.windowTokens;
+    const reservedTokens = config.policy.reservedTokens;
+    const currentTokens = win?.current?.tokens ?? configWindow;
+    const currentSource = win?.current ? 'projection' : 'config-fallback';
+    const conservative = win?.conservative ?? null;
+    const currentInfo = nativeFromWindow({ windowTokens: currentTokens, reservedTokens });
+    const conservativeInfo = conservative === null
+      ? null
+      : nativeFromWindow({ windowTokens: conservative.tokens, reservedTokens });
+    // 校验用保守值；保守值不是整数值（window-invalid）时视为 unknown，退回观测/配置值但仍标 unvalidated。
+    const checkNative = conservativeInfo !== null && conservativeInfo.native !== null
+      ? conservativeInfo.native
+      : currentInfo.native;
+    const runtimeInvalid = [];
+    const filtered = layers.map((layer) => {
+      const values = { ...layer.values };
+      const at = values['compact.at'];
+      if (at !== undefined && checkNative !== null && at > checkNative + 1e-9) {
+        runtimeInvalid.push({
+          source: layer.source,
+          key: 'compact.at',
+          reason: checkNative === 0 ? 'window-too-small' : 'over-native-runtime',
+          detail: `at=${at} > native=${checkNative}` +
+            (conservative === null ? '' : `（保守窗口 ${conservative.tokens}）`),
+        });
+        delete values['compact.at'];
+      }
+      return { source: layer.source, values };
+    });
+    const resolved = resolvePolicy(filtered, { native: currentInfo.native ?? NATIVE_DEFAULT_RATIO });
+    return {
+      ...resolved,
+      invalid: [...invalid, ...runtimeInvalid, ...resolved.invalid],
+      window: {
+        currentTokens: win?.current ? currentTokens : (currentSource === 'config-fallback' ? null : currentTokens),
+        currentSessionId: win?.current?.sessionId ?? null,
+        currentObservedAt: win?.current?.observedAt ?? null,
+        currentSource,
+        conservativeTokens: conservative?.tokens ?? null,
+        conservativeSessionId: conservative?.sessionId ?? null,
+        conservativeObservedAt: conservative?.observedAt ?? null,
+        native: currentInfo.native,
+        nativeConservative: conservativeInfo?.native ?? null,
+        validated: conservative !== null && conservativeInfo?.native !== null,
+        removed: win?.removed === true,
+      },
+    };
+  };
   return {
     native,
     layers,
@@ -284,7 +336,21 @@ export function buildPolicyState(config, deps = {}) {
     sessionLayer,
     windowTokens: config.policy.windowTokens,
     reservedTokens: config.policy.reservedTokens,
-    resolve: () => resolvePolicy(layers, { native }),
+    /** 由 apply 注入运行时的 windowState 读取器（guard 可能还不可用，故为惰性）。 */
+    setWindowProvider(provider) {
+      windowProvider = typeof provider === 'function' ? provider : () => null;
+    },
+    /** 校验用 native：有保守窗口用保守 native，否则退回配置 native（并标 unvalidated）。 */
+    validationNative() {
+      const win = windowProvider() ?? null;
+      const conservative = win?.conservative ?? null;
+      const info = conservative === null
+        ? nativeFromWindow({ windowTokens: config.policy.windowTokens, reservedTokens: config.policy.reservedTokens })
+        : nativeFromWindow({ windowTokens: conservative.tokens, reservedTokens: config.policy.reservedTokens });
+      return info.native === null ? native : info.native;
+    },
+    windowState: () => windowProvider() ?? null,
+    resolve: resolveWithWindow,
   };
 }
 
@@ -422,6 +488,39 @@ export async function apply(ctx, rawConfig = {}) {
       ctx.logger?.warn?.(`[context-governance] compression observer failed to start: ${String(error?.message ?? error)}`);
       guard = null;
     }
+  }
+
+  // 0.2.1（DEC-20261025-66）：窗口由运行时观察；每次 resolve 现算 native（不锁 apply）。
+  if (typeof policyState.setWindowProvider === 'function') {
+    policyState.setWindowProvider(() => guard?.windowState ?? null);
+  }
+  // 窗口变化导致 at>native：拒绝该层 + 审计一次（不静默降级、不每事件刷审计）。
+  if (guard !== null && typeof guard.onWindowChange === 'function') {
+    const windowViolations = new Set();
+    const checkWindowViolations = () => {
+      try {
+        const resolved = policyState.resolve();
+        for (const item of resolved.invalid) {
+          if (item.reason !== 'over-native-runtime' && item.reason !== 'window-too-small') continue;
+          const key = `${item.source}|${item.key}|${item.reason}`;
+          if (windowViolations.has(key)) continue;
+          windowViolations.add(key);
+          guard.auditLog?.append?.('policy-invalid', {
+            source: item.source,
+            reason: item.reason,
+            code: item.key,
+          });
+          ctx.logger?.warn?.(
+            `[context-governance] policy layer rejected at runtime: ${item.source}/${item.key}:${item.reason}` +
+            `${item.detail === undefined ? '' : ` ${item.detail}`}`,
+          );
+        }
+      } catch (error) {
+        ctx.logger?.warn?.(`[context-governance] runtime window check failed: ${String(error?.message ?? error)}`);
+      }
+    };
+    guard.onWindowChange(checkWindowViolations);
+    checkWindowViolations();
   }
 
   if (config.diagnostics.logFile !== '') {
