@@ -66,6 +66,10 @@ const LICENSE_BASENAME = /^licen[cs]e(\.(md|txt))?$/i;
 const TEST_FILE = /(^|\/)test\/.+\.(test|spec)\.mjs$|(^|\/)test\/.+fixture/i;
 const SELF_DESCRIBED = /(^|\/)src\/memory\/contract\.js$|(^|\/)scripts\/compliance-scan\.mjs$/;
 const DOC_FILE = /\.(md|txt)$/i;
+// 历史复核摘录误报白名单（只针对 docs/review-*.md 里已知的“引用旧结论/脱敏样例”模式，
+// 例如 `pass***` 被 credential-assignment 命中）：范围窄、可审；不放宽 blocker，也不白名单整个 docs/。
+const HISTORICAL_REVIEW_FILE = /(^|\/)docs\/(?:review-[^/]+|T5-状态命令与审计)\.md$/;
+const HISTORICAL_REVIEW_FALSE_POSITIVE = /password=\/api_key=|pass\*{2,}|\bghp_\/sk-|\bPRIVATE KEY\/，|hunter2|(?:secret|token|password)\*{2,}/i;
 
 const CREDENTIALS = [
   ['private-key', /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/],
@@ -109,7 +113,8 @@ function scanText(file, text) {
       const m = re.exec(line);
       if (!m) continue;
       const hard = kind !== 'credential-assignment';
-      const severity = isTest || isSelf ? 'info' : hard ? 'blocker' : 'review';
+      const historicalFp = HISTORICAL_REVIEW_FILE.test(file) && HISTORICAL_REVIEW_FALSE_POSITIVE.test(line);
+      const severity = isTest || isSelf || historicalFp ? 'info' : hard ? 'blocker' : 'review';
       add(`credential:${kind}`, severity, file, i + 1, m[0].slice(0, 4) + '***');
     }
     for (const [kind, re] of ABS_PATH) {
@@ -122,7 +127,7 @@ function scanText(file, text) {
     if (!LICENSE_BASENAME.test(path.basename(file))) {
       for (const [kind, re] of THIRD_PARTY) {
         if (!re.test(line)) continue;
-        const severity = DOC_FILE.test(file) ? 'info' : 'review';
+        const severity = DOC_FILE.test(file) || isSelf ? 'info' : 'review';
         add(`license:${kind}`, severity, file, i + 1, DOC_FILE.test(file) ? '（文档引用，需确认归属）' : '…');
       }
     }
