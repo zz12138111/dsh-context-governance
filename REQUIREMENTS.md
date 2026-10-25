@@ -380,3 +380,84 @@
 ### 任务拆解
 
 见 `TASKS/REQ-20261025-08-0.1.17-拆解.md`。
+
+---
+
+## REQ-20261025-09 上下文治理插件 M2 —— 压缩策略与成本账本
+
+- **依据**：`docs/M2-需求草案-v0.6.md`（**终审通过**，含附录 A“推迟不做”ADR）；`docs/M2-使用说明-草案-v0.2.md`；架构 v1.1 §6/§8/§14；`DEC-20261025-51`/`DEC-20261025-52`（`cost-v1.4` 基线）。
+- **优先级**：P0
+- **状态**：已排期（**首批只派 0.2.0 策略层 + G1 门禁**，等 00 投递）
+- **版本**：0.2.0（策略层）→ 0.2.1（提前压）→ 0.2.2（成本账本）
+- **背景/痛点**：M1 解决“不断线”；M2 解决“**什么时候压可控、压了值不值能算**”。用户原始诉求是**提前压缩、去掉过时信息**。宿主原生触发点 ≈67.85%（preset `0.8 + 65536`，patch 层无效），我们只在它之前动手，**不包装宿主决策点**。
+
+### 目标（可验收）
+
+1. **提前压默认开**：`compact.at` 语义为**真实占窗口比例**，默认 `0.60`；到点后于安全时机调 `compactNow`。
+2. **四层配置 + 可解释**：内置 → 插件配置 → 项目 `.cg-policy.json` → 会话 `/cg set`；`/cg status` 打印合成链与 `native`。
+3. **不抢宿主**：`effective = max(measured, estimated×estimateSafety)`；`effective ≥ native−0.02` 时不主动压。
+4. **成本账本**：按会话/项目/天/模型聚合；两实测数 + 带假设行的估算；`auditVersion` 用 `cost-v1.4` 及以后。
+5. **可关闭**：`compact.early=false`（如 `research` profile）时完全不干预，宿主照常在 native 点压；记忆/保护/回注仍工作。
+
+### 非目标
+
+- **不做推迟/抑制**（不包装 `compactIfNeeded`，见 v0.6 附录 A）；
+- 不造引擎、不换摘要后端、不接管 provider、不改 preset 平面；
+- 不做 UI 图表、不做货币成本、不做跨机同步；
+- 不改 pruner/折叠/spill；不做行为推断自动打标。
+
+### 参数（初版）
+
+| 参数 | 含义 | 默认 | 范围 | `/cg set` |
+|---|---|---|---|---|
+| `compact.at` | 真实占窗口比例到多少就压 | `0.60` | `0.20` ~ dynamic native | 是 |
+| `compact.early` | 允许提前压 | `true` | bool | 是 |
+| `compact.cooldownMin` | 两次压缩最小间隔 | `10` 分钟 | ≥1 | 是 |
+| `compact.minDeltaTokens` | 距上次压缩至少新增 token | `20000` | ≥0 | 是 |
+| `compact.estimateSafety` | 估算放大系数（专家项） | `1.35` | `1.0–1.6` | **否**（仅配置） |
+| `compact.lowThresholdAck` | 允许 `<0.30` | `false` | bool | 否 |
+| `cost.remainingTurns` | 账本剩余轮次覆盖 | `null`（历史平均） | null 或 ≥0 | 是 |
+
+`compact.at > native` → 拒绝并提示“M2 不支持推迟”。`estimateSafety` 仅从配置文件读，注释式风险提示。
+
+### 会话特点与偏好
+
+- profile 显式打标、**按会话**（非按用户/项目）：`batch` 0.45 / `coding` 0.60 / `review` 0.55 / `research` **`early=false`**。
+- 偏好：`type=preference` 且 `status=active` 才影响默认值；`proposed` 不生效。
+- 合成顺序：显式层（会话 > 项目 > 插件）> 标签层（profile/偏好）> 内置默认。
+
+### 安全机制
+
+1. **fail-open**：我们不在宿主调用链上，任何失败只意味着“没提前压”，宿主仍在 native 点压；失败一律审计。
+2. **宿主优先**：调用前四重检查——无进行中压缩；距上次 > cooldown；`effective < native−0.02`；cooldown 与 `minDeltaTokens` 双达标。
+3. **调用后复检**：返回“宿主已完成/已在进行”→ `early-aborted(host-compacted)`，静默不重试。
+4. **长 turn 不打断**：只在安全时机（`turn/end` 等）检查；压力过 native 由宿主处理，记 `early-skipped(turn-in-progress)`。
+5. **防抖**：时间 + 增量双冷却。
+
+### 前置门禁（只读，先出报告）
+
+| 门禁 | 要回答 | 失败后果 |
+|---|---|---|
+| **G1** | 本 scope 能否取到 `agentPresets` 与 preset 引擎（`serviceFor(agent,'compaction')`） | 提前压降级为**仅 `/cg compact now` 手动**；0.2.1 范围缩小 |
+| **G2** | `compactNow` 在哪些时机可安全调用；失败形态；事件流完整性 | 同上，且默认时机调整 |
+| **G3** | 各时机 `measure()` 是否反映当前上下文；`effective` 口径可落地 | 口径重定后才能进 0.2.1 |
+
+**任一失败都要先报用户与 00，再改范围，不得自行降级。**
+
+### 验收（分段）
+
+- **0.2.0**：四层覆盖正确、非法配置拒绝可追溯、`/cg status` 合成链与 `native` 正确、`/cg policy show` 可用、`research` 显示 `early=off`、全量测试通过、S1–S6 不回归。
+- **0.2.1**（G1–G3 通过后）：到点主动压一次（`early-forced` 审计、事件流完整）；`effective ≥ native−0.02` 不抢；失败不伤宿主；`early-aborted` 静默；长 turn 不打断；手动压两步确认（冷却期 `--force`）；参数越界被拒。
+- **0.2.2**：聚合 = 逐条求和；两实测数 + 假设行置顶的估算；`backend` 用 `cost-v1.4` 枚举（含 `none`）；未知保持 unknown；`/cg cost` 可查。
+- **总回归**：M1 的 S1–S6；生产代码无折叠、**无引擎包装**。
+
+### 依赖/风险
+
+- **依赖 `cost-v1.4` 基线**：0.1.16 已推；**建议等 0.1.17（枚举补 `none`）落定后再开始 0.2.2**；
+- 提前压依赖 preset 引擎可见（G1），`ctx.compaction` 仍不可得（已结案，不期待）；
+- 每压一次都是一次摘要调用，“更早压”= 更多摘要成本，文档必须写明；
+- 与 `dsh-context` 不重复做图表，只做策略账本。
+
+### 任务拆解
+
+见 `TASKS/REQ-20261025-09-M2-拆解.md`（首批 T0 门禁 + T1/T2 策略层）。
