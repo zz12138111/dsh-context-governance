@@ -387,7 +387,7 @@
 
 - **依据**：`docs/M2-需求草案-v0.6.md`（**终审通过**，含附录 A“推迟不做”ADR）；`docs/M2-使用说明-草案-v0.3.md`；架构 v1.1 §6/§8/§14；`DEC-20261025-51`/`DEC-20261025-52`（`cost-v1.4` 基线）。
 - **优先级**：P0
-- **状态**：**0.2.0 / 0.2.1 已交付 · 已复核**（0.2.1 复核 P1=0 / P2=0 / P3=0 + 真机 `source=projection(backfilled)` / `native=0.6934` + `tag v0.2.1`）；**0.2.2 已开工**（骨架 `2367d57`、P3-1 busy 文案 `25268bc`、契约改名 `attempt→accepted` `2fd4f6f`、`ok` 拆 `compaction`/`protection` 正交字段 `aacea07`，**295/295**；`armed=false` 默认不执行已锁；**接线前必须先修**复核 P2-1「异步 `compactNow` 同步 try/catch 捕不到 busy/失败」与 P2-2「第一参应是 `agent` 不是 `session`」，见 `docs/review-context-governance-0.2.2.md`）；**G2/G3 真机已完成**（`analysis/req-20261025-09/G2-G3-真机验证报告.md`）；**0.2.3 账本暂缓至 1.1**（`DEC-20261025-79`）
+- **状态**：**0.2.0 / 0.2.1 已交付 · 已复核**（0.2.1 复核 P1=0 / P2=0 / P3=0 + 真机 `source=projection(backfilled)` / `native=0.6934` + `tag v0.2.1`）；**0.2.2 已开工**（四步：① 骨架 `2367d57` + P3-1 busy 文案 `25268bc`；② 契约改名 `attempt→accepted` `2fd4f6f` + `ok` 拆 `compaction`/`protection` 正交字段 `aacea07`；③ logger 落点 `3179ddf`（保护失败同时写 diagnostics.logFile）——**第 4 步 audit 增记未做**；**296/296**，2026-10-26 02:27 现采；`armed=false` 默认不执行已锁，且**尚未接入 `src/index.js`**（`early.js` 全仓无 src 引用，真引擎未挂）；**接线前必须先修**复核 P2-1「异步 `compactNow` 同步 try/catch 捕不到 busy/失败」与 P2-2「第一参应是 `agent` 不是 `session`」，见 `docs/review-context-governance-0.2.2.md`）；**G2/G3 真机已完成**（`analysis/req-20261025-09/G2-G3-真机验证报告.md`）；**0.2.3 账本暂缓至 1.1**（`DEC-20261025-79`）
 - **版本**：0.2.0（策略层）→ **0.2.1（窗口/校验层，不执行压缩）** → **0.2.2（提前压执行，已开工：骨架+测试，未接线）** → ~~0.2.3（成本账本，暂缓至 1.1）~~
 - **背景/痛点**：M1 解决“不断线”；M2 解决“**什么时候压可控、压了值不值能算**”。用户原始诉求是**提前压缩、去掉过时信息**。宿主原生触发点 ≈67.85%（preset `0.8 + 65536`，patch 层无效），我们只在它之前动手，**不包装宿主决策点**。
 
@@ -667,7 +667,7 @@
 
 - **依据**：`REQ-20261025-10` 拆出；`DEC-20261025-69`（**D-R1 = B**）。
 - **优先级**：P0（1.0 的发布门）
-- **状态**：**部分开工**（干净包脚本 `6ce6e8b`、敏感扫描窄白名单 + `memory-cleanup` `28f749e` 已复核，见 `docs/review-context-governance-0.3.2.md`；**CI 接入 / 兼容矩阵 / 安装-卸载-回滚三条演练 / Release notes + checklist 未做**；无任何公开动作）
+- **状态**：**部分开工**（干净包脚本 `6ce6e8b`、敏感扫描窄白名单 + `memory-cleanup` `28f749e` 已复核，见 `docs/review-context-governance-0.3.2.md`；**CI 接入 / 兼容矩阵 / 安装-卸载-回滚三条演练 / Release notes + checklist 未做**；无任何公开动作）。**指针**：**0.1.18 发布前收口（206/206，复核 0/P2=0/P3=4）无独立单，记在 `REQ-20261025-08` 状态行尾巴**
 - **目标（可验收）**：
   1. **干净包导出**：以 tag 为基线用 `git archive` 导出 → 解压 → 跑合规扫描（`--strict`），产出**文件清单 + 哈希**；
   2. **敏感扫描接入 CI**：gitleaks/trufflehog（引入需批准），不可 `--no-verify` 绕过；本地无依赖兜底扫描保留；
