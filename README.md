@@ -29,3 +29,13 @@ D:\DS-PROJECT\DSH插件开发\
 - 00 管：环境、边界、资源、决策路由、进度跟踪；不做细节验收。
 - 用户管：验收、发布批准、安装批准。
 - 子会话交付：摘要 + 路径 + 关键数字 + 验证项；验收时 00 整理成一份转用户。
+
+## 许可与第三方
+
+- **本项目**：MIT，`Copyright (c) 2026 zz12138111` —— 见根 `LICENSE` 与 `packages/dsh-context-governance/LICENSE`。
+- **宿主/依赖**：DeepSeek Harness 的 `@deepseek-ai/*` 包（含 `cordis`）为 **MIT**，`Copyright (c) 2026 DeepSeek`；本项目在**运行时依赖**它们，仓库内**不含其源码副本**。
+- **文档引用**：`docs/`、`analysis/` 里出现的宿主源码行号、事件名与短句引用仅用于兼容性说明，版权归 DeepSeek，按其 MIT 许可使用，不是本项目代码。
+- **未发布外壳**：根 `@deepseek-ai/dsh-desktop-runtime` 是 `private: true` 的 Electron 外壳（未发布到 npm），**不作为“闭源/专有”论据**。
+- **第三方插件**：`dsh-context-zip`、`dsh-cost-meter`、`dsh-cross-session-approval` 等为用户环境依赖，不在本仓库分发。
+- **发布物**：打 zip / Release 时必须包含 `LICENSE`；若将来包含宿主代码片段，需随附 `MIT License, Copyright (c) 2026 DeepSeek`。
+- **数据提示**：`analysis/` 含本机绝对路径与真实会话 id，公开仓库前需脱敏或排除该目录（见 `scripts/compliance-scan.mjs`）。
