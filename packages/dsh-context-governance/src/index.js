@@ -510,14 +510,16 @@ export async function apply(ctx, rawConfig = {}) {
   if (typeof policyState.setWindowProvider === 'function') {
     policyState.setWindowProvider(() => guard?.windowState ?? null);
   }
-  // 窗口变化导致 at>native：拒绝该层 + 审计一次（不静默降级、不每事件刷审计）。
+  // 窗口变化导致 at 不可用：拒绝该层 + 审计一次（不静默降级、不每事件刷审计）。
+  // 退化（DEC-20261025-68 A）reason 是 native-uncomputable，必须与 over-native-runtime 一样落审计。
   if (guard !== null && typeof guard.onWindowChange === 'function') {
     const windowViolations = new Set();
+    const WINDOW_REJECT_REASONS = new Set(['over-native-runtime', 'native-uncomputable']);
     const checkWindowViolations = () => {
       try {
         const resolved = policyState.resolve();
         for (const item of resolved.invalid) {
-          if (item.reason !== 'over-native-runtime' && item.reason !== 'window-too-small') continue;
+          if (!WINDOW_REJECT_REASONS.has(item.reason)) continue;
           const key = `${item.source}|${item.key}|${item.reason}`;
           if (windowViolations.has(key)) continue;
           windowViolations.add(key);

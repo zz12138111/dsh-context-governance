@@ -4,13 +4,15 @@
  */
 
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
 
 import { CompressionGuard } from '../src/compress/runtime.js';
 import { createStatusCommand } from '../src/commands/cg-status.js';
-import { buildPolicyState, resolveConfig } from '../src/index.js';
+import { apply, buildPolicyState, resolveConfig } from '../src/index.js';
 import { nativeFromWindow, summarizeWindow } from '../src/policy.js';
+import { tempDir } from './helpers.mjs';
 
 function makeCtx() {
   const handlers = [];
@@ -305,4 +307,40 @@ test('0.2.1 /cg status 退化显示 + /cg set 拒绝 at（native-uncomputable）
   const set = await command.handler({ rawInput: 'set compact.at=0.5' });
   assert.equal(set.kind, 'error');
   assert.match(set.text, /native-uncomputable/);
+});
+
+test('0.2.1 P2-1 退化拒层必须落审计（policy-invalid reason=native-uncomputable）', async () => {
+  const rootDir = await tempDir('cg-window-audit-');
+  const handlers = [];
+  const logs = [];
+  const disposers = [];
+  const ctx = {
+    tools: { register: () => () => {} },
+    logger: { info: () => {}, warn: (...args) => logs.push(args.join(' ')) },
+    on: (event, handler) => { handlers.push(handler); return () => {}; },
+    get: (name) => (name === 'commands' ? { register: () => () => {} } : undefined),
+    effect: (callback) => { disposers.push(callback()); },
+  };
+  try {
+    // 退化配置：128k 窗口 + 256k 预留 → native 不可计算；插件层设 at=0.5 必须被拒且落审计。
+    await apply(ctx, {
+      projectRoot: rootDir,
+      project: 'window-audit',
+      compression: { enabled: true },
+      policy: { reservedTokens: 256_000, values: { 'compact.at': 0.5 } },
+    });
+    const session = { id: 'session-aaaaaaaa', header: { id: 'session-aaaaaaaa', cwd: rootDir } };
+    handlers[0](session, { type: 'request/context', seq: 1, data: { contextWindow: 131_072 } });
+    const auditFile = path.join(rootDir, '.dsh', 'memory', 'audit.jsonl');
+    const records = (await fs.readFile(auditFile, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+    const rejected = records.filter((record) => record.event === 'policy-invalid');
+    assert.equal(rejected.length, 1, `退化应只写 1 条 policy-invalid，实际 ${JSON.stringify(rejected)}`);
+    assert.equal(rejected[0].reason, 'native-uncomputable');
+    assert.equal(rejected[0].code, 'compact.at');
+    assert.equal(rejected[0].source, 'plugin');
+    assert.ok(logs.some((line) => /policy layer rejected at runtime: plugin\/compact\.at:native-uncomputable/.test(line)));
+  } finally {
+    for (const dispose of disposers) await dispose();
+    await fs.rm(rootDir, { recursive: true, force: true });
+  }
 });

@@ -82,7 +82,7 @@ packages/dsh-context-governance/
 **0.2.0 只做“什么时候压可控、压了值不值能算”的配置与状态层**：不提前压、不调用宿主引擎、不接管 provider（引擎接线是 0.2.1）。
 
 - 合成顺序（低 → 高）：**内置 → profile 标签 → 插件配置 → 项目 `.cg-policy.json` → 会话 `/cg set`**；`/cg policy show` 逐键给出 `source`，`layers:` 链里空层标 `(empty)`。
-- `compact.at` 是**占窗口比例**（默认 0.60），上限是动态 `native = floor(min(W×0.8, W−O−65536))/W`（1M 窗口 + 256k 预留 ≈ 0.6785）；`at > native` 拒绝并说明“M2 不支持推迟”。`at < 0.30` 需配置文件 `compact.lowThresholdAck=true`，否则回退内置值并记 `low-threshold-unacked`。
+- `compact.at` 是**占窗口比例**（默认 0.60），上限是动态 `native = floor(min(W×0.8, W−O−65536))/W`。**0.2.1 起默认取观测窗口 1,048,576 → 0.6934**；无观察时回退配置窗口 1,000,000 → 0.6785。`at > native` 拒绝并说明“M2 不支持推迟”。`at < 0.30` 需配置文件 `compact.lowThresholdAck=true`，否则回退内置值并记 `low-threshold-unacked`。
 - `compact.early` 是**纯配置 `on|off`**（默认 on；`research` profile 默认 off）；“引擎通道是否可取到”留给 0.2.1 的 `early-channel`，0.2.0 没有任何引擎接线。
 - 项目文件 `.cg-policy.json` 按**不可信输入**处理（`DEC-20261025-62` A+C）：
   - 只允许项目内相对路径（绝对路径/`..` 拒绝），containment 复核（**词法层**，不解析 junction/symlink），>64KB 不读；

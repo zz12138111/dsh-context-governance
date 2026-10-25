@@ -1,2 +1,10 @@
+packages/dsh-context-governance/src/compress/adapters.js:5: * - **不替换 `ctx.compaction`**。治理层只读取引擎、订阅会话事件；后端切换需要人工操作。
+packages/dsh-context-governance/src/compress/adapters.js:266:  return name === 'BasicCompactionEngine' || typeof engine.compactIfNeeded === 'function';
+packages/dsh-context-governance/src/compress/adapters.js:273: * @param {object|null} options.compaction `ctx.compaction` 服务实例（缺失传 null）。
 packages/dsh-context-governance/src/compress/adapters.js:287:  const hasServiceApi = typeof compaction.compactNow === 'function';
 packages/dsh-context-governance/src/compress/adapters.js:293:      notes: ['ctx.compaction exists but does not expose compactNow()'],
+packages/dsh-context-governance/src/compress/adapters.js:306:    notes: ['ctx.compaction is present but matches neither known backend marker'],
+packages/dsh-context-governance/src/compress/adapters.js:424:    detail: hasService ? `${adapter.label} exposes the compaction service` : 'no usable ctx.compaction provider',
+packages/dsh-context-governance/src/compress/selection.js:4: * M1 的“回退”不是替用户换引擎——插件不拥有 `ctx.compaction`，
+packages/dsh-context-governance/src/compress/selection.js:51:  if (adapter.kind === 'none') add('no-compaction-service', 'ctx.compaction is not mounted; governance can only observe sessions');
+packages/dsh-context-governance/src/index.js:423:    compactionProbe = ctx.compaction ??
