@@ -7,6 +7,19 @@
 > 真机：已安装（junction 指向源码目录）；最近一次真机验证记录见 `memory/ARTIFACTS.md`，待验收项见 `STATUS.md`（本文不写具体版本/数字）。**M3 T2（0.3.1）起新会话 header 默认开启**（`/cg header off` 或配置 `memoryHeader.enabled=false` 可关）。
 > 安装方式：`docs/插件安装升级-Runbook.md`（`file:` 声明 + junction + bundle；不用 pnpm）。本机已按该方式安装（junction 指向源码），其它机器按 Runbook 操作。
 
+## 提前压（0.2.4，默认开）⚠️
+
+- **默认真实触发**：每个 `turn/end` 后 50ms 检查；`effective ∈ [compact.at, native−0.02)` 时调用宿主 `compactNow`。
+- **风险**：真实压缩**不可逆**——原文只剩摘要 + 记忆指针（`mem_query` 取回的是指针/标题，不是正文）。
+- 默认参数：`compact.at=0.60`、`native≈0.6934`（观测窗口 1,048,576）→ 触发窗口 **60.0%–67.34%**；≥67.34%（近 native）交给宿主原生（≈69.34%）。冷却 10 分钟、增量 1 个百分点。
+- **关闭（三层，均留证据）**：
+  1. 当前会话：`/cg compact disarm`（`/cg compact arm` 恢复；会话结束回默认）
+  2. 全局配置：`compact.early.armed: false`（加载后生效）
+  3. profile：`compact.early: false`（`research` 已预置）
+- 查看：`/cg status` 的 `early=on|off (default|config|session)` 与 `last-early: …`；审计 `early-armed/disarmed`、`early-forced/skipped/aborted/failed`。
+- 项目层 `.cg-policy.json` **不能**开关 armed：出现即忽略并记 `policy-invalid(project-excluded)`，同层其它键仍生效。
+
+
 ## 为什么不是“又一个记忆插件”
 
 - 只记任务态（决定/偏好/待办/进度/事实/判据/锚点）；压缩保护条目会保留**最新用户消息首行 ≤200 字**与路径/批次等指针（`captureTitle: false` 可关，改为只存 ID/状态/通用标签），其余正文不入库；命中已知凭据形态直接拒写（fail-closed）。
