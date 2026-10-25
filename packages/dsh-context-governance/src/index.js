@@ -278,6 +278,8 @@ export function buildPolicyState(config, deps = {}) {
   const sessionLayer = { source: 'session', values: {} };
   layers.push(sessionLayer);
   // 0.2.1（DEC-20261025-66 / 68）：窗口由运行时观察；每次 resolve 现算 native（不锁 apply）。
+  // P2-3：`/cg set` 被拒的 transient（每 episode 去重；窗口恢复时清空），不写进 build 期的 state.invalid。
+  const transientRejections = [];
   let windowProvider = () => null;
   const resolveWithWindow = () => {
     const win = windowProvider() ?? null;
@@ -324,9 +326,21 @@ export function buildPolicyState(config, deps = {}) {
       return { source: layer.source, values };
     });
     const resolved = resolvePolicy(filtered, { native: currentInfo.native });
+    // P2-3：拒绝项只放 transient（每 episode 去重、窗口恢复即清），绝不 push 进 state.invalid（那是构建期的静态记录）。
+    if (!degenerate) transientRejections.length = 0;
+    // P3-3：层被拒后回落到 builtin 的 at 仍可能 > conservative（例如 0.60 > 0.375），必须显式提示，不能默默生效。
+    if (!degenerate && checkNative !== null && resolved.values['compact.at'] > checkNative + 1e-9) {
+      runtimeInvalid.push({
+        source: 'builtin',
+        key: 'compact.at',
+        reason: 'fallback-over-native',
+        detail: `falls back to at=${resolved.values['compact.at']} > native=${checkNative}` +
+          (conservative === null ? '' : `（保守窗口 ${conservative.tokens}）`),
+      });
+    }
     return {
       ...resolved,
-      invalid: [...invalid, ...runtimeInvalid, ...resolved.invalid],
+      invalid: [...invalid, ...runtimeInvalid, ...resolved.invalid, ...transientRejections],
       window: {
         currentTokens: win?.current ? currentTokens : null,
         currentSessionId: win?.current?.sessionId ?? null,
@@ -366,6 +380,18 @@ export function buildPolicyState(config, deps = {}) {
       return info.native;
     },
     windowState: () => windowProvider() ?? null,
+    /** P2-3：记录一次“会话层设置被拒”（每 episode 去重；窗口恢复时清空）。返回是否新增。 */
+    rejectSessionSet(entry) {
+      if (entry === null || typeof entry !== 'object') return false;
+      const key = `${entry.source}|${entry.key}|${entry.reason}`;
+      if (transientRejections.some((item) => `${item.source}|${item.key}|${item.reason}` === key)) return false;
+      transientRejections.push(entry);
+      return true;
+    },
+    /** 当前 episode 的 transient 拒绝（只读快照）。 */
+    sessionRejections() {
+      return transientRejections.map((item) => ({ ...item }));
+    },
     resolve: resolveWithWindow,
   };
 }
@@ -518,6 +544,9 @@ export async function apply(ctx, rawConfig = {}) {
     const checkWindowViolations = () => {
       try {
         const resolved = policyState.resolve();
+        // P3-7/P2-3：窗口恢复（不再有窗口级拒绝）后清空去重 Set，下一 episode 能再写审计。
+        const hasWindowReject = resolved.invalid.some((item) => WINDOW_REJECT_REASONS.has(item.reason));
+        if (!hasWindowReject) windowViolations.clear();
         for (const item of resolved.invalid) {
           if (!WINDOW_REJECT_REASONS.has(item.reason)) continue;
           const key = `${item.source}|${item.key}|${item.reason}`;

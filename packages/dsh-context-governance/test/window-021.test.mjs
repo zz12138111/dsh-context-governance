@@ -387,3 +387,176 @@ test('0.2.1 P3-11 退化时 /cg set 被拒：审计恰 1 条 + warn + status 可
   assert.equal(records.filter((record) => record.event === 'policy-invalid').length, 1);
   assert.ok(records.some((record) => record.event === 'policy-set' && record.source === 'session' && record.key === 'compact.early'));
 });
+
+test('0.2.1 P2-3/P3-2/P3-7：拒绝项 transient——恢复后 status/show 双干净，再退化仍能再审计', async () => {
+  let windowState = {
+    current: { sessionId: 'session-aaaaaaaa', tokens: 131_072, observedAt: '2026-10-26T00:00:00.000Z' },
+    conservative: { sessionId: 'session-aaaaaaaa', tokens: 131_072, observedAt: '2026-10-26T00:00:00.000Z' },
+    observed: [],
+    source: 'projection',
+    removed: false,
+  };
+  const config = resolveConfig({ projectRoot: 'D:/tmp/window', policy: { reservedTokens: 256_000 } });
+  const state = buildPolicyState(config, {
+    readFile: () => { const error = new Error('missing'); error.code = 'ENOENT'; throw error; },
+  });
+  state.setWindowProvider(() => windowState);
+  const records = [];
+  const logs = [];
+  const audit = {
+    append: (event, details) => { records.push({ event, ...details }); },
+    entries: () => records,
+    file: null,
+    maxBytes: null,
+    sizeBytes: null,
+    rotations: 0,
+  };
+  const command = createStatusCommand({ policy: state, audit, logger: { warn: (...args) => logs.push(args.join(' ')) }, now: () => new Date('2026-10-26T00:00:00Z') });
+
+  // episode 1：退化 → 拒 1 条
+  const first = await command.handler({ rawInput: 'set compact.at=0.5' });
+  assert.equal(first.kind, 'error');
+  assert.equal(records.filter((r) => r.event === 'policy-invalid').length, 1);
+  // 恢复 1M：status 与 show 都不得再显示
+  windowState = {
+    current: { sessionId: 'session-aaaaaaaa', tokens: 1_048_576, observedAt: '2026-10-26T00:00:05.000Z' },
+    conservative: { sessionId: 'session-aaaaaaaa', tokens: 1_048_576, observedAt: '2026-10-26T00:00:05.000Z' },
+    observed: [],
+    source: 'projection',
+    removed: false,
+  };
+  const statusAfterRecover = await command.handler({ rawInput: 'status' });
+  assert.doesNotMatch(statusAfterRecover.text, /policy-invalid:/);
+  const showAfterRecover = await command.handler({ rawInput: 'policy show' });
+  assert.match(showAfterRecover.text, /invalid: none/);
+  assert.doesNotMatch(showAfterRecover.text, /rejected/);
+  assert.equal(state.resolve().invalid.length, 0, '恢复后 resolve() 不得再带该条');
+
+  // episode 2：再次退化 → 还能再写 1 条（总计 2）
+  windowState = {
+    current: { sessionId: 'session-aaaaaaaa', tokens: 131_072, observedAt: '2026-10-26T00:00:09.000Z' },
+    conservative: { sessionId: 'session-aaaaaaaa', tokens: 131_072, observedAt: '2026-10-26T00:00:09.000Z' },
+    observed: [],
+    source: 'projection',
+    removed: false,
+  };
+  const second = await command.handler({ rawInput: 'set compact.at=0.5' });
+  assert.equal(second.kind, 'error');
+  assert.equal(records.filter((r) => r.event === 'policy-invalid').length, 2, '跨 episode 必须能再写审计');
+});
+
+test('0.2.1 P3-7（apply 路径）：windowViolations 去重 Set 恢复后清空，第二次拒层仍写审计', async () => {
+  const rootDir = await tempDir('cg-window-set-');
+  const handlers = [];
+  const disposers = [];
+  const ctx = {
+    tools: { register: () => () => {} },
+    logger: { info: () => {}, warn: () => {} },
+    on: (event, handler) => { handlers.push(handler); return () => {}; },
+    get: (name) => (name === 'commands' ? { register: () => () => {} } : undefined),
+    effect: (callback) => { disposers.push(callback()); },
+  };
+  try {
+    await apply(ctx, {
+      projectRoot: rootDir,
+      project: 'window-set',
+      compression: { enabled: true },
+      policy: { reservedTokens: 16_384, values: { 'compact.at': 0.5 } },
+    });
+    const session = { id: 'session-aaaaaaaa', header: { id: 'session-aaaaaaaa', cwd: rootDir } };
+    const feed = (window) => handlers[0](session, { type: 'request/context', seq: 1, data: { contextWindow: window } });
+    feed(1_048_576); // 初始：0.5 <= 0.8
+    feed(131_072);   // 第一次拒层：0.5 > 0.375 → audit 1
+    feed(1_048_576); // 恢复：Set 应清空
+    feed(131_072);   // 第二次拒层：必须再写 1 条 → audit 2
+    const auditFile = path.join(rootDir, '.dsh', 'memory', 'audit.jsonl');
+    const records = (await fs.readFile(auditFile, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+    const rejected = records.filter((record) => record.event === 'policy-invalid' && record.reason === 'over-native-runtime');
+    assert.equal(rejected.length, 2, `跨 episode 必须写 2 条，实际 ${JSON.stringify(rejected)}`);
+  } finally {
+    for (const dispose of disposers) await dispose();
+    await fs.rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('0.2.1 P3-3：回落 builtin 0.6 > conservative 0.375 必须显式提示', () => {
+  const config = resolveConfig({
+    projectRoot: 'D:/tmp/window',
+    policy: { reservedTokens: 16_384, values: { 'compact.at': 0.5 } },
+  });
+  const state = buildPolicyState(config, {
+    readFile: () => { const error = new Error('missing'); error.code = 'ENOENT'; throw error; },
+  });
+  state.setWindowProvider(() => ({
+    current: { sessionId: 'session-aaaaaaaa', tokens: 131_072, observedAt: '2026-10-26T00:00:00.000Z' },
+    conservative: { sessionId: 'session-aaaaaaaa', tokens: 131_072, observedAt: '2026-10-26T00:00:00.000Z' },
+    observed: [],
+    source: 'projection',
+    removed: false,
+  }));
+  const resolved = state.resolve();
+  assert.equal(resolved.values['compact.at'], 0.6);
+  assert.ok(resolved.invalid.some((item) => item.source === 'builtin' && item.reason === 'fallback-over-native'));
+  assert.equal(state.sessionRejections().length, 0);
+});
+
+test('0.2.1 P3-1：无观察时压力行标 config-fallback', async () => {
+  const config = resolveConfig({ projectRoot: 'D:/tmp/window', policy: {} });
+  const state = buildPolicyState(config, {
+    readFile: () => { const error = new Error('missing'); error.code = 'ENOENT'; throw error; },
+  });
+  const command = createStatusCommand({
+    guard: { status: guardStatus({ measuredTokens: 100_000, estimatedTokens: 80_000 }) },
+    policy: state,
+    now: () => new Date('2026-10-26T00:00:00Z'),
+  });
+  const status = await command.handler({ rawInput: 'status' });
+  assert.match(status.text, /pressure: .*window=1M \(config-fallback\)/);
+});
+
+test('0.2.1 P3-6：非法 contextWindow 值不当作删除，仅缺失才删', () => {
+  const { ctx, handlers } = makeCtx();
+  const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.3' });
+  guard.start();
+  try {
+    const session = { id: 'session-aaaaaaaa', header: { id: 'session-aaaaaaaa', cwd: process.cwd() } };
+    handlers[0](session, { type: 'request/context', seq: 1, data: { contextWindow: 1_048_576 } });
+    handlers[0](session, { type: 'request/context', seq: 2, data: { contextWindow: '1M' } });
+    assert.equal(guard.windowState.current.tokens, 1_048_576, '非法值不能覆盖/删除旧值');
+    assert.equal(guard.windowState.removed, false);
+    assert.equal(guard.status.stats.windowInvalidObservations, 1);
+    handlers[0](session, { type: 'request/context', seq: 3, data: {} });
+    assert.equal(guard.windowState.current, null);
+    assert.equal(guard.windowState.removed, true);
+  } finally {
+    guard.stop();
+  }
+});
+
+test('0.2.1 P3-2：被拒会话覆盖在 status 标 (rejected)，恢复后消失', async () => {
+  let windowState = {
+    current: { sessionId: 'session-aaaaaaaa', tokens: 1_048_576, observedAt: '2026-10-26T00:00:00.000Z' },
+    conservative: { sessionId: 'session-aaaaaaaa', tokens: 1_048_576, observedAt: '2026-10-26T00:00:00.000Z' },
+    observed: [], source: 'projection', removed: false,
+  };
+  const config = resolveConfig({ projectRoot: 'D:/tmp/window', policy: { reservedTokens: 16_384, values: { 'compact.at': 0.30 } } });
+  const state = buildPolicyState(config, {
+    readFile: () => { const error = new Error('missing'); error.code = 'ENOENT'; throw error; },
+  });
+  state.setWindowProvider(() => windowState);
+  state.sessionLayer.values['compact.at'] = 0.6; // 1M 下合法（0.8）
+  const command = createStatusCommand({ policy: state, now: () => new Date('2026-10-26T00:00:00Z') });
+  const before = await command.handler({ rawInput: 'status' });
+  assert.match(before.text, /policy-session: compact\.at=0\.6/);
+  assert.doesNotMatch(before.text, /rejected/);
+
+  windowState = {
+    current: { sessionId: 'session-aaaaaaaa', tokens: 131_072, observedAt: '2026-10-26T00:00:05.000Z' },
+    conservative: { sessionId: 'session-aaaaaaaa', tokens: 131_072, observedAt: '2026-10-26T00:00:05.000Z' },
+    observed: [], source: 'projection', removed: false,
+  };
+  const rejectedStatus = await command.handler({ rawInput: 'status' });
+  assert.match(rejectedStatus.text, /policy-session: compact\.at=0\.6\(rejected\)/);
+  const rejectedShow = await command.handler({ rawInput: 'policy show' });
+  assert.match(rejectedShow.text, /session: compact\.at=0\.6\(rejected\)/);
+});

@@ -37,11 +37,24 @@ function costLine(status) {
     `trigger=${cost.trigger ?? '-'} pruned=${pruned} tools=${tools}`;
 }
 
-function formatSession(overrides) {
+function formatSession(overrides, rejectedKeys = null) {
   const keys = Object.keys(overrides ?? {});
   if (keys.length === 0) return 'none';
   const render = (value) => (value === null ? 'null' : value === true ? 'on' : value === false ? 'off' : value);
-  return keys.map((key) => `${key}=${render(overrides[key])}`).join(', ');
+  return keys.map((key) => {
+    const label = `${key}=${render(overrides[key])}`;
+    return rejectedKeys !== null && rejectedKeys.has(key) ? `${label}(rejected)` : label;
+  }).join(', ');
+}
+
+/** 会话层里被运行时拒绝的键（P3-2：display 要标 rejected，恢复后自然消失）。 */
+function rejectedSessionKeys(resolved) {
+  const keys = new Set();
+  for (const item of resolved?.invalid ?? []) {
+    if (item?.source !== 'session' || item?.key !== 'compact.at') continue;
+    if (item.reason === 'over-native-runtime' || item.reason === 'native-uncomputable') keys.add('compact.at');
+  }
+  return keys;
 }
 
 function statusText({ store, guard, audit, now, policy = null }) {
@@ -58,7 +71,7 @@ function statusText({ store, guard, audit, now, policy = null }) {
     if (resolvedPolicy.window !== undefined) lines.push(summarizeWindow(resolvedPolicy.window));
     const rejected = collectInvalid(policy, resolvedPolicy);
     if (rejected.length > 0) lines.push(`policy-invalid: ${rejected.length} (${formatInvalid(rejected)})`);
-    const overrides = formatSession(policy.sessionLayer?.values);
+    const overrides = formatSession(policy.sessionLayer?.values, rejectedSessionKeys(resolvedPolicy));
     if (overrides !== 'none') lines.push(`policy-session: ${overrides}`);
   }
   if (status === null) {
@@ -91,6 +104,7 @@ function statusText({ store, guard, audit, now, policy = null }) {
       {
         at: resolvedPolicy?.values?.['compact.at'] ?? null,
         sessionId: resolvedPolicy?.window?.currentSessionId ?? null,
+        windowSource: resolvedPolicy?.window?.currentSource ?? null,
       },
     ));
     if (status.degradedReasons.length > 0) lines.push(`degraded: ${status.degradedReasons.join(', ')}`);
@@ -264,15 +278,18 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
       const validationNative = typeof policy.validationNative === 'function' ? policy.validationNative() : policy.native;
       if (key === 'compact.at' && validationNative === null) {
         // P3-11（口径 A）：设置被拒也是“配置被拒”事件——审计 + warn + 状态可见三处一致。
-        const alreadyReported = (policy.invalid ?? []).some((item) =>
-          item.source === 'session' && item.key === 'compact.at' && item.reason === 'native-uncomputable');
-        if (!alreadyReported) {
-          policy.invalid?.push({
-            source: 'session',
-            key: 'compact.at',
-            reason: 'native-uncomputable',
-            detail: '退化窗口下拒绝 /cg set compact.at',
-          });
+        // P2-3：只记 transient（每 episode 去重；窗口恢复时由 policy.resolve 清空），不写进 policyState.invalid。
+        const entry = {
+          source: 'session',
+          key: 'compact.at',
+          reason: 'native-uncomputable',
+          detail: '退化窗口下拒绝 /cg set compact.at',
+        };
+        const added = typeof policy.rejectSessionSet === 'function'
+          ? policy.rejectSessionSet(entry)
+          : !(policy.sessionRejections?.() ?? []).some((item) =>
+            item.source === 'session' && item.key === 'compact.at' && item.reason === 'native-uncomputable');
+        if (added === true) {
           audit?.append?.('policy-invalid', { source: 'session', reason: 'native-uncomputable', code: 'compact.at' });
           logger?.warn?.(
             '[context-governance] rejected /cg set compact.at: native-uncomputable（窗口退化，native 不可计算）',
@@ -352,7 +369,7 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
           'context-governance policy',
           summarizePolicy(resolved),
           `layers: ${layerChain(policy)}`,
-          `session: ${formatSession(policy.sessionLayer?.values)}`,
+          `session: ${formatSession(policy.sessionLayer?.values, rejectedSessionKeys(resolved))}`,
           ...policyTable(resolved),
           ...(rejected.length > 0
             ? ['invalid:', ...rejected.map((item) =>

@@ -396,16 +396,17 @@ function formatWindow(value) {
 }
 
 /** 压力行（`/cg status`）：缺失项写 `-` 并标原因，不写假数字。 */
-export function summarizePressure(pressure, { at = null, sessionId = null } = {}) {
+export function summarizePressure(pressure, { at = null, sessionId = null, windowSource = null } = {}) {
   const known = pressure !== null && typeof pressure === 'object';
   const fmt = (value) => (value === null || value === undefined ? '-' : Number(value).toFixed(3));
   const safety = known && pressure.adjusted !== null && pressure.safety !== null ? `(×${pressure.safety})` : '';
   const ratio = known && pressure.ratio !== null ? pressure.ratio.toFixed(2) : '-';
   const windowValue = known ? formatWindow(pressure.windowTokens) : '-';
-  // DEC-20261025-66：window= 后带 session 短 id。
-  const window = sessionId === null || sessionId === undefined
-    ? `window=${windowValue}`
-    : `window=${windowValue} (session ${shortSessionId(sessionId)})`;
+  // DEC-20261025-66：window= 后带 session 短 id；P3-1：无观察时标 config-fallback。
+  let window;
+  if (sessionId !== null && sessionId !== undefined) window = `window=${windowValue} (session ${shortSessionId(sessionId)})`;
+  else if (windowSource === 'config-fallback') window = `window=${windowValue} (config-fallback)`;
+  else window = `window=${windowValue}`;
   const head = `measured=${fmt(known ? pressure.measured : null)} ` +
     `estimated=${fmt(known ? pressure.estimated : null)} ` +
     `adjusted=${fmt(known ? pressure.adjusted : null)}${safety} ` +

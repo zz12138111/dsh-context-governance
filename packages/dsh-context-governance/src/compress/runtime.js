@@ -182,6 +182,8 @@ export class CompressionGuard {
     ignoredForeignEvents: 0,
     unattributedEvents: 0,
     reinjectionShadowed: 0,
+    /** 0.2.1 P3-6：收到但非法的 contextWindow 观测（不当作删除）。 */
+    windowInvalidObservations: 0,
   };
 
   constructor(options = {}) {
@@ -590,21 +592,33 @@ export class CompressionGuard {
     return () => this.#windowListeners.delete(listener);
   }
 
-  /** request/context：有有效 contextWindow 就更新，没有就删除该会话旧值（不沿用）。 */
+  /** request/context：有有效 contextWindow 就更新；**缺失**才删除该会话旧值（P3-6：非法值不当删除）。 */
   #observeWindow(session, event) {
     const key = this.#sessionKey(session);
     if (key === null) return;
-    const observed = event?.data?.contextWindow;
+    const data = event?.data ?? {};
+    const hasField = Object.prototype.hasOwnProperty.call(data, 'contextWindow');
+    const observed = data.contextWindow;
     const previous = this.#windows.get(key) ?? null;
     let changed = false;
     if (Number.isInteger(observed) && observed > 0) {
       if (previous === null || previous.tokens !== observed) changed = true;
       this.#windows.set(key, { tokens: observed, observedAt: this.#now().toISOString() });
       this.#removedWindows.delete(key);
-    } else if (previous !== null) {
-      this.#windows.delete(key);
-      this.#removedWindows.add(key);
-      changed = true;
+    } else if (!hasField || observed === undefined || observed === null) {
+      // 真正的“不带 contextWindow”才删除（DEC-66 ②）。
+      if (previous !== null) {
+        this.#windows.delete(key);
+        this.#removedWindows.add(key);
+        changed = true;
+      }
+    } else {
+      // 非法值（字符串/0/负数/小数）：不当作删除，保留旧值，计数并告警。
+      this.#stats.windowInvalidObservations += 1;
+      this.#logger?.warn?.(
+        `[context-governance] ignoring invalid contextWindow observation: ${String(observed).slice(0, 40)}`,
+      );
+      return;
     }
     if (!changed) return;
     const snapshot = this.windowState;

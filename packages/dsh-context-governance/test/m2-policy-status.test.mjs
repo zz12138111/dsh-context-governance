@@ -281,7 +281,7 @@ test('0.2.0 压力四段：measured/estimated/adjusted/effective + ratio（只�
   assert.equal(result.kind, 'success');
   assert.match(
     result.text,
-    /pressure: measured=0\.583 estimated=0\.412 adjusted=0\.556\(×1\.35\) effective=0\.583 ratio=1\.42 window=1M at=0\.58 effective>=at/,
+    /pressure: measured=0\.583 estimated=0\.412 adjusted=0\.556\(×1\.35\) effective=0\.583 ratio=1\.42 window=1M \(config-fallback\) at=0\.58 effective>=at/,
   );
 });
 
@@ -292,7 +292,7 @@ test('0.2.0 压力四段：无 usage/tokenMeter 时写 -，不伪造数字', asy
     now: fixedNow,
   });
   const result = await command.handler({ rawInput: 'status' });
-  assert.match(result.text, /pressure: measured=- estimated=- adjusted=- effective=- ratio=- window=1M \(no usage\/tokenMeter yet\)/);
+  assert.match(result.text, /pressure: measured=- estimated=- adjusted=- effective=- ratio=- window=1M \(config-fallback\) \(no usage\/tokenMeter yet\)/);
 });
 
 test('0.2.0 guard.pressure：usage 实测与 tokenMeter 估算分开取，不互相顶替', () => {
