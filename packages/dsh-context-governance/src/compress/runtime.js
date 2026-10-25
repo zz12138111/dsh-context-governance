@@ -48,6 +48,14 @@ function normalized(value) {
   return String(value ?? '').replace(/\s+/g, '').toLowerCase();
 }
 
+/** 归一化会话 cwd 与项目根，用于归属比较（Windows 大小写不敏感）。 */
+function sameDirectory(left, right) {
+  if (typeof left !== 'string' || left.trim() === '' || typeof right !== 'string' || right.trim() === '') return false;
+  const a = path.resolve(left.trim()).replace(/[\\/]+$/, '');
+  const b = path.resolve(right.trim()).replace(/[\\/]+$/, '');
+  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
+}
+
 function coveredBySummary(meta, summaryText) {
   if (summaryText.trim() === '') return false;
   const summary = normalized(summaryText);
@@ -117,6 +125,13 @@ export class CompressionGuard {
   #degradedReasons = [];
   #materializing = new Set();
   #writeDurations = [];
+  #readOnly = false;
+  #readOnlyReason = null;
+  #readOnlyWarnedFor = new Set();
+  #projectRoot = '';
+  #onlyProject = false;
+  #captureTitle = true;
+  #foreignSessions = new Set();
   #stats = {
     events: 0,
     starts: 0,
@@ -132,6 +147,13 @@ export class CompressionGuard {
     reinjections: 0,
     reinjectionFailures: 0,
     reinjectionSkips: 0,
+    auditWriteFailures: 0,
+    auditSkippedReadOnly: 0,
+    interruptedCycles: 0,
+    abandonedCycles: 0,
+    readOnlyRecoveries: 0,
+    ignoredForeignEvents: 0,
+    unattributedEvents: 0,
   };
 
   constructor(options = {}) {
@@ -143,6 +165,12 @@ export class CompressionGuard {
     this.#backendVersion = options.backendVersion ?? 'unknown';
     this.#enabled = options.enabled !== false;
     this.#store = options.store ?? null;
+    // P2-1：只处理本项目会话。projectRoot 为空时无法判定，保持旧行为（不过滤）。
+    this.#projectRoot = typeof options.projectRoot === 'string' ? options.projectRoot.trim() : '';
+    this.#onlyProject = options.onlyProject !== false && this.#projectRoot !== '';
+    this.#captureTitle = options.captureTitle !== false;
+    this.#readOnly = this.#store?.status?.readOnlyReason !== null && this.#store?.status?.readOnlyReason !== undefined;
+    this.#readOnlyReason = this.#readOnly ? this.#store.status.readOnlyReason : null;
     this.#reinjection = {
       enabled: options.reinjection?.enabled !== false,
       maxLines: Math.min(Math.max(options.reinjection?.maxLines ?? 8, 1), 20),
@@ -150,7 +178,11 @@ export class CompressionGuard {
     };
     this.#audit = options.audit ?? (this.#store === null
       ? null
-      : new AuditLog({ file: path.join(this.#store.rootDir, 'audit.jsonl'), now: this.#now }));
+      : new AuditLog({
+        file: path.join(this.#store.rootDir, 'audit.jsonl'),
+        now: this.#now,
+        maxBytes: options.auditMaxBytes,
+      }));
     this.#adapter = options.adapter ?? this.#detect();
     const eventApi = typeof this.#ctx?.on === 'function';
     this.#eventApi = eventApi;
@@ -191,6 +223,75 @@ export class CompressionGuard {
   }
   get eventApi() { return this.#eventApi; }
   get auditLog() { return this.#audit; }
+  get readOnly() { return this.#readOnly; }
+  get readOnlyReason() { return this.#readOnlyReason; }
+
+  /** 会话的 cwd：优先 `session.header.cwd`（宿主真实字段），退回 `session.cwd`。 */
+  #sessionCwd(session) {
+    const header = session?.header;
+    if (header !== null && typeof header === 'object' && typeof header.cwd === 'string' && header.cwd.trim() !== '') {
+      return header.cwd.trim();
+    }
+    if (typeof session?.cwd === 'string' && session.cwd.trim() !== '') return session.cwd.trim();
+    return '';
+  }
+
+  /**
+   * P2-1 项目归属：只处理本项目会话的压缩事件。
+   * - cwd 与本项目根不同 → 忽略（fail-closed）；
+   * - cwd 缺失（老会话/测试夹具）→ 无法判定，放行但计入 `unattributedEvents`。
+   */
+  #belongsToProject(session) {
+    if (!this.#onlyProject) return true;
+    const cwd = this.#sessionCwd(session);
+    if (cwd === '') {
+      this.#stats.unattributedEvents += 1;
+      return true;
+    }
+    return sameDirectory(cwd, this.#projectRoot);
+  }
+
+  /** 记录只读原因；同一原因只 warn 一次，避免每周期刷屏。 */
+  #setReadOnly(reason, details = '') {
+    const next = String(reason ?? 'unknown');
+    this.#readOnly = true;
+    this.#readOnlyReason = next;
+    if (this.#readOnlyWarnedFor.has(next)) return;
+    this.#readOnlyWarnedFor.add(next);
+    this.#logger?.warn?.(
+      `[context-governance] memory read-only (${next})${details === '' ? '' : `: ${details}`}; ` +
+      'protection writes and audit appends are suspended, compaction continues',
+    );
+  }
+
+  /** 每周期开始时尝试恢复：根目录写探测 / 外部改动重载。失败保持只读，不抛错。 */
+  async #refreshReadOnly() {
+    if (this.#store === null || !this.#readOnly) return;
+    const reason = this.#readOnlyReason ?? '';
+    try {
+      if (reason === 'external-change' && typeof this.#store.reload === 'function') {
+        await this.#store.reload();
+        if (this.#store.status.writable === true) {
+          this.#readOnly = false;
+          this.#readOnlyReason = null;
+          this.#stats.readOnlyRecoveries += 1;
+          this.#logger?.info?.('[context-governance] memory reloaded after external change; read-only cleared');
+        }
+      } else if (typeof this.#store.probeWritable === 'function') {
+        const result = await this.#store.probeWritable();
+        if (result.ok === true) {
+          this.#readOnly = false;
+          this.#readOnlyReason = null;
+          this.#stats.readOnlyRecoveries += 1;
+          this.#logger?.info?.('[context-governance] memory root is writable again; read-only cleared');
+        } else if (result.reason !== this.#readOnlyReason) {
+          this.#setReadOnly(result.reason ?? 'root-not-writable');
+        }
+      }
+    } catch (error) {
+      this.#logger?.warn?.(`[context-governance] read-only recovery probe failed: ${String(error?.message ?? error)}`);
+    }
+  }
 
   /** 开始订阅；重复调用安全。 */
   start() {
@@ -217,6 +318,15 @@ export class CompressionGuard {
     }
     this.#unsubscribe = null;
     this.#started = false;
+    // T6：卸载时还没 end 的周期显式留痕（不静默丢弃）。
+    for (const [pendingId, pendingState] of this.#pending) {
+      this.#stats.abandonedCycles += 1;
+      this.#auditEvent('cycle-abandoned', {
+        sessionId: pendingState.sessionId,
+        compactionId: pendingId,
+        reason: 'observer-disposed-without-end',
+      });
+    }
     this.#pending.clear();
   }
 
@@ -228,6 +338,8 @@ export class CompressionGuard {
       mode: this.#selection.mode,
       perception: this.perception,
       eventApi: this.#eventApi,
+      readOnly: this.#readOnly,
+      readOnlyReason: this.#readOnlyReason,
       reasons: [...this.#selection.reasons],
       degradedReasons: [...this.#degradedReasons],
       conflicts: this.#selection.conflicts.map((conflict) => ({ ...conflict })),
@@ -252,8 +364,21 @@ export class CompressionGuard {
         enabled: this.#store !== null && this.#reinjection.enabled && !this.#reinjectionDisabled,
         storeRoot: this.#store?.rootDir ?? null,
         auditFile: this.#audit?.file ?? null,
+        auditMaxBytes: this.#audit?.maxBytes ?? null,
+        auditSizeBytes: this.#audit?.sizeBytes ?? 0,
+        auditRotations: this.#audit?.rotations ?? 0,
         pendingJournals: this.#store?.protectionPending ?? 0,
         reinjectionDisabled: this.#reinjectionDisabled,
+        readOnly: this.#readOnly,
+        readOnlyReason: this.#readOnlyReason,
+      },
+      scope: {
+        projectRoot: this.#projectRoot,
+        onlyProject: this.#onlyProject,
+        captureTitle: this.#captureTitle,
+        ignoredForeignEvents: this.#stats.ignoredForeignEvents,
+        ignoredForeignSessions: this.#foreignSessions.size,
+        unattributedEvents: this.#stats.unattributedEvents,
       },
       writeLatency: calculateLatencyStats(this.#writeDurations),
       stats: { ...this.#stats, pending: this.#pending.size, reports: this.#reports.length },
@@ -267,8 +392,17 @@ export class CompressionGuard {
   }
 
   #auditEvent(event, details) {
+    // 只读模式：不写审计（根目录不可写时写也写不进去），失败信息走 logger。
+    if (this.#readOnly) {
+      this.#stats.auditSkippedReadOnly += 1;
+      return false;
+    }
     const ok = this.#audit?.append(event, details) ?? true;
-    if (!ok) this.#logger?.warn?.(`[context-governance] audit write failed for ${event}`);
+    if (!ok) {
+      this.#stats.auditWriteFailures += 1;
+      const suffix = this.#audit?.lastError ? ` (${this.#audit.lastError})` : '';
+      this.#logger?.warn?.(`[context-governance] audit write failed for ${event}${suffix}`);
+    }
     return ok;
   }
 
@@ -318,6 +452,8 @@ export class CompressionGuard {
       state.protectionWrite = 'disabled';
       return;
     }
+    const storeReason = this.#store?.status?.readOnlyReason ?? null;
+    if (storeReason !== null && !this.#readOnly) this.#setReadOnly(storeReason);
     if (this.#reinjectionDisabled) {
       state.protectionWrite = 'skipped-observe-only';
       this.#auditEvent('protection-write-skipped', {
@@ -327,12 +463,20 @@ export class CompressionGuard {
       });
       return;
     }
+    if (this.#readOnly) {
+      // T6 只读降级：不写记忆、不写审计；压缩照常走完，回注走内存可读条目。
+      state.protectionWrite = 'read-only';
+      state.entries = [];
+      this.#setReadOnly(this.#readOnlyReason ?? 'unknown');
+      return;
+    }
     try {
       const built = buildProtectionItems(state.snapshot, {
         sessionId: state.sessionId ?? 'unknown',
         compactionId: id,
         cycleKey: id,
         manual: state.manual === true,
+        captureTitle: this.#captureTitle,
       });
       state.protectionMeta = built.meta;
       if (built.items.length === 0) {
@@ -370,14 +514,22 @@ export class CompressionGuard {
       state.entries = [];
       state.protectionWrite = 'failed';
       this.#stats.protectionWriteFailures += 1;
+      const code = error?.code ?? 'PROTECTION_WRITE';
       this.#auditEvent('protection-write-failed', {
         sessionId: state.sessionId,
         compactionId: id,
-        code: error?.code ?? 'PROTECTION_WRITE',
+        code,
         reason: String(error?.message ?? error).slice(0, 300),
       });
       this.#logger?.warn?.(`[context-governance] protection write failed: ${String(error?.message ?? error)}`);
-      this.#degradeProtection('protection-write-failed');
+      if (['EACCES', 'EPERM', 'EROFS', 'ENOSPC', 'EBUSY'].includes(code) || error?.name === 'MemoryReadOnlyError') {
+        // 写不进去 ≠ 压缩失败：转只读，本周期继续，下周期不再尝试写。
+        this.#setReadOnly(`write-failed:${code}`, String(error?.message ?? error));
+      } else if (error?.name === 'ExternalModificationError' || error?.code === 'EXTERNAL_MODIFICATION') {
+        this.#setReadOnly('external-change', String(error?.message ?? error));
+      } else {
+        this.#degradeProtection('protection-write-failed');
+      }
     }
   }
 
@@ -443,6 +595,27 @@ export class CompressionGuard {
     return false;
   }
 
+  /**
+   * 只读模式下的回注来源：从**已可读**的记忆里取本会话的历史保护条目（不再新增写入）。
+   * 没有则返回空数组，由调用方走 `skipped-no-entries`。
+   */
+  #readOnlyPointers(sessionId) {
+    if (this.#store === null || typeof this.#store.allEntries !== 'function') return [];
+    try {
+      const needle = typeof sessionId === 'string' && sessionId !== '' ? `session:${sessionId}#` : null;
+      if (needle === null) return [];
+      const scoped = this.#store.allEntries().filter((entry) => (
+        entry !== null && typeof entry === 'object' &&
+        (entry.status === 'active' || entry.status === 'proposed') &&
+        typeof entry.source === 'string' && entry.source.startsWith(needle)
+      ));
+      return scoped.slice(-this.#reinjection.maxLines);
+    } catch (error) {
+      this.#logger?.warn?.(`[context-governance] read-only pointer lookup failed: ${String(error?.message ?? error)}`);
+      return [];
+    }
+  }
+
   #scheduleReinjection(session, state) {
     if (state.reinjectionScheduled === true) return;
     state.reinjectionScheduled = true;
@@ -459,14 +632,23 @@ export class CompressionGuard {
       return;
     }
     if (!Array.isArray(state.entries) || state.entries.length === 0) {
-      state.reinjection = { status: 'skipped-no-entries' };
-      this.#stats.reinjectionSkips += 1;
-      this.#auditEvent('reinjection-skipped', {
-        sessionId: state.sessionId,
-        compactionId: state.compactionId,
-        reason: 'no-protected-entries',
-      });
-      return;
+      const fallback = this.#readOnly ? this.#readOnlyPointers(state.sessionId) : [];
+      if (fallback.length === 0) {
+        state.reinjection = { status: 'skipped-no-entries' };
+        this.#stats.reinjectionSkips += 1;
+        this.#auditEvent('reinjection-skipped', {
+          sessionId: state.sessionId,
+          compactionId: state.compactionId,
+          reason: 'no-protected-entries',
+        });
+        return;
+      }
+      state.entries = fallback;
+      state.protectionMeta = fallback.map(() => ({ kind: 'read-only-memory' }));
+      state.reinjectionReadOnly = true;
+      this.#logger?.info?.(
+        `[context-governance] read-only reinjection: ${fallback.length} existing memory pointers for this session`,
+      );
     }
     if (this.#hasCycleMessage(session, state.compactionId)) {
       state.reinjection = { status: 'skipped-duplicate' };
@@ -550,12 +732,26 @@ export class CompressionGuard {
 
   #handle(session, event) {
     try {
+      // P2-1：别的项目/其它工作区会话的压缩不写本项目记忆、也不回注到那个会话。
+      if (!this.#belongsToProject(session)) {
+        this.#stats.ignoredForeignEvents += 1;
+        const sessionId = session?.header?.id ?? session?.id ?? 'unknown';
+        if (!this.#foreignSessions.has(sessionId)) {
+          this.#foreignSessions.add(sessionId);
+          this.#logger?.warn?.(
+            `[context-governance] ignoring session ${sessionId}: cwd ${this.#sessionCwd(session) || 'unknown'} ` +
+            `is outside project ${this.#projectRoot}; no memory writes or reinjection for it`,
+          );
+        }
+        return;
+      }
       this.#stats.events += 1;
       const id = event?.data?.compactionId ?? null;
       switch (event?.type) {
         case 'compaction/start': {
           if (id === null) return;
           this.#stats.starts += 1;
+          if (this.#readOnly) void this.#refreshReadOnly();
           if (this.#adapter.kind === 'none' || this.#adapter.kind === 'unknown') {
             // 加载顺序可能在 compaction 行之前：事务真正发生时再探测一次。
             const detected = this.#detect();
@@ -585,6 +781,24 @@ export class CompressionGuard {
               compactionId: id,
             });
             return;
+          }
+          // T6：同一会话上一周期还没 end 就来了新 start → 事件流中断；显式留痕后继续新周期。
+          const sessionId = session?.id ?? null;
+          if (sessionId !== null) {
+            for (const [pendingId, pendingState] of [...this.#pending]) {
+              if (pendingId === id || pendingState.sessionId !== sessionId) continue;
+              this.#pending.delete(pendingId);
+              this.#stats.interruptedCycles += 1;
+              this.#auditEvent('cycle-interrupted', {
+                sessionId,
+                compactionId: pendingId,
+                reason: 'new-cycle-start-without-end',
+              });
+              this.#logger?.warn?.(
+                `[context-governance] compaction cycle ${pendingId} interrupted by ${id} ` +
+                '(no compaction/end observed); its protection journal was already written',
+              );
+            }
           }
           const state = {
             compactionId: id,

@@ -1,14 +1,14 @@
 # DSH 插件开发 · 当前状态
 
 > 只放"现在还活着"的：在做什么、卡在哪、待谁决策。过期项直接删。
-> 更新：2026-10-25（v0.1.3 感知语义修正 + 能力探测 + 审计 apply 留痕；待用户重启验证）
+> 更新：2026-10-25（复核 P1/P2 修复：工具 schema/项目归属/隐私开关/回滚文档/版本收敛；等重启验收）
 
 ## 在办
 
 | 会话 | 当前任务 | 状态 |
 |---|---|---|
 | 需求 | M1 已拆；E1/E2 已回写 §6.3；S4=B 已拍板 | 完成 |
-| 开发 | T1–T5 离线完成；v0.1.3（感知语义 + 能力探测）源码就绪；待重启 | idle |
+| 开发 | T1–T7 + 复核 P1/P2 已修；版本见 package.json；等用户重启验收 | idle |
 | 审核打包 | 待命（T6/T7 后独立复核） | idle |
 
 ## 进度
@@ -18,9 +18,11 @@
 - **T3（压缩适配与保护）**：离线完成。适配器/自检/保护校验/降级/观测循环；文档 `docs/T3-压缩适配与保护.md`；审计 `analysis/t3/`。
 - **T4（压缩前固化与回注）**：离线完成（S4=B）。5 类保护项同步 journal、end 后 microtask 回注、失败降级、audit；文档 `docs/T4-压缩前固化与回注.md`。
 - **T5（状态命令与审计）**：离线完成。`/cg status`（后端/能力/记忆/上次压缩与回注/p50p95/审计）；审计字段白名单 + 脱敏；文档 `docs/T5-状态命令与审计.md`。
-- **测试**：全量 **127/127 通过**（T2 40 + T3 56 + T4 15 + T5 7 + 感知/能力探测 9）。
-- **真机**：已安装（deps 14 / bundles 17 / redirect 0.1.0-context-zip / junction 已建）。v0.1.0 矩阵过窄落 `observe-only`；v0.1.1 `inject` 加 `compaction` 导致 pending；v0.1.2 撤 inject 后 apply 成功，但 `perception` 取契约值 `none`（`mode=event-level`）。**v0.1.3**：`perception` 改为“订阅成功才算 event”、apply 写能力探测行、审计 apply 即建文件；等重启验证 `perception=event event-api=on` 与 `audit=…`。
-- **T6/T7**：未开工（故障注入扩展；S1–S6 + S4 用例）。
+- **T6（失败与降级）**：离线完成（v0.1.4）。审计 8 MiB 轮转（可配）、五类只读判据 + 恢复探测、事件流中断/卸载留痕、所有失败只 log/audit 不抛宿主；文档 `docs/T6-失败与降级.md`。
+- **T7（验收场景）**：离线完成（v0.1.5）。S1–S6 全部用例 + S4 A/M/I/F/AUD/R；真实**自动+手动**压缩双样本脱敏回放；只读人工脚本 `docs/T7-只读降级人工验证.md`；覆盖表 `docs/T7-验收场景-S1-S6.md`。
+- **测试**：全量**通过**（数量见 `node --test "test/*.test.mjs"` 输出；本轮新增 P1 schema 契约 5 + P2 归属/隐私 5）。
+- **真机**：已安装（deps 14 / bundles 17 / redirect 0.1.0-context-zip / junction 已建）。v0.1.3 已验证 `perception=event`/能力行/`audit.jsonl`；**待一次性重启验收**：`version=<package.json>`、`mem_*` 工具出现、`events=N` 增长、审计轮转、只读脚本、S3 header（默认关）。
+- **T6/T7**：均离线完成；真机验收项列在“下一步”。
 
 ## 已知偏差（已接受）
 
@@ -33,12 +35,11 @@ T4 回注时点：checkpoint→end 之间不可实现，改为 end 后首个 mic
 
 ## 阻塞
 
-- 无（v0.1.3 重启验证由用户执行；T6 可离线继续）
+- 无（v0.1.5 重启验证由用户执行；只读演练需人工制造不可写根，开发不自行改动安装态）
 
 ## 下一步
 
-1. 用户重启 → `logs\governance.log` 应有两行：`governance capability version=0.1.3 … probe=on=fn,events=obj(dispatch=fn),…`（看 `events`/`get.sessions` 是否 `absent`）与 `governance apply version=0.1.3 … mode=event-level … perception=event event-api=on audit=<path> … warning=provider-unavailable`；再跑 `/cg status` 看 `event-api=on` 与 `events=N`。
-2. 开发做 T6（故障注入/审计轮转/只读降级）；若能力探测显示事件面不可订，再按探测结果改走注入路线。
-3. T7 验收（S1–S6 + S4 用例）→ 审核打包复核 → 00 转用户验收。
-
-
+1. 用户一次性重启 → 校验 `version=0.1.5`、`perception=event event-api=on`、`events=N` 随真实压缩增长、`audit: … rotations=…`。
+2. 用户按 `docs/T7-只读降级人工验证.md` 跑一次只读演练（制造不可写根 → read-only → 恢复）。
+3. S3 header 默认关闭；要启用需用户拍板改 `memoryHeader.enabled`。
+4. 00 转用户验收 → 审核打包独立复核（版本三处已收敛为一处）。

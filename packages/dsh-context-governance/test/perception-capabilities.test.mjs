@@ -16,7 +16,7 @@ import test from 'node:test';
 import { apply } from '../src/index.js';
 import { probeCapability, formatCapability, describeValue } from '../src/capabilities.js';
 import { CompressionGuard } from '../src/compress/runtime.js';
-import { capabilityLine, startupLine } from '../src/diagnostics.js';
+import { capabilityLine, startupLine, PLUGIN_VERSION } from '../src/diagnostics.js';
 import { tempDir } from './helpers.mjs';
 
 function fakeCtx({ withOn = true, onThrows = false, extra = {} } = {}) {
@@ -88,7 +88,7 @@ test('describeValue：不加内容、不深挖对象', () => {
 test('能力探测行：单行、含版本与 probe 字段', () => {
   const line = capabilityLine([['on', 'fn'], ['get.sessions', 'absent']]);
   assert.equal(line.includes('\n'), false);
-  assert.match(line, / governance capability version=0\.1\.3 /);
+  assert.match(line, new RegExp(` governance capability version=${PLUGIN_VERSION.replace(/\./g, '\\.')} `));
   assert.match(line, /probe=on=fn,get\.sessions=absent$/);
 });
 
@@ -150,7 +150,7 @@ test('apply：审计文件在装载时就存在，并留 apply 记录（不含�
     const text = await fs.readFile(auditFile, 'utf8');
     const first = JSON.parse(text.trim().split('\n')[0]);
     assert.equal(first.event, 'apply');
-    assert.equal(first.version, '0.1.3');
+    assert.equal(first.version, PLUGIN_VERSION);
     assert.equal(first.mode, 'event-level');
     assert.equal(first.perception, 'event');
     assert.equal(first.eventApi, true);

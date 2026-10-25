@@ -20,7 +20,7 @@ function statusText({ store, guard, audit, now }) {
     lines.push(
       `compression: mode=${status.mode} adapter=${adapter.kind} ` +
       `perception=${status.perception} event-api=${status.eventApi ? 'on' : 'off'} ` +
-      `events=${status.stats.events} ` +
+      `events=${status.stats.events}${status.stats.events === 0 ? '(no session/event observed yet)' : ''} ` +
       `summary=${adapter.summary.readability}/${adapter.summary.style} ` +
       `host=${adapter.versions.host} backend=${adapter.versions.backend}`,
     );
@@ -58,8 +58,23 @@ function statusText({ store, guard, audit, now }) {
     lines.push(
       `protection: writes=${status.stats.protectionWrites} writeFailures=${status.stats.protectionWriteFailures} ` +
       `reinjections=${status.stats.reinjections} injectionFailures=${status.stats.reinjectionFailures} ` +
-      `pendingJournals=${status.protection.pendingJournals} reinjection=${status.protection.reinjectionDisabled ? 'disabled' : 'enabled'}`,
+      `pendingJournals=${status.protection.pendingJournals} reinjection=${status.protection.reinjectionDisabled ? 'disabled' : 'enabled'}` +
+      `${status.protection.readOnly ? ` read-only=${status.protection.readOnlyReason ?? 'unknown'}` : ''}`,
     );
+    if (status.stats.auditWriteFailures > 0 || status.stats.auditSkippedReadOnly > 0) {
+      lines.push(
+        `audit-health: writeFailures=${status.stats.auditWriteFailures} ` +
+        `skippedReadOnly=${status.stats.auditSkippedReadOnly}`,
+      );
+    }
+    if (status.scope !== undefined) {
+      lines.push(
+        `scope: project=${status.scope.projectRoot || '-'} only-project=${status.scope.onlyProject ? 'on' : 'off'} ` +
+        `capture-title=${status.scope.captureTitle === false ? 'off' : 'on'} ` +
+        `ignored-foreign=${status.scope.ignoredForeignEvents}/${status.scope.ignoredForeignSessions} ` +
+        `unattributed=${status.scope.unattributedEvents}`,
+      );
+    }
   }
   if (store !== null) {
     const counts = store.status.counts;
@@ -75,10 +90,13 @@ function statusText({ store, guard, audit, now }) {
   }
   if (audit !== null) {
     const failures = audit.entries()
-      .filter((entry) => /failed|loss|drift/.test(entry.event))
+      .filter((entry) => /failed|loss|drift|interrupted|abandoned/.test(entry.event))
       .slice(-5)
       .map((entry) => entry.event);
-    lines.push(`audit: file=${audit.file ?? '-'} recentFailures=${failures.join(',') || 'none'}`);
+    lines.push(
+      `audit: file=${audit.file ?? '-'} max=${audit.maxBytes ?? '-'} size=${audit.sizeBytes ?? '-'} ` +
+      `rotations=${audit.rotations ?? 0} recentFailures=${failures.join(',') || 'none'} (this-process)`,
+    );
   } else {
     lines.push('audit: unavailable');
   }

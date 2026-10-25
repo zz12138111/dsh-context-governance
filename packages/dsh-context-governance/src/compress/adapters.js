@@ -303,7 +303,8 @@ export function classifySummaryText(summaryText) {
   }
   const headings = FIVE_SECTION_HEADINGS.filter((heading) => text.includes(heading)).length;
   return {
-    readability: headings >= 4 ? 'readable' : 'readable',
+    // E1 实测：宿主/context-zip 的非空摘要都可读；`partial` 暂不启用（保留枚举给后续判据）。
+    readability: 'readable',
     style: headings >= 4 ? 'five-section' : 'free-form',
     headings,
   };

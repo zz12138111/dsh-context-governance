@@ -30,7 +30,19 @@
 - 2026-10-25 · v0.1.3 实现：`src/capabilities.js` 能力探测（只记类型，单行 `governance capability … probe=…`）；`perception` 改为“订阅成功才 event”；startup 行加 `event-api=on|off`/`audit=<path>`；`AuditLog` apply 即建文件 + 写 `apply` 记录；`/cg status` 加 `events=N`（运行期收到 `session/event` 计数）；全量 **127/127**
 - 2026-10-25 · `session/event` 通道取证（源码级）：`dsh-session` commit 用 `collectSessionCallbacks(entry.emitCtx,[carrier,'session/event',…])` → `ctx.events.dispatch`；`scopeTarget` 过滤器对未打 scope 标签的监听者一律放行 → 根级 `ctx.on('session/event')` 应收全部会话事件；先例 `dsh-agent-instructions`（inject sessionProjections/workingDirectory）
 - 2026-10-25 · 18:43 装载后工作区两会话日志里最后一次 `compaction/start` 为 `18:41:28`（早于装载）→ 尚无新压缩，无法据此判定“收不到事件”；`audit.jsonl` 缺失只因 0.1.2 审计懒创建且未发生压缩
+- 2026-10-25 · **v0.1.3 真机确认**：能力行 `on=fn,emit=fn,events=obj(dispatch=fn),get.sessions=obj,get.agents=obj,get.sessionProjections=obj,get.compaction=absent`；apply 行 `perception=event event-api=on audit=…`；`audit.jsonl` 首条 apply；`events` 计数待真实压缩
+- 2026-10-25 · T6/v0.1.4 实现：审计轮转（默认 8 MiB，`audit-YYYYMMDD.jsonl`，可配 `audit.maxBytes` 64 KiB–1 GiB）；`MemoryStore.probeWritable()` + 装载写探测；只读五类判据、只读下不写记忆/审计但可回注既有指针、start 时探测恢复；`cycle-interrupted`/`cycle-abandoned`；`stats.auditWriteFailures/auditSkippedReadOnly/readOnlyRecoveries`；全量 **136/136**
+- 2026-10-25 · T7 回放：`analysis/t7/extract-replay-fixture.mjs` 从真实 `session.v4.jsonl.zstd`（含 `delivery-accepted` 事件、shadowed=1267）提周期并按 key 深度脱敏；fixture `packages/dsh-context-governance/test/fixtures/replay-compaction.json`（约 300 KB，无正文/路径/会话 id）；`test/t7-replay.test.mjs` 回放 start→summary→checkpoint→end 通过
 
 
 
 
+
+- 2026-10-25 · T7/v0.1.5 完成：S1–S6 场景用例 13 条（S4 拆 A/M/I/F/AUD/R）；真实双样本回放 `test/fixtures/replay-compaction.json`（自动，18:41，shadowed=1267）与 `replay-compaction-manual.json`（手动，00 会话，shadowed=920，`manual=true`），均由 `analysis/t7/extract-replay-fixture.mjs` 深度脱敏；文档 `docs/T7-验收场景-S1-S6.md`、只读人工脚本 `docs/T7-只读降级人工验证.md`
+- 2026-10-25 · v0.1.5 版本单一来源：`diagnostics.readPackageVersion()` 运行时读 `package.json`，`PLUGIN_VERSION` 不再手写（测试断言源码无字面量）；三处手写版本收敛为 package.json 一处
+- 2026-10-25 · S3 opt-in：`src/memory/header.js`（`agent/pre-step` 第一步注入偏好/决定 header，一次/会话，默认 `memoryHeader.enabled=false`，失败只 warn）；需用户拍板才在真机开启
+- 2026-10-25 · 全量测试 **149/149**（T2 40 + T3 56 + T4 15 + T5 7 + 感知 9 + T6 7 + T7 回放 2 + T7 场景 13；相对 0.1.4 新增 13）
+- 2026-10-25 · 复核 P1 修复（v0.1.6）：`mem_write`/`mem_query` 描述符改标准 JSON Schema（顶层 required，去掉属性级 `required:true`）；删除 defineTool 注入；新增 `test/host-schema-contract.mjs`（复刻宿主 `assertSupportedJsonSchema` 规则）+ `test/tools-schema.test.mjs`（5 条，含旧形状被拒的回归）
+- 2026-10-25 · 复核 P2 修复：① `onlyProject`（默认 true，按 `session.header.cwd` 比对 projectRoot，外来会话忽略并计数，`/cg status` 有 `scope:` 行）② 隐私口径改正 + `captureTitle`（默认 true，false 只存通用标签与指针）③ Runbook §6 改为“只还原实际改过项”：manifest 只删本插件条目、patch/lock 默认不还原、junction 退出码断言、`.ignored` 取版本匹配副本、备份保留 3 份、回滚点记 ARTIFACTS ④ 版本单一来源：`PLUGIN_VERSION` 运行时读 package.json，测试/README/STATUS/Runbook 不再硬编码
+- 2026-10-25 · P3 顺手修：COMPAT-02（删 defineTool）、COMPAT-03（engines 与矩阵统一 `<0.2.2-0`）、COMPAT-05（readability 去死分支）、COMPAT-06（events=0 提示）、ROB-03（删 dispose 死兜底）、ROB-04（审计失败标注 this-process）、ROB-07（由 schema 契约覆盖）、ROB-08（格式）；其余 13 条保留并在 `docs/T7-复核修复-0.1.6.md` 写明原因
+- 2026-10-25 · 全量测试 **159/159**（新增 P1 5 + P2 5；版本断言改为读 `PLUGIN_VERSION`）

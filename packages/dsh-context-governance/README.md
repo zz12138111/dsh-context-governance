@@ -2,17 +2,25 @@
 
 上下文治理插件（DSH / DeepSeek Harness）。M1 目标：**压缩前后不断线**——任务态记忆落项目文件，压缩后只回注 ID/状态/指针，详情按需取。
 
-> 版本：**0.1.2**（事件级感知 + 矩阵区间；provider 不作硬依赖）。
-> 当前进度：**T2 + T3 + T4 + T5 完成（离线）**——记忆文件与契约、`mem_write`/`mem_query`、压缩适配与保护校验、压缩前固化与回注、`/cg status` 与审计正式化；**118 条测试全过**。
-> 真机：已安装（junction 指向源码目录）；v0.1.2 待重启验证 `mode=event-level` 与保护/回注。未完成：T6、T7。
-> 安装方式：`docs/插件安装升级-Runbook.md`（`file:` 声明 + junction + bundle；不用 pnpm）。本包尚未装进任何 profile。
+> 版本：**以 `package.json` 为唯一来源**（本文与代码都不再重复版本号；启动行/审计里的 version 由运行时读取）。
+> 当前进度：**T2–T7 离线完成**——记忆文件与契约、`mem_write`/`mem_query`、压缩适配与保护校验、压缩前固化与回注、`/cg status` 与审计正式化、故障注入/轮转/只读降级、S1–S6 验收场景 + 真实自动/手动压缩双样本回放；**全部测试通过（数量见 `node --test` 输出）**。
+> 真机：已安装（junction 指向源码目录）；最近一次真机验证记录见 `memory/ARTIFACTS.md`，待验收项见 `STATUS.md`（本文不写具体版本/数字）。S3 新会话 header 默认关闭，需用户拍板后再开。
+> 安装方式：`docs/插件安装升级-Runbook.md`（`file:` 声明 + junction + bundle；不用 pnpm）。本机已按该方式安装（junction 指向源码），其它机器按 Runbook 操作。
 
 ## 为什么不是“又一个记忆插件”
 
-- 只记任务态（决定/偏好/待办/进度/事实/判据/锚点），不存原始对话。
+- 只记任务态（决定/偏好/待办/进度/事实/判据/锚点）；压缩保护条目会保留**最新用户消息首行 ≤200 字**与路径/批次等指针（`captureTitle: false` 可关，改为只存 ID/状态/通用标签），其余正文不入库；命中已知凭据形态直接拒写（fail-closed）。
 - 记忆是**文件**：人可读、可 git、可人工修；无数据库、无向量检索、无第三方依赖。
 - 回注遵守一条硬规则：**详情永不回注**；摘要不可读时只放 ID+状态。
 - 压缩沿用宿主或 context-zip，不写第二个压缩引擎，也**不替换** `ctx.compaction`。
+- 默认只处理**本项目会话**（`onlyProject: true`，按 `session.header.cwd` 比对 `projectRoot`）；别的项目/工作区的压缩事件直接忽略并计数（`/cg status` 的 `scope:` 行）。
+
+### 隐私边界（准确口径）
+
+- `protection/<cycle>.json`、`topics/*.md`、`MEMORY.md` 里**可能有**：最新用户消息的首行摘要（≤200 字）、规则文件路径、批次路径/数字、回滚点路径、工具 callId。
+- 这些内容**不是**“完整正文”，但也**不是**“只知道 ID”：容易泄露的短句/路径会以标题形式长期留在项目记忆里（`MEMORY.md` 可被人读/提交）。
+- 关闭方式：`captureTitle: false`（只存通用标签 + `source=session:<id>#<seq>` 指针，细节靠 `mem_query` 回原文）。
+- 审计 `audit.jsonl` 永不写标题/正文，只写元数据；凭据形态（8 类）在写入记忆前会被拒。
 
 ## 目录
 
@@ -32,7 +40,7 @@ packages/dsh-context-governance/
 │  │  └─ runtime.js            CompressionGuard（start 固化 / end 回注 / 写盘耗时）
 │  ├─ commands/cg-status.js    `/cg status`
 │  └─ tools/mem-tools.js       mem_write / mem_query
-├─ test/                       node:test（118 条）
+├─ test/                       node:test（数量见运行输出；含真实压缩双样本 fixture）
 ├─ cordis.patch.yml            bundle patch（本机安装 config）
 └─ package.json
 ```
@@ -74,6 +82,12 @@ config:
     backendVersion: ""                # 空 = 运行时识别，版本标 unknown
   diagnostics:
     logFile: "D:/DS-PROJECT/DSH插件开发/logs/governance.log"
+  audit:
+    maxBytes: 8388608                 # 8 MiB 后轮转 audit-YYYYMMDD.jsonl
+  memoryHeader:
+    enabled: false                    # S3：新会话注入偏好/决定 header（opt-in，默认关）
+    maxEntries: 5
+    maxChars: 600
 ```
 
 配置非法 → 插件不加载（DSH 继续默认行为）。`compression.enabled=false` 时只注册记忆工具，不订阅压缩事件。
@@ -96,7 +110,7 @@ cd packages/dsh-context-governance
 node --test "test/*.test.mjs"
 ```
 
-当前结果：**118 tests / 118 pass**（T2 40 + T3 56 + T4 15 + T5 7），覆盖字段/状态/并发/外部修改/锁/损坏/敏感信息/工具/适配器/保护/运行时/选择/固化/回注/审计/集成。
+运行 `node --test "test/*.test.mjs"`；**全部通过**（数量以输出为准）。覆盖字段/状态/并发/外部修改/锁/损坏/敏感信息/工具/宿主 schema 子集/适配器/保护/运行时/项目归属/隐私开关/固化/回注/审计/轮转/只读/能力探测/S1–S6/真实自动+手动序列回放/版本单一来源。
 
 ## 设计约束（与架构一致）
 

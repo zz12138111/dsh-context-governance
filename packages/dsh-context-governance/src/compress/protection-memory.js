@@ -29,18 +29,28 @@ function typeOf(raw) {
 
 /**
  * @param {object} snapshot `snapshotProtection` 的结果。
- * @param {{sessionId?:string, compactionId?:string, cycleKey?:string, manual?:boolean}} context
+ * @param {{sessionId?:string, compactionId?:string, cycleKey?:string, manual?:boolean, captureTitle?:boolean}} context
+ *   `captureTitle=false`（P2-2）时只写通用标签（如“最新用户消息”），不存任何首行/路径内容。
  * @returns {{items:object[], meta:object[]}}
  */
-export function buildProtectionItems(snapshot, { sessionId = 'unknown', compactionId = null, cycleKey = null, manual = false } = {}) {
+export function buildProtectionItems(snapshot, {
+  sessionId = 'unknown',
+  compactionId = null,
+  cycleKey = null,
+  manual = false,
+  captureTitle = true,
+} = {}) {
   const items = [];
   const meta = [];
   const pointer = (seq) => `session:${sessionId}#${seq ?? '?'}`;
   const evidence = cycleKey === null ? undefined : `compaction:${cycleKey}`;
   const push = (item, info) => {
+    const title = captureTitle
+      ? sanitizeTitle(item.title, item.fallback ?? '压缩保护项')
+      : sanitizeTitle(item.fallback ?? '压缩保护项', '压缩保护项');
     items.push({
       type: typeOf(item.type),
-      title: sanitizeTitle(item.title, item.fallback ?? '压缩保护项'),
+      title,
       source: item.source,
       evidence: item.evidence ?? evidence,
     });

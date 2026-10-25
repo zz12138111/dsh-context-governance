@@ -4,8 +4,11 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { apply, resolveConfig } from '../src/index.js';
+import { PLUGIN_VERSION } from '../src/diagnostics.js';
 import { FIVE_SECTION_SUMMARY, buildCompaction, healthyMessages } from './compress-helpers.mjs';
 import { tempDir } from './helpers.mjs';
+
+const versionText = PLUGIN_VERSION.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 class BasicCompactionEngine {
   compactNow() {}
@@ -143,9 +146,9 @@ test('apply：provider 不可见也一定执行，并写 warn + 诊断行（不�
     assert.equal(ctx.handlers.length, 1);
     assert.ok(ctx.warnings.some((warning) => warning.includes('compaction service') && warning.includes('token="compaction"')));
     const text = await fs.readFile(logFile, 'utf8');
-    assert.match(text, /governance capability version=0\.1\.3/);
+    assert.match(text, new RegExp(`governance capability version=${versionText}`));
     assert.match(text, /probe=on=fn/);
-    assert.match(text, /governance apply version=0\.1\.3/);
+    assert.match(text, new RegExp(`governance apply version=${versionText}`));
     assert.match(text, /adapter=none/);
     assert.match(text, /mode=event-level/);
     assert.match(text, /perception=event/);
@@ -172,7 +175,7 @@ test('diagnostics.logFile：写一行启动记录，含版本/adapter/mode，不
       diagnostics: { logFile },
     });
     const text = await fs.readFile(logFile, 'utf8');
-    assert.match(text, /governance apply version=0\.1\.3/);
+    assert.match(text, new RegExp(`governance apply version=${versionText}`));
     assert.match(text, /adapter=host-basic/);
     assert.match(text, /mode=full/);
     assert.match(text, /perception=event/);

@@ -1,7 +1,7 @@
 # 真插件安装/升级 Runbook（`dsh-context-governance`）
 
-> 状态：**未执行**。这是给 00/用户照着做的操作文档；开发会话不安装、不重启、不改 `cordis.patch.yml`。
-> 适用：本机 DSH Desktop `0.2.1-rc.2`（asar），profile = `C:\Users\19091\.dsh\profiles\desktop`。
+> 状态：**已在本机执行过安装（v0.1.5）**；本文档仍由 00/用户照着操作，开发会话不安装、不重启、不改 `cordis.patch.yml`。
+> 适用：本机 DSH Desktop `0.2.1-rc.3`（asar；旧运行缓存可能显示 rc.2），profile = `C:\Users\19091\.dsh\profiles\desktop`。
 > 改动依据：2026-10-25 实测——`dsh plugin add` 会 prune（`Packages: -33`）、把 compression redirect 挪进 `node_modules\.ignored`、并用 `link:` 写 lock；本 Runbook **完全绕开 pnpm**。
 > 相关：架构 §10“安装/升级约束”；`packages/dsh-context-governance/cordis.patch.yml`；`packages/cg-stub/README.md`（redirect 恢复脚本）。
 
@@ -184,8 +184,8 @@ Get-Content 'D:\DS-PROJECT\DSH插件开发\logs\governance.log' -Tail 3
 **期望两行**（时间/pid/host 可不同；v0.1.3 起）：
 
 ```
-2026-10-25T…Z governance capability version=0.1.3 pid=… probe=on=fn,emit=fn,get=fn,events=obj(dispatch=fn),bus=absent,session=absent,sessions=absent,agents=absent,workspace=absent,compaction=absent,commands=obj,tools=obj,logger=obj,sessionProjections=absent,get.events=absent,get.sessions=absent,…,root=child
-2026-10-25T…Z governance apply version=0.1.3 pid=… adapter=none mode=event-level host=… backend=unknown compaction-service=absent(token=compaction) perception=event event-api=on audit=…\memory\governance\audit.jsonl memory=… warning=provider-unavailable
+2026-10-25T…Z governance capability version=<package.json> pid=… probe=on=fn,emit=fn,get=fn,events=obj(dispatch=fn),bus=absent,session=absent,sessions=absent,agents=absent,workspace=absent,compaction=absent,commands=obj,tools=obj,logger=obj,sessionProjections=absent,get.events=absent,get.sessions=absent,…,root=child
+2026-10-25T…Z governance apply version=<package.json> pid=… adapter=none mode=event-level host=… backend=unknown compaction-service=absent(token=compaction) perception=event event-api=on audit=…\memory\governance\audit.jsonl memory=… warning=provider-unavailable
 ```
 
 - `perception=event event-api=on`：`ctx.on('session/event')` 订阅成功；若为 `event-api=off`，能力探测行会指出哪个 token 缺失。
@@ -217,37 +217,78 @@ pwsh -NoProfile -File 'D:\DS-PROJECT\_shared\check-env.ps1'
 
 ## 6. 回滚（任一步失败都先回滚，再排查）
 
-> 先完整退出 DSH。
+> 先完整退出 DSH。原则：**只还原本插件实际改过的内容**——manifest 只删本插件条目（不整份覆盖），
+> `cordis.patch.yml`/`pnpm-lock.yaml` 本插件安装时**从未改过**，默认不还原（避免覆盖他方后来的改动）。
 
 ```powershell
 $prof = Join-Path $env:USERPROFILE '.dsh\profiles\desktop'
+# 默认取最新备份；也可显式：$backup = '<指定目录>'
 $backup = Get-ChildItem $prof -Directory -Filter '.backup-cg-*' | Sort-Object Name -Descending |
           Select-Object -First 1 -ExpandProperty FullName
 if (-not $backup) { throw '找不到 .backup-cg-* 备份目录' }
 
-# 1) 删 junction（只删链接，不碰源码目录）
+# 1) 删 junction（只删链接，不碰源码）；失败即停，并断言链接已消失
 $link = Join-Path $prof 'node_modules\dsh-context-governance'
-if (Test-Path $link) { cmd /c rmdir "$link" }
+if (Test-Path $link) { cmd /c rmdir "$link"; if ($LASTEXITCODE -ne 0) { throw "删除 junction 失败: $link" } }
+if (Test-Path $link) { throw "junction 仍存在: $link" }
 
-# 2) 还原 manifest / lock / patch / redirect（覆盖式恢复，不先递归删除）
-foreach ($f in 'package.json','pnpm-lock.yaml','cordis.patch.yml') {
-  Copy-Item (Join-Path $backup $f) (Join-Path $prof $f) -Force
+# 2) manifest：只删本插件的 dependency + bundle（保留其它插件后来加的条目）
+$env:CG_PROFILE_JSON = Join-Path $prof 'package.json'
+node -e @'
+const fs = require('node:fs');
+const file = process.env.CG_PROFILE_JSON;
+const manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
+const removed = [];
+if (manifest.dependencies && Object.hasOwn(manifest.dependencies, 'dsh-context-governance')) {
+  delete manifest.dependencies['dsh-context-governance'];
+  removed.push('dependency');
 }
-New-Item -ItemType Directory -Force (Join-Path $prof 'node_modules\@deepseek-ai\dsh-compaction-basic') | Out-Null
-Copy-Item (Join-Path $backup 'dsh-compaction-basic\*') `
-          (Join-Path $prof 'node_modules\@deepseek-ai\dsh-compaction-basic') -Recurse -Force
+const bundles = manifest?.dsh?.profile?.bundles;
+if (Array.isArray(bundles) && bundles.includes('dsh-context-governance')) {
+  manifest.dsh.profile.bundles = bundles.filter((name) => name !== 'dsh-context-governance');
+  removed.push('bundle');
+}
+fs.writeFileSync(file, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
+console.log('removed:', removed.join(',') || 'none');
+'@
 
-# 3) 校验：JSON 无 BOM/可解析、计数回到基线、redirect 正确、check-env 全绿
+# 3) redirect：只有当前值与备份不同才还原（相同说明本插件没动过它）
+$redirectDir = Join-Path $prof 'node_modules\@deepseek-ai\dsh-compaction-basic'
+$redirectVersion = (Get-Content (Join-Path $redirectDir 'package.json') -Raw -Encoding UTF8 | ConvertFrom-Json).version
+if ($redirectVersion -ne '0.1.0-context-zip') {
+  New-Item -ItemType Directory -Force $redirectDir | Out-Null
+  Copy-Item (Join-Path $backup 'dsh-compaction-basic\*') $redirectDir -Recurse -Force
+  $redirectVersion = (Get-Content (Join-Path $redirectDir 'package.json') -Raw -Encoding UTF8 | ConvertFrom-Json).version
+}
+if ($redirectVersion -ne '0.1.0-context-zip') { throw "redirect 版本不对: $redirectVersion" }
+
+# 4) 校验：JSON 无 BOM/可解析、本插件已从 manifest 消失、redirect 正确、check-env 全绿
 $b = [IO.File]::ReadAllBytes((Join-Path $prof 'package.json'))
 if ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF) { throw 'package.json 有 BOM' }
-$env:CG_PROFILE_JSON = Join-Path $prof 'package.json'
 node -e "JSON.parse(require('node:fs').readFileSync(process.env.CG_PROFILE_JSON,'utf8')); console.log('json ok')"
-(Get-Content (Join-Path $prof 'node_modules\@deepseek-ai\dsh-compaction-basic\package.json') -Raw -Encoding UTF8 | ConvertFrom-Json).version  # 0.1.0-context-zip
 pwsh -NoProfile -File 'D:\DS-PROJECT\_shared\check-env.ps1'
 ```
 
-重启后确认：`logs\governance.log` 不再出现新行；DSH 正常；工作区可用。
-`memory\governance\` 里的记忆文件属于数据，可保留也可移动到备份；不要删别人的项目记忆。
+- **不强还原**：`cordis.patch.yml`、`pnpm-lock.yaml` 在 §4 安装步骤里没有改过；若它们与备份不同，说明另有改动，默认保留现状。需要比对时先看 diff：
+  ```powershell
+  foreach ($f in 'cordis.patch.yml','pnpm-lock.yaml') {
+    if ((Get-FileHash (Join-Path $prof $f)).Hash -ne (Get-FileHash (Join-Path $backup $f)).Hash) {
+      Write-Warning "$f 与备份不同（可能是他方改动），默认不还原；如确认是本次安装造成，再手动 Copy-Item"
+    }
+  }
+  ```
+- **`.ignored` 两份 redirect 副本取哪一份**：优先用 `.backup-cg-*/dsh-compaction-basic`。只有备份缺失时才用 `.ignored`，判据是 **`package.json.version === '0.1.0-context-zip'`**；两份都满足时取 `LastWriteTime` 较新的，并在移回后立即断言版本。不要只看目录名（`_1` 不保证更新）。
+- **备份清理**：保留最近 **3** 份，超过的按名字（含时间戳）删旧；不要删仍在回滚窗口内的那份：
+  ```powershell
+  $old = Get-ChildItem $prof -Directory -Filter '.backup-cg-*' | Sort-Object Name -Descending | Select-Object -Skip 3
+  $old | ForEach-Object { Write-Host "可删除: $($_.FullName)" }   # 确认后再 Remove-Item -Recurse
+  ```
+- **记录回滚点**（RB-05）：回滚完成后把“备份目录、当前 manifest 计数、redirect 版本、时间”写进 `memory\ARTIFACTS.md`，例如：
+  `2026-10-25 · 回滚：.backup-cg-20261025-185959 → deps 13 / bundles 16 / redirect 0.1.0-context-zip`
+- 重启后确认：`logs\governance.log` 不再出现新行；DSH 正常；工作区可用。
+- **数据目录去留**（RB-06）：
+  - 保留（默认）：`memory\governance\`（记忆）、`logs\governance.log`（诊断日志）；`memory/governance/` 已在 `.gitignore` 中，不随仓库提交。
+  - 彻底清理：退出 DSH 后删除 `memory\governance\`、`logs\governance.log`、profile 下的 junction 与 `.backup-cg-*`（源码 `packages\dsh-context-governance\` 不动）。
 
 ---
 
@@ -257,10 +298,10 @@ pwsh -NoProfile -File 'D:\DS-PROJECT\_shared\check-env.ps1'
 |---|---|---|
 | DSH 起不来 / 工作区 unavailable | `package.json` 是否有 BOM、能否 `JSON.parse` | 立即按 §6 回滚；BOM 是 2026-10-25 事故根因 |
 | DSH 正常但没有 `governance.log` 行 | `dsh.profile.bundles` 是否含插件；junction 是否可解析；`cordis.patch.yml` 的 `diagnostics.logFile` | 修 manifest/junction 后重启；仍无则回滚 |
-| 日志 `adapter=host-basic` | redirect 版本是否 `0.1.0-context-zip`；`.ignored` 是否有副本 | 按 `packages/cg-stub/README.md` 的恢复脚本移回，再重启 |
+| 日志 `adapter=host-basic` | redirect 版本是否 `0.1.0-context-zip`；备份 `.backup-cg-*/dsh-compaction-basic` | 优先用备份恢复；`.ignored` 只作二次来源，按 §6 的版本判据取，再重启 |
 | 日志 `mode=observe-only` | 行内 `conflicts` / 宿主版本 | 版本出矩阵或 provider 未知时属预期降级；贴日志报开发 |
 | `check-env` 有 WARN | redirect / threshold / context-zip 配置 | 先恢复 redirect；不要改 `cordis.patch.yml` |
-| 插件工具没注册 | `mode` 是否 full、logger 输出 | 贴 `governance.log` + DSH 启动日志报开发 |
+| 插件工具没注册 | 启动日志是否有 `tool mem_* was not registered`；宿主是否 `UNSUPPORTED_SCHEMA` | v0.1.6 起 schema 已改为宿主子集；仍失败则贴日志报开发 |
 
 DSH 启动失败诊断：CLI 路径会写 `%USERPROFILE%\.dsh\logs\startup-*.log`；桌面版看应用错误提示。
 
@@ -287,7 +328,7 @@ DSH 启动失败诊断：CLI 路径会写 `%USERPROFILE%\.dsh\logs\startup-*.log
 - [ ] manifest 写入后无 BOM、`JSON.parse` 通过、`createRequire` 能解析
 - [ ] 装后：deps 14 / bundles 17 / redirect 不变 / pluginDep=true / pluginBundle=true
 - [ ] 装后 `check-env.ps1` 全绿、BOM 扫描无输出
-- [ ] 重启后 `logs\governance.log` 有 `capability version=0.1.3` 与 `apply version=0.1.3` 两行
+- [ ] 重启后 `logs\governance.log` 有 `capability version=<package.json 版本>` 与 `apply version=<同版本>` 两行
 - [ ] apply 行含 `perception=event`、`event-api=on`、`audit=…audit.jsonl`；`audit.jsonl` 首行为 `event=apply`
 - [ ] 任意会话能看到 `mem_write` / `mem_query`
 - [ ] 回滚路径已读一遍（§6），备份目录位置已记下

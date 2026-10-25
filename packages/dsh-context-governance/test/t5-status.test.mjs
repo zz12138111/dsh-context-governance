@@ -80,6 +80,10 @@ test('/cg status：输出后端/模式/降级/记忆/上次压缩与回注/写�
   const guard = {
     status: {
       mode: 'full',
+      perception: 'event',
+      eventApi: true,
+      readOnly: false,
+      readOnlyReason: null,
       degradedReasons: [],
       conflicts: [{ code: 'host-version-unverified', severity: 'warning' }],
       adapter: {
@@ -100,8 +104,15 @@ test('/cg status：输出后端/模式/降级/记忆/上次压缩与回注/写�
         failures: [],
         reinjection: { status: 'injected', seq: 200, lines: 3 },
       },
-      protection: { pendingJournals: 0, reinjectionDisabled: false },
-      stats: { protectionWrites: 3, protectionWriteFailures: 0, reinjections: 3, reinjectionFailures: 0 },
+      protection: { pendingJournals: 0, reinjectionDisabled: false, readOnly: false, readOnlyReason: null },
+      stats: {
+        protectionWrites: 3,
+        protectionWriteFailures: 0,
+        reinjections: 3,
+        reinjectionFailures: 0,
+        auditWriteFailures: 0,
+        auditSkippedReadOnly: 0,
+      },
     },
   };
   const store = {
@@ -117,6 +128,9 @@ test('/cg status：输出后端/模式/降级/记忆/上次压缩与回注/写�
   };
   const audit = {
     file: 'D:/demo/memory/audit.jsonl',
+    maxBytes: 8388608,
+    sizeBytes: 1234,
+    rotations: 2,
     entries: () => [{ event: 'protection-write' }, { event: 'reinjection-failed' }],
   };
   const command = createStatusCommand({ store, guard, audit, now: () => new Date('2026-10-25T00:00:00Z') });
@@ -129,7 +143,7 @@ test('/cg status：输出后端/模式/降级/记忆/上次压缩与回注/写�
     assert.match(result.text, /last-compaction: id=12345678 manual=false ok=true/);
     assert.match(result.text, /last-reinjection: status=injected seq=200 lines=3/);
     assert.match(result.text, /memory: project=demo/);
-    assert.match(result.text, /audit: file=D:\/demo\/memory\/audit\.jsonl recentFailures=reinjection-failed/);
+    assert.match(result.text, /audit: file=D:\/demo\/memory\/audit\.jsonl max=8388608 size=1234 rotations=2 recentFailures=reinjection-failed/);
     assert.match(result.text, /conflicts: host-version-unverified\(warning\)/);
   });
 });

@@ -8,7 +8,21 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-export const PLUGIN_VERSION = '0.1.3';
+/**
+ * 版本单一来源：**只**从本包 `package.json` 读，代码里不再手写版本号。
+ * 读不到（例如被打包器重排路径）时降级为 `unknown`，启动行仍可写。
+ */
+export function readPackageVersion() {
+  try {
+    const file = new URL('../package.json', import.meta.url);
+    const pkg = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return typeof pkg?.version === 'string' && pkg.version.trim() !== '' ? pkg.version.trim() : 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
+export const PLUGIN_VERSION = readPackageVersion();
 
 export function appendDiagnosticLine(file, line) {
   if (typeof file !== 'string' || file.trim() === '') return false;
@@ -51,6 +65,7 @@ export function startupLine({
   perception = 'unknown',
   eventApi = 'unknown',
   auditFile = '',
+  readOnly = '',
   warning = '',
 } = {}) {
   return [
@@ -67,6 +82,7 @@ export function startupLine({
     `perception=${perception}`,
     `event-api=${eventApi}`,
     ...(auditFile === '' ? [] : [`audit=${auditFile}`]),
+    ...(readOnly === '' ? [] : [`memory-read-only=${readOnly}`]),
     `memory=${memoryRoot}`,
     ...(warning === '' ? [] : [`warning=${warning}`]),
   ].join(' ');

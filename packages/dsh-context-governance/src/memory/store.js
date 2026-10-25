@@ -134,12 +134,20 @@ export class MemoryStore {
       now: options.now,
       indexMaxChars: options.indexMaxChars,
     });
-    await fs.mkdir(path.join(rootDir, TOPICS_DIR_NAME), { recursive: true });
+    await fs.mkdir(path.join(rootDir, TOPICS_DIR_NAME), { recursive: true }).catch((error) => {
+      store.#setReadOnly(
+        `root-not-writable:${error?.code ?? 'ERR'}`,
+        `memory root ${rootDir} is not writable: ${error.message}`,
+      );
+    });
+
+    // T6：装载时先做一次真实写探测；不可写就整体降级为只读（不抛给宿主）。
+    if (!store.#readOnly) await store.probeWritable();
 
     if (options.readOnly === true) {
       store.#readOnly = true;
       store.#readOnlyReason = 'requested';
-    } else if (options.lock !== false) {
+    } else if (!store.#readOnly && options.lock !== false) {
       const acquired = await acquireWriterLock(rootDir, { project, now: store.#now });
       if (acquired.ok) {
         store.#lock = acquired.lock;
@@ -154,8 +162,15 @@ export class MemoryStore {
       }
     }
 
-    await store.#loadAll();
-    await store.#loadProtectionJournals();
+    try {
+      await store.#loadAll();
+      await store.#loadProtectionJournals();
+    } catch (error) {
+      store.#setReadOnly(
+        `load-failed:${error?.code ?? 'ERR'}`,
+        `memory load failed: ${error.message}`,
+      );
+    }
     if (!store.#readOnly) {
       // 上次进程在“已落保护日志、未物化主题文件”之间崩溃时，启动补齐。
       for (const cycleKey of [...store.#journalEntries.keys()]) {
@@ -446,7 +461,35 @@ export class MemoryStore {
         this.#setReadOnly(`writer-lock:${acquired.holder?.pid ?? 'unknown'}`, 'another writer owns this project memory');
       }
     }
+    if (!this.#readOnly) await this.probeWritable();
     return this;
+  }
+
+  /**
+   * 写探测（T6）：真实写一个临时文件再删掉，判断记忆根当前是否可写。
+   * - 失败：置只读（`root-not-writable:<code>`）并返回 `{ok:false}`，绝不抛错；
+   * - 成功且当前只读原因就是 `root-not-writable:*`：清掉只读（恢复路径）。
+   * 其他只读原因（写者锁 / 外部改动 / 配置指定）不会被这里清掉。
+   *
+   * @returns {Promise<{ok:boolean, reason:string|null, code:string|null}>}
+   */
+  async probeWritable() {
+    this.#assertOpen();
+    if (this.#closed) return { ok: false, reason: 'closed', code: 'CLOSED' };
+    const probe = path.join(this.#rootDir, `.write-probe-${process.pid}-${Date.now()}`);
+    try {
+      await fs.writeFile(probe, 'ok', 'utf8');
+      await fs.rm(probe, { force: true });
+    } catch (error) {
+      const reason = `root-not-writable:${error?.code ?? 'ERR'}`;
+      this.#setReadOnly(reason, `memory root ${this.#rootDir} is not writable: ${error.message}`);
+      return { ok: false, reason, code: error?.code ?? null };
+    }
+    if (this.#readOnly && (this.#readOnlyReason ?? '').startsWith('root-not-writable')) {
+      this.#readOnly = false;
+      this.#readOnlyReason = null;
+    }
+    return { ok: true, reason: null, code: null };
   }
 
   async #assertUnchanged() {

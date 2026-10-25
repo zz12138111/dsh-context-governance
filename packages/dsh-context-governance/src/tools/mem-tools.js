@@ -2,8 +2,10 @@
  * 记忆读写工具（宿主工具面）。
  *
  * `mem_write` / `mem_query` 只做参数整形与错误翻译，文件语义全在 MemoryStore。
- * 工具描述符按宿主 `ctx.tools.register` 的 ParameterSchemaSpec 形状书写，
- * 由 T3 的插件入口用 `defineTool` 包一层；这里保持零宿主依赖，便于单测。
+ * 描述符直接使用**宿主 JSON Schema 子集**（`parameters` 与 `output.schema` 都是标准 JSON Schema）：
+ * 宿主 `ctx.tools.register` 会对 `output.schema` 调 `assertSupportedJsonSchema`，模型侧把
+ * `parameters` 原样当 JSON Schema 用；属性级 `required: true` 属于旧 spec 形状，会被拒绝。
+ * 这里保持零宿主依赖，便于单测。
  */
 
 import {
@@ -32,89 +34,103 @@ const QUERY_DESCRIPTION = [
   'Details are returned ONLY when ids are supplied.',
 ].join(' ');
 
+/**
+ * `mem_write` 参数：**标准 JSON Schema**（宿主 `ctx.tools.register` 只接受其 JSON Schema
+ * 子集；旧的 ParameterSchemaSpec 形状——属性级 `required: true`——会被 `assertSupportedJsonSchema`
+ * 拒绝，且模型侧拿到的 schema 也不合法）。必填项用**顶层 `required` 数组**。
+ */
 const writeParameters = {
-  op: {
-    type: 'string',
-    required: true,
-    enum: ['create', 'update', 'confirm', 'supersede', 'expire'],
-    description: 'create | update | confirm | supersede | expire',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    op: {
+      type: 'string',
+      enum: ['create', 'update', 'confirm', 'supersede', 'expire'],
+      description: 'create | update | confirm | supersede | expire',
+    },
+    id: {
+      type: 'string',
+      description: 'Existing memory id (required for update/confirm/supersede/expire).',
+    },
+    type: {
+      type: 'string',
+      enum: [...ENTRY_TYPES],
+      description: 'Entry type (required for create).',
+    },
+    title: {
+      type: 'string',
+      description: 'One-line title (required for create/supersede).',
+    },
+    detail: {
+      type: 'string',
+      description: 'Necessary detail; do not paste whole conversations or credentials.',
+    },
+    status: {
+      type: 'string',
+      enum: [...ENTRY_STATUSES],
+      description: 'Explicit status; omit to let the writer/risk defaults decide.',
+    },
+    writer: {
+      type: 'string',
+      enum: [...WRITERS],
+      description: 'user | rule | model (required for create/supersede).',
+    },
+    confidence: {
+      type: 'number',
+      description: '0..1; required when writer=model.',
+    },
+    risk: {
+      type: 'string',
+      enum: [...RISKS],
+      description: 'low | high; high-risk entries start as proposed.',
+    },
+    source: {
+      type: 'string',
+      description: 'Pointer to where this came from (session id / message seq), never the raw text.',
+    },
+    evidence: {
+      type: 'string',
+      description: 'Evidence pointer (file path, hash, log position).',
+    },
+    project: {
+      type: 'string',
+      description: 'Project namespace; defaults to the store project.',
+    },
+    supersedes: {
+      type: 'string',
+      description: 'Id of the entry this one replaces (use the supersede op instead when possible).',
+    },
   },
-  id: {
-    type: 'string',
-    description: 'Existing memory id (required for update/confirm/supersede/expire).',
-  },
-  type: {
-    type: 'string',
-    enum: [...ENTRY_TYPES],
-    description: 'Entry type (required for create).',
-  },
-  title: {
-    type: 'string',
-    description: 'One-line title (required for create/supersede).',
-  },
-  detail: {
-    type: 'string',
-    description: 'Necessary detail; do not paste whole conversations or credentials.',
-  },
-  status: {
-    type: 'string',
-    enum: [...ENTRY_STATUSES],
-    description: 'Explicit status; omit to let the writer/risk defaults decide.',
-  },
-  writer: {
-    type: 'string',
-    enum: [...WRITERS],
-    description: 'user | rule | model (required for create/supersede).',
-  },
-  confidence: {
-    type: 'number',
-    description: '0..1; required when writer=model.',
-  },
-  risk: {
-    type: 'string',
-    enum: [...RISKS],
-    description: 'low | high; high-risk entries start as proposed.',
-  },
-  source: {
-    type: 'string',
-    description: 'Pointer to where this came from (session id / message seq), never the raw text.',
-  },
-  evidence: {
-    type: 'string',
-    description: 'Evidence pointer (file path, hash, log position).',
-  },
-  project: {
-    type: 'string',
-    description: 'Project namespace; defaults to the store project.',
-  },
-  supersedes: {
-    type: 'string',
-    description: 'Id of the entry this one replaces (use the supersede op instead when possible).',
-  },
+  required: ['op'],
 };
 
 const queryParameters = {
-  ids: {
-    type: 'array',
-    items: { type: 'string' },
-    description: 'Fetch these entries WITH details (max 20).',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    ids: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'Fetch these entries WITH details (max 20).',
+    },
+    type: {
+      type: 'string',
+      enum: [...ENTRY_TYPES],
+    },
+    status: {
+      type: 'string',
+      enum: [...ENTRY_STATUSES],
+    },
+    text: {
+      type: 'string',
+      description: 'Case-insensitive keyword search over title and detail.',
+    },
+    limit: {
+      type: 'integer',
+      description: 'Max rows (default 20, max 100).',
+    },
   },
-  type: {
-    type: 'string',
-    enum: [...ENTRY_TYPES],
-  },
-  status: {
-    type: 'string',
-    enum: [...ENTRY_STATUSES],
-  },
-  text: {
-    type: 'string',
-    description: 'Case-insensitive keyword search over title and detail.',
-  },
-  limit: {
-    type: 'integer',
-    description: 'Max rows (default 20, max 100).',
-  },
+  required: [],
 };
 
 function toolError(error) {
@@ -193,12 +209,13 @@ export function createMemoryTools(store) {
             type: 'object',
             additionalProperties: false,
             properties: {
-              id: { type: 'string', required: true },
-              status: { type: 'string', required: true },
-              type: { type: 'string', required: true },
-              title: { type: 'string', required: true },
+              id: { type: 'string' },
+              status: { type: 'string' },
+              type: { type: 'string' },
+              title: { type: 'string' },
               superseded: { type: 'string' },
             },
+            required: ['id', 'status', 'type', 'title'],
           },
           render: (_args, value) => [{
             type: 'text',
@@ -226,22 +243,24 @@ export function createMemoryTools(store) {
             type: 'object',
             additionalProperties: false,
             properties: {
-              count: { type: 'integer', required: true },
+              count: { type: 'integer' },
               entries: {
                 type: 'array',
-                required: true,
                 items: {
                   type: 'object',
                   additionalProperties: true,
                   properties: {
-                    id: { type: 'string', required: true },
-                    status: { type: 'string', required: true },
-                    type: { type: 'string', required: true },
-                    title: { type: 'string', required: true },
+                    id: { type: 'string' },
+                    status: { type: 'string' },
+                    type: { type: 'string' },
+                    title: { type: 'string' },
+                    detail: { type: 'string' },
                   },
+                  required: ['id', 'status', 'type', 'title'],
                 },
               },
             },
+            required: ['count', 'entries'],
           },
           render: (_args, value) => {
             if (value.count === 0) return [{ type: 'text', text: 'No memory entries matched.' }];
@@ -270,15 +289,15 @@ export function createMemoryTools(store) {
   };
 }
 
-/** 兼容宿主 `defineTool` 的注册入口；返回注册结果，不因单个工具失败中断。 */
-export function registerMemoryTools(ctx, store, { defineTool = (definition) => definition } = {}) {
+/** 注册到宿主 `ctx.tools`；返回注册结果，不因单个工具失败中断。 */
+export function registerMemoryTools(ctx, store) {
   const tools = createMemoryTools(store);
   const registered = [];
   const failures = [];
   for (const { definition } of Object.values(tools)) {
     try {
       if (typeof ctx?.tools?.register !== 'function') throw new Error('ctx.tools.register is unavailable');
-      ctx.tools.register(defineTool(definition));
+      ctx.tools.register(definition);
       registered.push(definition.name);
     } catch (error) {
       failures.push({ name: definition.name, message: String(error?.message ?? error).slice(0, 400) });

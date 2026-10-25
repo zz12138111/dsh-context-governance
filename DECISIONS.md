@@ -119,3 +119,44 @@
 - 选择：`guard.perception` = 已 `start()` 且 `ctx.on` 存在 → `event`，否则退回契约值；新增 `src/capabilities.js`，apply 时写一行 `governance capability … probe=on=fn,events=obj(dispatch=fn),…,get.sessions=absent,root=self`，**只记 typeof 类型**；启动行补 `event-api=on|off`、`audit=<path>`；审计在 apply 时建文件并写 `apply` 记录。
 - 影响：`perception` 不再可能“假报”；下次重启能从一行里看出宿主到底暴露了哪些事件面 API；`/cg status` 增加 `event-api`/`events=N`，`N` 是运行期真实收到 `session/event` 的计数（判断“事件是否真的到达”的硬证据）。
 - 关联：`src/capabilities.js`、`src/diagnostics.js`、`src/index.js`、`src/compress/runtime.js`、`src/audit.js`、`docs/T3-压缩适配与保护.md` §6.5；插件版本 `0.1.3`；状态：active。
+
+## DEC-PLUGIN-20261025-15 [tech] T6 降级口径：审计 8 MiB 轮转、只读五类判据、中断/卸载显式留痕
+
+- 背景：T6 要求所有失败显式、可回退、不抛宿主；审计原先只追加不轮转，记忆根不可写时只有“写失败”没有“只读模式”，事件流中断会静默丢 pending。
+- 选择：审计默认 **8 MiB** 上限（`audit.maxBytes` 可配 64 KiB–1 GiB），轮转 `audit-YYYYMMDD.jsonl`，先 rename 再写、不删历史；只读判据五类（mkdir/写探测/写者锁/外部改动/写 IO 错），只读时**不写记忆也不写审计正文**、能读能回注（回注既有 `session:<id>#` 条目）、压缩不阻断；恢复在每次 `compaction/start` 探测（root-not-writable 重探测、external-change 走 `reload()`）；事件流中断（同会话无 end 的新 start）记 `cycle-interrupted`，卸载残留记 `cycle-abandoned`。
+- 影响：I/O 类写失败不再降级为 `degraded-protection`（转只读，语义更准）；`/cg status` 增加 `read-only=` 与 `audit-health`；新增配置项 `audit.maxBytes` 需过校验。插件版本 `0.1.4`；全量 136/136。
+- 关联：`src/audit.js`、`src/memory/store.js`（`probeWritable`）、`src/compress/runtime.js`、`src/index.js`、`docs/T6-失败与降级.md`；状态：active。
+
+## DEC-PLUGIN-20261025-16 [tech] T7 回放：真实 session 事件序列脱敏后入库，不依赖新的真机压缩
+
+- 背景：T7 需要真实 `session/event` 才能验，但真机压缩时机不可控；本机已有多份真实会话日志（`~/.dsh/sessions/**/session.v4.jsonl.zstd`，多 zstd frame）。
+- 选择：`analysis/t7/extract-replay-fixture.mjs` 只读解析 frame、取最近一个完整压缩周期，按 key 白名单（text/content/path/summary/oldText/newText…）深度脱敏为 `[redacted:N]`，生成 `test/fixtures/replay-compaction.json`（结构/seq/时间/usage/shadowedSeqs 保留）；`test/t7-replay.test.mjs` 回放 start→summary→checkpoint→end，断言保护写盘/审计/回注。
+- 影响：T7 可在无新压缩的情况下做回归；fixture 含真实 seq 规模（shadowed=1267），但无正文/路径/会话 id；新增数据文件约 300 KB。
+- 关联：`analysis/t7/extract-replay-fixture.mjs`、`packages/dsh-context-governance/test/fixtures/replay-compaction.json`、`test/t7-replay.test.mjs`；状态：active。
+
+## DEC-PLUGIN-20261025-17 [tech] 版本单一来源：运行时读 package.json，代码不再手写
+
+- 背景：审核打包指出 `package.json` / `PLUGIN_VERSION` / 文档三处手写版本，易漂移（0.1.2→0.1.5 每版都要手动同步）。
+- 选择：`src/diagnostics.js` 的 `readPackageVersion()` 用 `new URL('../package.json', import.meta.url)` 读取并 JSON.parse，导出 `PLUGIN_VERSION`；读不到降级 `unknown`（启动行仍可写）。测试断言 `PLUGIN_VERSION === package.json.version` 且源码无 `PLUGIN_VERSION = '0.x` 字面量。文档里的版本号是说明文本，不参与运行。
+- 影响：以后升版只改 `package.json` 一处；若插件被整体打包且路径改变，最坏显示 `unknown`，不阻断装载。
+- 关联：`src/diagnostics.js`、`test/t7-scenarios.test.mjs`（S7）；状态：active。
+
+## DEC-PLUGIN-20261025-18 [tech] S3 新会话 header 走 opt-in，默认关闭
+
+- 背景：S3 要求“偏好 → 新会话 header 带上”，M1 原实现没有会话开头注入；直接默认开启会改变宿主消息流，未在真机验证。
+- 选择：新增 `src/memory/header.js`，挂 `agent/pre-step`（第一步、每会话一次），只读 `active` 的 `preference`/`decision`，最多 5 条/600 字；`memoryHeader.enabled` 默认 `false`，开启后才注册；失败只 warn。
+- 影响：默认行为与 0.1.4 完全一致；开启后模型在第一步能看到偏好 ID+标题；真机需用户拍板后再开并观察一轮。
+- 关联：`src/memory/header.js`、`src/index.js`、`test/t7-scenarios.test.mjs`（S3/S3b）、`docs/T7-验收场景-S1-S6.md`；状态：active。
+## DEC-PLUGIN-20261025-19 [tech] 工具描述符改标准 JSON Schema，并按宿主子集加契约测试
+
+- 背景：v0.1.3 真机 `mem_write`/`mem_query` 未注册——`output.schema` 用旧 spec 形状（属性级 `required:true`）被宿主 `assertSupportedJsonSchema` 拒绝，`parameters` 同样不合法；异常被吞成 warn。
+- 选择：`src/tools/mem-tools.js` 手写标准 JSON Schema（顶层 `required` 数组、`additionalProperties` 布尔、object/array 关键字位置正确）；删除不可实现的 `defineTool` 注入；复制宿主校验规则到 `test/host-schema-contract.mjs`，对两个工具的 `parameters` 与 `output.schema` 各断言一次，并把“旧 spec 形状必须被拒”作为回归用例。
+- 影响：工具能过宿主 register 与模型侧 schema；宿主升级子集时需同步测试（已注明）；注册失败原因仍逐工具 catch 但会写入 warn。
+- 关联：`src/tools/mem-tools.js`、`test/tools-schema.test.mjs`、`test/host-schema-contract.mjs`；状态：active。
+
+## DEC-PLUGIN-20261025-20 [tech] 只处理本项目会话；保护条目可关首行（captureTitle）
+
+- 背景：`session/event` 是全局的，但记忆根固定；其它项目/子代理压缩会写本记忆并把指针回注到那个会话（COMPAT-04）；`protection` 会存最新用户首行，与“不复制正文”表述不符（SEC-01）。
+- 选择：`onlyProject` 默认 true，按 `session.header.cwd`（退回 `session.cwd`）与 `projectRoot` 归一化比较，不匹配则忽略并计数（cwd 缺失则放行但计入 `unattributedEvents`）；`captureTitle` 默认 true，false 时保护项只写通用标签 + 指针，不写首行/路径；README 隐私口径改成“首行 ≤200 + 指针，凭据拒写”。
+- 影响：默认行为更保守（不串项目）；关标题后详情只能靠 `mem_query` 回原文；`/cg status` 增加 `scope:` 行。版本 `0.1.6`。
+- 关联：`src/compress/runtime.js`、`src/compress/protection-memory.js`、`src/commands/cg-status.js`、`README.md`、`docs/T7-复核修复-0.1.6.md`；状态：active。

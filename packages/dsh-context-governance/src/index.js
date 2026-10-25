@@ -15,8 +15,10 @@ import { registerStatusCommand } from './commands/cg-status.js';
 import { detectHostVersion, normalizeBackendVersion } from './compress/adapters.js';
 import { CompressionGuard } from './compress/runtime.js';
 import { formatCapability, probeCapability } from './capabilities.js';
+import { DEFAULT_AUDIT_MAX_BYTES, MAX_AUDIT_MAX_BYTES, MIN_AUDIT_MAX_BYTES } from './audit.js';
 import { appendDiagnosticLine, capabilityLine, PLUGIN_VERSION, startupLine } from './diagnostics.js';
 import { DEFAULT_MEMORY_DIR, MemoryStore, MemoryStoreError } from './memory/store.js';
+import { registerMemoryHeader } from './memory/header.js';
 import { MEM_QUERY_NAME, MEM_WRITE_NAME, registerMemoryTools } from './tools/mem-tools.js';
 
 export const name = 'dsh-context-governance';
@@ -36,6 +38,18 @@ export const DEFAULT_CONFIG = Object.freeze({
     hostVersion: '',
     backendVersion: '',
   }),
+  audit: Object.freeze({
+    maxBytes: DEFAULT_AUDIT_MAX_BYTES,
+  }),
+  memoryHeader: Object.freeze({
+    enabled: false,
+    maxEntries: 5,
+    maxChars: 600,
+  }),
+  /** P2-1：只处理本项目（cwd 匹配 projectRoot）会话的压缩事件。 */
+  onlyProject: true,
+  /** P2-2：保护条目是否保留“首行摘要”（默认开；关=只存指针与通用标签）。 */
+  captureTitle: true,
   diagnostics: Object.freeze({
     logFile: '',
   }),
@@ -78,7 +92,32 @@ export function resolveConfig(raw = {}) {
   if (typeof config.diagnostics.logFile !== 'string') {
     throw new MemoryStoreError('CONFIG', 'diagnostics.logFile must be a string');
   }
+  if (config.audit === null || typeof config.audit !== 'object' || Array.isArray(config.audit)) {
+    throw new MemoryStoreError('CONFIG', 'audit must be an object');
+  }
+  const audit = { ...DEFAULT_CONFIG.audit, ...config.audit };
+  if (!Number.isInteger(audit.maxBytes) || audit.maxBytes < MIN_AUDIT_MAX_BYTES || audit.maxBytes > MAX_AUDIT_MAX_BYTES) {
+    throw new MemoryStoreError(
+      'CONFIG',
+      `audit.maxBytes must be an integer in [${MIN_AUDIT_MAX_BYTES}, ${MAX_AUDIT_MAX_BYTES}]`,
+    );
+  }
   const projectRoot = path.resolve(config.projectRoot === '' ? process.cwd() : config.projectRoot);
+  if (config.memoryHeader === null || typeof config.memoryHeader !== 'object' || Array.isArray(config.memoryHeader)) {
+    throw new MemoryStoreError('CONFIG', 'memoryHeader must be an object');
+  }
+  const memoryHeader = { ...DEFAULT_CONFIG.memoryHeader, ...config.memoryHeader };
+  if (typeof memoryHeader.enabled !== 'boolean') {
+    throw new MemoryStoreError('CONFIG', 'memoryHeader.enabled must be a boolean');
+  }
+  if (!Number.isInteger(memoryHeader.maxEntries) || memoryHeader.maxEntries < 1 || memoryHeader.maxEntries > 10) {
+    throw new MemoryStoreError('CONFIG', 'memoryHeader.maxEntries must be an integer in [1, 10]');
+  }
+  if (!Number.isInteger(memoryHeader.maxChars) || memoryHeader.maxChars < 120 || memoryHeader.maxChars > 2000) {
+    throw new MemoryStoreError('CONFIG', 'memoryHeader.maxChars must be an integer in [120, 2000]');
+  }
+  if (typeof config.onlyProject !== 'boolean') throw new MemoryStoreError('CONFIG', 'onlyProject must be a boolean');
+  if (typeof config.captureTitle !== 'boolean') throw new MemoryStoreError('CONFIG', 'captureTitle must be a boolean');
   return {
     enabled: config.enabled,
     projectRoot,
@@ -91,6 +130,16 @@ export function resolveConfig(raw = {}) {
       hostVersion: compression.hostVersion.trim(),
       backendVersion: compression.backendVersion.trim(),
     },
+    audit: {
+      maxBytes: audit.maxBytes,
+    },
+    memoryHeader: {
+      enabled: memoryHeader.enabled,
+      maxEntries: memoryHeader.maxEntries,
+      maxChars: memoryHeader.maxChars,
+    },
+    onlyProject: config.onlyProject,
+    captureTitle: config.captureTitle,
     diagnostics: {
       logFile: config.diagnostics.logFile.trim(),
     },
@@ -125,10 +174,7 @@ export async function apply(ctx, rawConfig = {}) {
     return;
   }
   const store = await openStore(config);
-  const definitionWrapper = typeof rawConfig.defineTool === 'function'
-    ? rawConfig.defineTool
-    : (definition) => definition;
-  const registration = registerMemoryTools(ctx, store, { defineTool: definitionWrapper });
+  const registration = registerMemoryTools(ctx, store);
   for (const failure of registration.failures) {
     ctx.logger?.warn?.(`[context-governance] tool ${failure.name} was not registered: ${failure.message}`);
   }
@@ -138,6 +184,21 @@ export async function apply(ctx, rawConfig = {}) {
     `entries=${store.status.counts.active + store.status.counts.proposed} active/proposed`,
   );
   for (const warning of store.warnings) ctx.logger?.warn?.(`[context-governance] ${warning}`);
+  // S3（v0.1.5）：新会话记忆 header，默认关闭；开启后只注入一次/会话。
+  const header = registerMemoryHeader(ctx, store, config.memoryHeader);
+  if (header.registered) {
+    ctx.logger?.info?.('[context-governance] memory header enabled for new sessions (first step only)');
+  } else if (config.memoryHeader.enabled) {
+    ctx.logger?.warn?.(`[context-governance] memory header was not registered: ${header.reason}`);
+  }
+  const storeReadOnlyReason = store.status.readOnlyReason;
+  if (storeReadOnlyReason !== null) {
+    // T6 只读降级：明确写原因；读与回注仍可用，压缩不被阻断。
+    ctx.logger?.warn?.(
+      `[context-governance] memory read-only (${storeReadOnlyReason}); ` +
+      'memory writes and audit appends are suspended, reads and reinjection remain available',
+    );
+  }
 
   // T3：压缩观测 + 保护校验。失败只降级/告警，不影响已注册的工具与记忆库。
   const hostVersion = config.compression.hostVersion === ''
@@ -180,28 +241,38 @@ export async function apply(ctx, rawConfig = {}) {
         backendVersion,
         logger: ctx.logger,
         store,
+        auditMaxBytes: config.audit.maxBytes,
+        projectRoot: config.projectRoot,
+        onlyProject: config.onlyProject,
+        captureTitle: config.captureTitle,
       });
       guard.start();
       const status = guard.status;
       ctx.logger?.info?.(
         `[context-governance] compression observer: adapter=${status.adapter.kind} ` +
         `mode=${status.mode} perception=${status.perception} host=${hostVersion} ` +
-        `backend=${status.adapter.versions.backend} compaction-service=${compactionService}`,
+        `backend=${status.adapter.versions.backend} compaction-service=${compactionService} ` +
+        `only-project=${config.onlyProject} capture-title=${config.captureTitle}`,
       );
       for (const conflict of status.conflicts) {
         const log = conflict.severity === 'error' ? 'warn' : 'info';
         ctx.logger?.[log]?.(`[context-governance] compression conflict ${conflict.code}: ${conflict.message}`);
       }
-      guard.auditLog?.append?.('apply', {
-        status: 'applied',
-        version: PLUGIN_VERSION,
-        mode: status.mode,
-        adapter: status.adapter.kind,
-        host: hostVersion,
-        backend: status.adapter.versions.backend,
-        perception: status.perception,
-        eventApi: status.eventApi,
-      });
+      if (guard.readOnly !== true) {
+        guard.auditLog?.append?.('apply', {
+          status: 'applied',
+          version: PLUGIN_VERSION,
+          mode: status.mode,
+          adapter: status.adapter.kind,
+          host: hostVersion,
+          backend: status.adapter.versions.backend,
+          perception: status.perception,
+          eventApi: status.eventApi,
+          readOnly: false,
+        });
+      } else {
+        ctx.logger?.warn?.(`[context-governance] audit not initialized: memory read-only (${guard.readOnlyReason ?? 'unknown'})`);
+      }
     } catch (error) {
       ctx.logger?.warn?.(`[context-governance] compression observer failed to start: ${String(error?.message ?? error)}`);
       guard = null;
@@ -219,6 +290,7 @@ export async function apply(ctx, rawConfig = {}) {
       perception: guard?.perception ?? 'none',
       eventApi: capability.eventApi ? 'on' : 'off',
       auditFile: guard?.auditLog?.file ?? '',
+      readOnly: guard?.readOnlyReason ?? storeReadOnlyReason ?? '',
       warning: compactionService === 'absent' && config.compression.enabled ? 'provider-unavailable' : '',
     }));
     if (!ok) ctx.logger?.warn?.(`[context-governance] diagnostics log is not writable: ${config.diagnostics.logFile}`);
@@ -240,12 +312,12 @@ export async function apply(ctx, rawConfig = {}) {
       guard?.stop();
       await store.close();
     }, 'context-governance cleanup');
-  } else if (typeof ctx.on === 'function') {
-    ctx.on('dispose', () => {
-      command.dispose?.();
-      guard?.stop();
-      store.close().catch(() => {});
-    });
+  } else {
+    // cordis 没有 `dispose` 事件（app.asar 全量扫描 0 命中），旧兜底是死代码。
+    // 没有 effect 意味着宿主不支持按插件生命周期清理：明说，锁随进程退出释放。
+    ctx.logger?.warn?.(
+      '[context-governance] ctx.effect is unavailable; writer lock and subscriptions will only be released when the process exits',
+    );
   }
 }
 
