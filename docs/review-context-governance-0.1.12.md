@@ -115,6 +115,7 @@
 ## 10. 真机更正记录（2026-10-25 20:3x，0.1.12 重启后）
 
 - 真机 `capability@apply`（20:34:54）/`capability@ready`（20:35:54）：**`compaction=throws`、`get.compaction=absent`**，同时 **`get.tokenMeter=obj`**。
+- **0.1.14 真机定性（13:18:10Z @apply / 13:18:23Z @ready）**：两条都是 **`get.compaction(strict=false)=undefined`** → 本 scope **未提供** compaction 服务（排除“有 impl 未 active”，那种会返回 `obj`）；因此「回注时点修正」在该部署下**不可行**，只能按事件时序推断。
 - 因此 0.1.11 复核报告 §2④ 的“`ctx.compaction` ready 时可获取”**不成立**，已在 `docs/review-context-governance-0.1.11.md` §2④ 更正为“该部署下拿不到，插件不依赖它”。
 - 两列语义不同：`ctx.X` 是未 inject 的属性读取（服务不在 fiber store 链上即抛 `cannot get property "X" without inject`，cordis `reflect.ts:144-170`）；`ctx.get('X')` 才是可用性信号（未提供返回 `undefined`，`reflect.ts:9-19`）。`tokenMeter=throws` 但 `get.tokenMeter=obj` 就是反例。
 - 本报告的 T2′/成本/零折叠结论**不受影响**：prune 观测走 `session/event` 事件面，不依赖 compaction 服务。
