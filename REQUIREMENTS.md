@@ -30,7 +30,7 @@
   5. 失败显式、可回退，不静默降级。
 - **边界（不做什么）**：
   - 不接 billion-context（ACP）；
-  - 不做工具输出折叠（放 M1.1）；
+  - 不做工具输出折叠（原放 M1.1，2026-10-25 取消，改为宿主 prune 观测）；
   - 不做工具隐藏、用户脚本、数据库/向量检索、宽版本兼容、领域包；
   - 不改 DSH、不接管会话、不保存原始对话；
   - M1 不做 LLM 自动抽取，只做“模型显式写入 + 已有结构化状态同步”。
@@ -77,67 +77,57 @@
 
 ---
 
-## REQ-20261025-02 上下文治理插件 M1.1 —— 工具输出折叠与批量测量
+## REQ-20261025-02 上下文治理插件 M1.1 —— 宿主 prune 观测（已收口）
 
-- **依据**：`docs/上下文治理插件-架构说明-v1.0.md` §16.3；M1 `REQ-20261025-01`
+- **依据**：`docs/上下文治理插件-架构说明-v1.0.md` §16.3；M1 `REQ-20261025-01`；`docs/M1-可行性复查-20261025.md`；账本 `DEC-20261025-37` / `ART-20261025-19`
 - **优先级**：P1
-- **状态**：已排期（M1 已结项，已推 00 派开发）
-- **背景/痛点**：M1 解决“不断线”，不解决“进入量”。工具结果是最大的一块；用“头尾 + 落盘指针”换体积，同时测量批量调用空间，不承诺收益。
-- **目标（可验收）**：
-  1. 超过保守阈值的工具结果折叠为“头 + 省略标记 + 尾 + 指针”，完整内容可按指针用原生 `read` 回读。
-  2. 折叠不丢信息；验收场景能找回原文。
-  3. 不干扰 M1 的 S4、回注、审计、降级。
-  4. 批量只测量；内部可留隐藏 A/B，不默认改变行为、不承诺收益。
+- **状态**：**已收口**（2026-10-25 用户拍板 T2=A）。原「工具输出折叠 + 批量测量」范围**取消**，只保留宿主 prune 观测。
+- **范围变更（2026-10-25）**：
+  - **保留**：T1 门禁结论（F1/F2/B1/B2）、宿主 pruner 差异表、实验脚本与证据（`analysis/t1/`）。
+  - **取消**：早折（自建 seam / 折叠格式 / `[cg-fold]`）、spill 落盘与原生 `read` 回读、`fold.*` 配置、批量测量与隐藏 A/B、T6 全量测量。
+  - **改为**：只观测宿主 pruner 折了哪些工具、省了多少 token，并接入成本视图。
+  - **原因**：宿主 `tool-result-pruner` 已在压缩点覆盖全部 >8192；红线工具 `pwsh`+`read` 占工具输出 **71.0%** 且永不折；白名单可折上限仅约 **15.3%**，其中最大一块 `web_fetch` 折后易触发重抓，净收益未证（B1 也未测出）。
+- **背景/痛点**：M1 解决“不断线”；M1.1 原本想省“进入量”，但实测证明大头在宿主已折、或我们红线不折的部分。真正缺的是**可见性**：宿主折了哪些工具、省了多少 token，目前无人记账。
+- **目标（可验收，收口版）**：
+  1. 观测宿主 prune：每次 `compaction/prune` 留可归因记录（工具名、阴影范围、`shadowedTokenCount`、关联替换事件）。
+  2. 接进成本视图：`compaction-cost` 增加本轮 `tokensPruned` / `pruneCount` / `pruneTools`，`/cg status` 可查。
+  3. 不改变任何模型可见内容：不折、不改 content、不写 spill。
+  4. 不干扰 M1 的 S4、回注、审计、降级。
 - **边界（不做什么）**：
-  - **绝不折叠 `pwsh`、绝不折叠 `read`**（硬约束）；
-  - 不做工具隐藏/白名单变更；
-  - 不做语义摘要/改写，只折叠；
-  - 不新增读取工具，使用原生 `read`；
-  - 不强制批量、不新增“批量工具”；
+  - **不折叠任何工具结果**（含白名单）、**不写 spill**、**不新增 `cg_read`**；
+  - 不动宿主 pruner 配置（阈值/头尾保持默认），不替换、不禁用；
+  - 不做批量测量与隐藏 A/B；不承诺收益；
+  - 生产代码零折叠：T1 折叠实验代码只留 `analysis/t1/`，**不进 `packages/`、不进发布包、不提供开关**；
   - 不接 ACP、不做数据库、不做宽兼容。
-- **前置门禁（硬门禁）**：
-  - **F1 折叠 seam（2026-10-25 修订，替代原“进入历史前”字面口径）**：替换必须让**模型下一次请求看到折叠后的内容**——判定看“模型看到什么”，不看“替换发生在哪个函数里”。允许使用宿主既有机制：`session.append` 替换事件 + `compaction/prune` 影子定价（宿主 `@deepseek-ai/dsh-compaction-tool-result-pruner` 即用此协议，`dsh-base` 默认挂载）。只有在“模型下一次仍看到全文、折叠只体现在审计/日志”时才算失败 → **停项、不发版**；不接受“仅审计”降级。
-    - 修订理由：原字面口径会把宿主官方 replace+shadow 协议判成失败，而该协议在真机已证明有效（同一会话内 `compaction/prune` 事件 8/8 出现）。
-  - **F2 冲突检查**：已带 `[token-guard]` 或 `[cg-fold]` 标记的结果跳过；**已被宿主 tool-result-pruner 折叠的结果也跳过**（其替换版紧跟 `compaction/prune` 影子事件，或以 `sourceEventSeqs` 引用原事件），不叠加。
-  - **B1 批量基线**：先只读采集步/回合、调用/步、prompt token，作为测量基线。
-- **行为**：
-  - **触发**：结果长度 ≥ `fold.minChars`（默认 8000），工具在名单内，未被折叠过，不是最近 `keepRecent`（默认 3）条。
-  - **名单**：`grep`、`web_fetch`、`dsh_browser_content`、`cross_session_read`、`job_output`、`history_search`；**不含 `pwsh`、`read`**；可配置。
-  - **折叠格式（固定）**：
-    ```
-    [cg-fold] tool=grep chars=48213 kept=1500+1500 omitted=45213
-    <头 1500 字符>
-    …[省略 45213 字符，完整内容见指针]…
-    <尾 1500 字符>
-    [cg-fold] full: <spill 路径>（用原生 read 按 offset/limit 读取）
-    ```
-    中间必须出现“省略 N 字符”（N = 原文长度 − 头 − 尾），用于引导模型回读。
-  - **落盘**：`~/.dsh/context-governance/spill/<session>/`；不进 git、不进记忆；TTL 7 天、总量默认 256MB、启动/每日清理；权限收紧。
-  - **回读**：只用原生 `read` + offset/limit；不新增 `cg_read`。
-  - **不折叠**：最近 N 条、图片/二进制、已折叠、tokenGuard 已折、S4 保护内容的唯一副本。
-  - **失败**：写 spill/替换失败 → 保留原文、audit、显式告警；不静默。
-  - **批量**：只测量；内部隐藏 A/B 可开，但默认不改变行为、不承诺收益。
-- **配置默认值**：`fold.enabled=true`（保守）；`minChars=8000`；`headChars=tailChars=1500`；`keepRecent=3`；`ttlDays=7`；`maxMB=256`；`batch.measure=true`；`batch.hiddenAb=internal`。
-- **验收标准**：
-  - ① **F1 通过**：模型下一次请求看到折叠后内容（允许宿主 replace+shadow 协议）；仅“模型仍看全文、只留审计” → 停项、不发版。
-  - ② **折叠生效**：名单内 ≥`minChars` 的结果折叠；中间有“省略 N 字符”与指针。
-  - ③ **可回读**：原生 `read` 可按指针找回原文；回读成功率有记录。
-  - ④ **硬排除**：`pwsh`、`read` 永不折叠；tokenGuard/已折叠结果不叠加。
-  - ⑤ **不误折**：最近 N 条、S4 保护内容不被误折。
-  - ⑥ **失败显式**：写 spill/替换失败保留原文并 audit。
-  - ⑦ **M1 不回退**：S4、回注、审计、降级路径不受影响。
-  - ⑧ **可测量**：折叠次数、节省字符/token、spill 占用、回读成功率；批量基线报告（步/回合、调用/步、token 对比）。
-  - ⑨ **安全**：spill 不进 git/记忆，TTL 清理，敏感风险有文档。
+- **门禁结论（2026-10-25，已通过，不再重跑）**：
+  - **F1 = 通过**：折叠能在“模型下一次请求消费前”生效。两条路径均实测——① `tools/post-execute` 内容替换（grep 49,932 字符 → 入史即折，spill 74,075 B；web_fetch 7 例）；② 宿主 `session.append` 替换 + `compaction/prune` 影子定价（8 例 `read` 19,153→5,159；下一次请求 prompt 791,339→24,006）。原“进入历史前”字面口径作废（会把宿主官方协议误判为失败）。
+  - **F2 = 通过**：tokenGuard 只管 `pwsh`、不重叠；五类 marker 均跳过；`fold-probe` 21/21。
+  - **B1 = 产出**：`analysis/t1/data/b1-baseline.json`（步/回合、调用/步、prompt token）。
+  - **B2 = 产出**：8 维差异表，结论“复用宿主协议、不自研”；但宿主已在压缩点全折，对齐时机增量≈0 → 收口。
+- **观测口径（实现约束）**：
+  - 事件：宿主 `compaction/prune`（`shadowedRange` / `shadowedSeqs` / `shadowedTokenCount`）+ 紧随的替换 `tool/result`（`sourceEventSeqs` 引用原事件）。
+  - 归因：用替换事件的 `callId` 反查 `tool/call` 得工具名；反查不到记 `unknown`，**不猜**。
+  - 归属周期：上次 `compaction/end` 之后、本次 `compaction/summary` 之前的 prune 计入本周期（`cycle=current`）；其余记 `outside`，只进会话累计。
+  - 只记：`seq`、`shadowedStart/End`、`shadowedTokenCount`、`tool`、`replacementSeq`；**不记内容、不记路径**。
+  - 去重：同一 `shadowedRange` 只记一次。
+  - 成本聚合：`tokensPruned`（`measured`）+ `pruneCount` + `pruneTools`（top5 `name:count`），`auditVersion=cost-v1.2`（只增字段，不改 v1.1 语义）。
+- **配置默认值**：**不新增** `fold.*` / `batch.*` 配置项；既有 `reinjection.*`、审计轮转等 M1 配置不变。
+- **验收标准（收口版）**：
+  - ① **观测生效**：每条宿主 prune 产生 `prune-observed` 审计，字段齐全、无内容/路径。
+  - ② **成本接入**：本周期 `compaction-cost` 带 `tokensPruned` / `pruneCount` / `pruneTools`，`auditVersion=cost-v1.2`。
+  - ③ **状态可查**：`/cg status` 含 `pruned=<tokens> tools=<top5>`；无 prune 时 `pruned=0`，不报错。
+  - ④ **零副作用**：仓库与发布包内不存在 fold / spill / `[cg-fold]` / `fold.*`；不存在“默认关闭的折叠开关”。
+  - ⑤ **不伪造**：无 pruner 环境时 `pruneCount=0` 且 `tokensPruned=null`（`unknown`），不估算。
+  - ⑥ **M1 不回退**：S1–S6 回归通过；S4 手动压缩仍有 `protection-write` → `reinjection` → `compaction-cost`。
+  - ⑦ **测试**：prune 归因、周期归属、去重、无 pruner 环境、脱敏五类用例。
 - **依赖/风险**：
-  - F1 是硬门禁，失败即停；不做降级版。
-  - **与宿主 tool-result-pruner 重叠（2026-10-25 发现）**：`dsh-base` 默认挂载 `@deepseek-ai/dsh-compaction-tool-result-pruner`，>8192 字符的工具结果在**压缩触发时**已被替换为「头 4096 + `middle pruned` + 尾 1024」，原文留会话日志。T2 优先复用其替换协议与 `compaction/prune` 影子定价，**不自研替换协议**；差异价值只保留“早于压力触发、工具名单（绝不折 `pwsh`/`read`）、spill 指针可原生 `read` 回读、审计”。先出差异表，再定 T2 范围。
-  - 与 tokenGuard 重叠，必须跳过已折结果。
-  - spill 可能含敏感内容；回读依赖原生 `read` 的路径权限。
-  - 折叠过度会导致反复回读，净节省可能为负；用 B1 基线测。
+  - 依赖宿主 pruner 事件形状（`compaction/prune` + `sourceEventSeqs`）；形状变化时降级为“只记 range/token、工具名 `unknown`”。
+  - `compaction/prune` 是日志事件，插件只能观测不能干预——与“不做折叠”一致。
+  - 若日后重启 B：须先有 spill + 权限 + TTL，再谈折叠，不复用实验代码。
 
 ### 任务拆解
 
-见 `TASKS/REQ-20261025-02-M1.1-拆解.md`；M1 已结项，已推 00 派开发。
+见 `TASKS/REQ-20261025-02-M1.1-拆解.md`（收口版）；M1.1 已收口（T2=A），只留 T2′「prune 观测与成本接入」。
 
 ---
 
@@ -156,7 +146,7 @@
   3. **口径可追**：新增 `tokensBeforeSource` / `tokensAfterSource`（`tokenMeter` / `usage` / `none`），`auditVersion` 升 `cost-v1.1`；**只增字段、不改已有字段语义**，旧解析器仍可用。
   4. **provider 结论**：同一轮给出 `ctx.compaction` 是否可获取的只读结论（可/不可 + 证据路径），供 P1 决策「回注时点是否可修」；**本轮不改压缩后端、不替换 provider**。
 - **边界（不做什么）**：
-  - 不改回注逻辑、不改记忆、不改折叠（折叠归 M1.1）；
+  - 不改回注逻辑、不改记忆、不做折叠（折叠已于 2026-10-25 取消）；
   - 不接 ACP、不做货币成本、不做跨周期聚合（留 M2）；
   - 不安装/不重启/不改已装插件与 profile；实验用隔离 profile 或只读方式，需要安装/重启先报 00 + 用户批准；
   - 不猜：取不到就 `null` + `unknown`，不许拿估算冒充实测。
