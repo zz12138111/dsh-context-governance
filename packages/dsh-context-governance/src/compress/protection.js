@@ -41,6 +41,10 @@ const STATE_FILE_RE = /(?:[A-Za-z]:\\|TASKS[\\/])[^\s，。；;）)]*?-STATE\.md
 const RATIO_RE = /(?<![\d/／])(\d{1,6})\s*[／/]\s*(\d{1,6})(?![\d/／])/g;
 const YEAR_PREFIX_RE = /^(?:19|20)\d{2}$/;
 const BATCH_KEYWORD_RE = /批次|进度|progress|batch/i;
+/** P2-4：需要语义邻近词（比例后紧跟单位）或显式 [batch]；测试/版本语境直接排除。 */
+const RATIO_UNIT_AFTER_RE = /^\s*(?:项|条|个|文件|任务|完成)/;
+const EXPLICIT_BATCH_RE = /\[batch\]/i;
+const TEST_CONTEXT_RE = /测试|通过|passed|tests?|覆盖|coverage|commit|push|版本/i;
 /** 排除结构化载荷：围栏代码块、JSON 对象、JSON 数组（只剥“像 JSON”的，正文 `{511/958}` 保留）。 */
 const FENCE_RE = /```[\s\S]*?```/g;
 const JSON_OBJECT_RE = /\{[^{}]{0,400}\}/g;
@@ -201,10 +205,17 @@ function batchMarkers(event) {
   if (!isProgressMessage(event)) return null;
   const text = stripStructuredPayload(textOf(event));
   if (text.trim() === '') return null;
+  // P2-4（自引用切断）：模型回引 header 的“批次进度 N/N”不得再被当成新进度。
+  if (event.type === 'assistant/message' && /\[CG-MEMORY/i.test(text)) return null;
   const { ratios, dateLike } = extractRatios(text);
   const keyword = BATCH_KEYWORD_RE.exec(text)?.[0]?.toLowerCase() ?? null;
   if (keyword === null && ratios.length === 0) return null;
   return { ratios, keyword, dateLike };
+}
+
+/** 供 P2-4 回归用例直接验证写入侧判定（不是对外 API）。 */
+export function batchCandidate(event) {
+  return batchMarkers(event);
 }
 
 function rollbackMarkers(event) {

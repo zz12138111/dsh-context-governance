@@ -69,7 +69,10 @@ export function buildMemoryHeader(store, options = {}) {
     entries = store.allEntries().filter((entry) => (
       entry !== null && typeof entry === 'object' &&
       entry.status === 'active' &&
-      typeof entry.title === 'string' && entry.title.trim() !== ''
+      typeof entry.title === 'string' && entry.title.trim() !== '' &&
+      // P2-4：自动条目（writer=rule）与纯数字/日期标题不进 header——全是噪音时零注入。
+      String(entry.writer ?? '') !== 'rule' &&
+      !/^[\d\s/／.\-:年月日]+$/.test(entry.title.trim())
     ));
   } catch {
     return null;
