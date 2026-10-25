@@ -5,7 +5,7 @@ import test from 'node:test';
 
 import { apply, resolveConfig } from '../src/index.js';
 import { PLUGIN_VERSION } from '../src/diagnostics.js';
-import { FIVE_SECTION_SUMMARY, buildCompaction, healthyMessages } from './compress-helpers.mjs';
+import { FIVE_SECTION_SUMMARY, FREE_FORM_SUMMARY, assistantText, buildCompaction, healthyMessages, systemPrompt, userMessage } from './compress-helpers.mjs';
 import { tempDir } from './helpers.mjs';
 
 const versionText = PLUGIN_VERSION.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -71,6 +71,44 @@ test('apply：注册工具 + 挂上压缩观察器 + dispose 释放记忆锁', a
     );
   } finally {
     await fs.rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('0.1.13：batch 只有关键字、没有数字比例 → skip 且写 protection-skip 审计', async () => {
+  const rootDir = await tempDir();
+  const ctx = makeCtx(new BasicCompactionEngine());
+  try {
+    await apply(ctx, {
+      projectRoot: rootDir,
+      project: 'test-project',
+      compression: { enabled: true, hostVersion: '0.2.1-rc.2', backendVersion: '' },
+    });
+    const before = [
+      systemPrompt(0),
+      userMessage(1, '继续。'),
+      userMessage(2, '批次进度：等用户确认。'),
+      assistantText(3, '好。'),
+      userMessage(4, '最后一条用户消息：继续。'),
+    ];
+    const built = buildCompaction({ before, summary: FREE_FORM_SUMMARY, start: 1, end: 3 });
+    const handler = ctx.handlers[0].handler;
+    handler(built.session, built.events.find((item) => item.type === 'compaction/start'));
+    handler(built.session, built.events.find((item) => item.type === 'compaction/summary'));
+    handler(built.session, built.events.find((item) => item.type === 'user/message' && item.data.source.kind === 'compact-checkpoint'));
+    built.session.surface.nodes = built.postSurface;
+    handler(built.session, built.events.find((item) => item.type === 'compaction/end'));
+
+    const auditFile = path.join(rootDir, '.dsh', 'memory', 'audit.jsonl');
+    const lines = (await fs.readFile(auditFile, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+    const skip = lines.find((entry) => entry.event === 'protection-skip');
+    assert.ok(skip, 'protection-skip 审计缺失');
+    assert.equal(skip.reason, 'no-ratio-in-user-messages');
+    assert.ok(skip.names.includes('batch-list'));
+    assert.equal(ctx.warnings.some((warning) => warning.includes('protection failed')), false);
+  } finally {
+    for (const dispose of ctx.disposers) await dispose();
+    // 回注 microtask 可能在 dispose 之后才落审计，重试删除以免 ENOTEMPTY 干扰断言。
+    await fs.rm(rootDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   }
 });
 

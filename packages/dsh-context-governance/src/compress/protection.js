@@ -33,6 +33,17 @@ const PATH_RE = /[A-Za-z]:\\[^\s，。；;）)]+/g;
 const RULE_SOURCE_KINDS = Object.freeze(['agent-instructions', 'skill-catalog']);
 const STATE_FILE_RE = /(?:[A-Za-z]:\\|TASKS[\\/])[^\s，。；;）)]*?-STATE\.md/gi;
 
+/**
+ * 进度数字只认“数字/数字”的明确比例（`511/958`、`8000/1500`）。
+ * 前后不许再贴数字或斜杠，避免把日期 `2026/10/25`、多级路径当比例。
+ */
+const RATIO_RE = /(?<![\d/／])(\d{1,6})\s*[／/]\s*(\d{1,6})(?![\d/／])/g;
+const BATCH_KEYWORD_RE = /批次|batch/i;
+/** 排除结构化载荷：围栏代码块、JSON 对象、JSON 数组。 */
+const FENCE_RE = /```[\s\S]*?```/g;
+const JSON_OBJECT_RE = /\{[^{}]{0,400}\}/g;
+const JSON_ARRAY_RE = /\[[^\[\]]{0,400}\]/g;
+
 /** 取消息对象（user/message 直接放 data；system/assistant/tool 放在 data.message）。 */
 export function messageOf(event) {
   if (event === null || typeof event !== 'object') return null;
@@ -140,11 +151,30 @@ function unpairedCallsOf(events) {
   return [...open.values()].slice(0, 20);
 }
 
+/**
+ * 进度数字只从对话正文取：人类的 `user/message` 与 `assistant/message`。
+ * 排除 `tool/call`、`tool/result`、规则注入/检查点等非对话消息。
+ */
+export function isProgressMessage(event) {
+  if (event === null || typeof event !== 'object') return false;
+  if (event.type === 'user/message') return sourceKindOf(event) === 'user';
+  return event.type === 'assistant/message';
+}
+
+/** 去掉围栏代码块与 JSON/数组载荷，避免把结构化字段（如 `{"batch":…}`）当进度文本。 */
+export function stripStructuredPayload(text) {
+  return String(text ?? '')
+    .replace(FENCE_RE, ' ')
+    .replace(JSON_OBJECT_RE, ' ')
+    .replace(JSON_ARRAY_RE, ' ');
+}
+
 function batchMarkers(event) {
-  const text = textOf(event);
-  if (text === '') return null;
-  const ratios = [...text.matchAll(/\b(\d{1,5})\s*[/／]\s*(\d{1,5})\b/g)].map((match) => `${match[1]}/${match[2]}`);
-  const keyword = /批次|batch/i.exec(text)?.[0]?.toLowerCase() ?? null;
+  if (!isProgressMessage(event)) return null;
+  const text = stripStructuredPayload(textOf(event));
+  if (text.trim() === '') return null;
+  const ratios = [...new Set([...text.matchAll(RATIO_RE)].map((match) => `${match[1]}/${match[2]}`))].slice(0, 8);
+  const keyword = BATCH_KEYWORD_RE.exec(text)?.[0]?.toLowerCase() ?? null;
   if (ratios.length === 0 && keyword === null) return null;
   return { ratios, keyword };
 }
@@ -196,7 +226,9 @@ export function snapshotProtection(session) {
     const batchInfo = batchMarkers(event);
     if (batchInfo !== null) {
       const statePath = (text.match(STATE_FILE_RE) ?? [])[0] ?? null;
-      batch = { ...summarizeNode(event), ...batchInfo, statePath };
+      const candidate = { ...summarizeNode(event), ...batchInfo, statePath };
+      // 取最近一条；但“带比例”的进度优先于仅有关键字的消息，避免后文把 511/958 覆盖掉。
+      if (batch === null || batch.ratios.length === 0 || candidate.ratios.length > 0) batch = candidate;
     }
     const rollbackInfo = rollbackMarkers(event);
     if (rollbackInfo !== null) rollback = { ...summarizeNode(event), ...rollbackInfo };
@@ -254,7 +286,8 @@ export function summaryTextOf(summaryEvent) {
 }
 
 function ratiosCovered(ratios, summaryText) {
-  if (ratios.length === 0) return summaryText.trim().length > 0;
+  // 没有比例就没有“覆盖”可谈：调用方应判 skip，不得因为摘要非空而空泛通过。
+  if (ratios.length === 0) return false;
   const normalized = summaryText.replace(/\s+/g, '');
   return ratios.every((ratio) => normalized.includes(ratio.replace(/\s+/g, '')));
 }
@@ -392,6 +425,12 @@ export function verifyProtection({
   } else if (!summaryReadable) {
     checks.push(check('batch-list', 'skip', 'batch message shadowed but summary unreadable; cannot verify coverage', {
       seqs: [snapshot.batch.seq],
+    }));
+  } else if (snapshot.batch.ratios.length === 0) {
+    // 只命中关键字、没有明确比例：无法核对覆盖，判 skip 并留原因（不再空泛 pass）。
+    checks.push(check('batch-list', 'skip', 'batch/progress message has no numeric ratio; coverage cannot be verified', {
+      seqs: [snapshot.batch.seq],
+      reason: 'no-ratio-in-user-messages',
     }));
   } else if (ratiosCovered(snapshot.batch.ratios, summaryText)) {
     checks.push(check('batch-list', 'pass', `batch message seq ${snapshot.batch.seq} covered by summary`, {

@@ -76,6 +76,26 @@ test('能力探测：单个探测点抛错只记 throws，不影响其它探测'
   assert.equal(capability.eventApi, false);
 });
 
+test('0.1.13 归因：ctx.get(name, false) 区分 obj / undefined / unknown', () => {
+  const withImpl = probeCapability({
+    get: (name, strict) => (name === 'compaction' && strict === false ? { compactNow: () => {} } : undefined),
+  });
+  const withImplText = formatCapability(withImpl.entries);
+  assert.match(withImplText, /get\.compaction=absent/);
+  assert.match(withImplText, /get\.compaction\(strict=false\)=obj/);
+
+  const absent = probeCapability({ get: () => undefined });
+  assert.match(formatCapability(absent.entries), /get\.compaction\(strict=false\)=undefined/);
+
+  const unknown = probeCapability({
+    get: (name, strict) => {
+      if (strict === false) throw new Error('strict=false unsupported');
+      return undefined;
+    },
+  });
+  assert.match(formatCapability(unknown.entries), /get\.compaction\(strict=false\)=unknown/);
+});
+
 test('describeValue：不加内容、不深挖对象', () => {
   assert.equal(describeValue(undefined), 'absent');
   assert.equal(describeValue(null), 'absent');

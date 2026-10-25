@@ -16,8 +16,10 @@ import {
   buildCompaction,
   checkpoint,
   compactionSummary,
+  event,
   fakeSession,
   healthyMessages,
+  systemPrompt,
   toolResult,
   userMessage,
 } from './compress-helpers.mjs';
@@ -145,6 +147,74 @@ test('批次号被吞且摘要没覆盖：fail', () => {
   const check = report.checks.find((item) => item.name === 'batch-list');
   assert.equal(check.status, 'fail');
   assert.deepEqual(check.seqs, [9]);
+});
+
+test('假阳性回归：tool 结果里的 {"batch":…} JSON 不产生批次标记（skip）', () => {
+  const json = '{"batch": "T3", "progress": "511/958", "status": "running"}';
+  const before = [
+    systemPrompt(0),
+    userMessage(1, '继续执行。'),
+    assistantToolCall(2, 'call-1'),
+    event(3, 'tool/result', {
+      turn: 1,
+      step: 1,
+      message: { role: 'tool', content: [{ type: 'text', text: json }], source: { kind: 'tool', callId: 'call-1' } },
+      meta: { callId: 'call-1' },
+    }),
+    userMessage(4, '收到。'),
+    assistantText(5, '好。'),
+    userMessage(6, '最后一条用户消息：继续。'),
+  ];
+  const { snapshot, report } = reportFor({ before, summary: FREE_FORM_SUMMARY, start: 1, end: 5 });
+  assert.equal(snapshot.batch, null, 'tool/result/JSON 不得生成批次标记');
+  const check = report.checks.find((item) => item.name === 'batch-list');
+  assert.equal(check.status, 'skip');
+});
+
+test('正例：用户消息里的 8000/1500 能识别并正确比对', () => {
+  const before = [
+    systemPrompt(0),
+    userMessage(1, '继续。'),
+    userMessage(2, '批次进度 8000/1500，继续跑。'),
+    assistantText(3, '收到。'),
+    userMessage(4, '最后一条用户消息：继续。'),
+  ];
+  const covered = reportFor({ before, summary: '当前进度 8000/1500，继续。', start: 1, end: 3 });
+  assert.deepEqual(covered.snapshot.batch.ratios, ['8000/1500']);
+  assert.equal(covered.report.checks.find((item) => item.name === 'batch-list').status, 'pass');
+
+  const lost = reportFor({ before, summary: '继续跑下一步。', start: 1, end: 3 });
+  assert.equal(lost.report.checks.find((item) => item.name === 'batch-list').status, 'fail');
+});
+
+test('只有“批次”关键字、没有数字比例：skip 并带原因（不再空泛 pass）', () => {
+  const before = [
+    systemPrompt(0),
+    userMessage(1, '继续。'),
+    userMessage(2, '批次进度：等用户确认。'),
+    assistantText(3, '好。'),
+    userMessage(4, '最后一条用户消息：继续。'),
+  ];
+  const { snapshot, report } = reportFor({ before, summary: FREE_FORM_SUMMARY, start: 1, end: 3 });
+  assert.deepEqual(snapshot.batch.ratios, []);
+  const check = report.checks.find((item) => item.name === 'batch-list');
+  assert.equal(check.status, 'skip');
+  assert.equal(check.reason, 'no-ratio-in-user-messages');
+  assert.deepEqual(check.seqs, [2]);
+});
+
+test('日期/规则注入不当成进度比例；助手正文里的比例可识别', () => {
+  const before = [
+    systemPrompt(0),
+    agentInstructions(1, '规则：批次编号按 2026/10/25 归档。'),
+    userMessage(2, '2026/10/25 的批次：已完成。'),
+    assistantText(3, '助手进度 6000/1200。'),
+    userMessage(4, '最后一条用户消息：继续。'),
+  ];
+  const { snapshot } = reportFor({ before, summary: FREE_FORM_SUMMARY, start: 1, end: 3 });
+  // 日期 2026/10/25 不算比例；规则注入不取数；助手正文的 6000/1200 生效。
+  assert.deepEqual(snapshot.batch.ratios, ['6000/1200']);
+  assert.equal(snapshot.batch.seq, 3);
 });
 
 test('回滚点被吞且摘要没覆盖：fail', () => {

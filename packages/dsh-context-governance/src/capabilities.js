@@ -41,6 +41,14 @@ const SERVICE_PROBES = Object.freeze([
   'sessionProjections',
 ]);
 
+/**
+ * 追加一次 `ctx.get(name, false)`（strict=false）探测：
+ * - `obj`    → 有实现但未对本 scope active（可能被 redirect/未装载）；
+ * - `undefined` → 本 scope 未提供；
+ * - `unknown`   → 当前 cordis 不支持 strict=false 或调用抛错，不猜。
+ */
+const LAX_PROBES = Object.freeze(['compaction']);
+
 /** 把一个值压成不含内容的类型标记。 */
 export function describeValue(value) {
   if (value === undefined || value === null) return 'absent';
@@ -73,6 +81,16 @@ function readService(ctx, name) {
   }
 }
 
+function readServiceLax(ctx, name) {
+  try {
+    if (typeof ctx?.get !== 'function') return 'no-get';
+    const value = ctx.get(name, false);
+    return value === undefined ? 'undefined' : describeValue(value);
+  } catch {
+    return 'unknown';
+  }
+}
+
 /**
  * 探测宿主上下文的能力面。
  *
@@ -83,6 +101,7 @@ export function probeCapability(ctx) {
   const entries = [];
   for (const name of SELF_PROBES) entries.push([name, readSelf(ctx, name)]);
   for (const name of SERVICE_PROBES) entries.push([`get.${name}`, readService(ctx, name)]);
+  for (const name of LAX_PROBES) entries.push([`get.${name}(strict=false)`, readServiceLax(ctx, name)]);
   let rootSelf = 'unknown';
   try {
     rootSelf = ctx?.root === ctx ? 'self' : 'child';

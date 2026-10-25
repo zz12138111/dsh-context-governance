@@ -58,3 +58,4 @@
 - 2026-10-25 · 三轮复核 P3-1/P3-2：commands 晚挂载时 `/cg status` 通过 `ctx.inject(['commands'], retry)` 或下个 tick 重试一次（新增晚挂载测试）；`reinjection-shadowed` 判定在 shadowedSeqs 缺失时用 shadowedRange 兜底（新增 range 测试）
 - 2026-10-25 · 全量测试 **168/168**（T8 166 + commands 晚挂载 + shadowedRange 兜底）
 - 2026-10-25 · 四轮复核收口（v0.1.10）：`reinjection.maxFailures` 接入插件配置（DEFAULT_CONFIG/resolveConfig 夹取 1–20/传入 guard/cordis.patch.yml 示例/`/cg status` 显示）；`compaction-cost` 增加 `backend: adapter.kind`；`tokensShadowed` 缺字段为 null；空 usage 标 unknown；late-start trigger 按 summary.sourceCommandId；删除死字段 `#reinjectionDisabled`；恢复后直接回实际 mode；全量 **171/171**
+- 2026-10-25 · 0.1.13（REQ-20261025-04）：batch 判据收窄——只从人类 user/message 与 assistant/message 正文取“数字/数字”比例（排除 tool/*、JSON/代码块、日期），`ratios=[]` 判 `skip`+`no-ratio-in-user-messages` 并写 `protection-skip` 审计；能力探测加 `get.compaction(strict=false)`（obj/undefined/unknown）。离线回放 6 场景 4 改判（`analysis/req-20261025-04/`）；全量 **189/189**；未安装/未重启/未 push

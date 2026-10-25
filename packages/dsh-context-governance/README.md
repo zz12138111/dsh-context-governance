@@ -70,6 +70,7 @@ packages/dsh-context-governance/
 - 写盘耗时：每次 `protectSync` 的 `durationMs` 进 audit 与 guard 样本；`/cg status` 显示 p50/p95；判据 p95>50ms 才考虑减 fsync，**不改异步**。
 - M1.2：`capability@apply`/`capability@ready` 两行能力探测（诊断 + audit，只记类型）；`tokenMeter` 延迟获取 + `assistant/message.usage` 兜底；`compaction-cost` 增加 `tokensBefore/AfterSource`（`tokenMeter`/`usage`/`none`）与可选 parts，`auditVersion` 自 0.1.11 起为 `cost-v1.1`；`/cg status` 增加 `last-cost:` 行。
 - T2′（0.1.12）：只读观测宿主 `compaction/prune`，写 `prune-observed`（工具名、阴影范围、token、replacementSeq、cycle）；`compaction-cost` 增 `tokensPruned`/`pruneCount`/`pruneTools`，`auditVersion=cost-v1.2`；`/cg status [last-cost]` 显示 `pruned=<tokens> tools=<top5>`。**不折叠、不改 content、不写落盘文件**。
+- 0.1.13：`batch-list` 判据收窄——只从人类 `user/message` 与 `assistant/message` 正文取“数字/数字”比例（排除 `tool/*`、JSON/代码块、日期）；没有比例判 `skip` 并写 `protection-skip`（`reason=no-ratio-in-user-messages`），不再空泛 pass；能力探测加 `get.compaction(strict=false)`（`obj`=有 impl 未 active / `undefined`=本 scope 未提供 / 不支持=`unknown`）。
 
 ## 配置（bundle patch）
 

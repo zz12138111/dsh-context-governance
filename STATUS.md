@@ -1,15 +1,15 @@
 # DSH 插件开发 · 当前状态
 
 > 只放"现在还活着"的：在做什么、卡在哪、待谁决策。过期项直接删。
-> 更新：2026-10-25（**M1.1 T2′ 完成 0.1.12**：宿主 prune 观测 + cost-v1.2 + 6 条 P3；M1.2 0.1.11 冻结；等重启）
+> 更新：2026-10-25（**0.1.13 离线完成**：batch 判据收窄 + `get.compaction(strict=false)` 归因，189/189；0.1.12 已于 20:34:54 加载，20:46 首次真实手动压缩已验证 `cost-v1.2`）
 
 ## 在办
 
 | 会话 | 当前任务 | 状态 |
 |---|---|---|
 | 需求 | M1.1 T2′ 完成（0.1.12）；M1.2 冻结 0.1.11；**0.1.13 已出单**（batch 假阳性 + `get.compaction` 归因）；M2 待真实压缩验证后评估 | 已出单 |
-| 开发 | M1.1 T2′ + 6 条 P3 完成；0.1.12 已于 20:34:54 重启加载，待真实压缩验证 | 空闲待压缩 |
-| 审核打包 | 0.1.12 复核已出：0 阻断 / 0 P2 / 6 P3（均并入 0.1.12） | 完成 |
+| 开发 | **0.1.13 离线完成**（batch 判据收窄 + strict=false 归因）；0.1.12 已加载并完成首次真实手动压缩验证；未安装/未重启/未 push | 待审核 |
+| 审核打包 | 0.1.12 复核已出：0 阻断 / 0 P2 / 6 P3；**0.1.13 待复核** | 待复核 |
 
 ## 进度
 
@@ -26,8 +26,8 @@
 - **M1.1 收口（2026-10-25，T2=A）**：B2 显示宿主 pruner 在压缩点已覆盖全部 >8k；49 会话统计白名单可折上限仅 15.3%，红线 `pwsh`+`read` 占 71.0% → **不做早折、不做 spill、不做批量测量**；M1.1 改为只做 **T2′ prune 观测与成本接入**（`compaction-cost` 增 `tokensPruned`/`pruneCount`/`pruneTools`，`auditVersion=cost-v1.2`）；**0.1.12 = T2′ + 0.1.11 复核 6 条 P3**。范围变更已改单：`REQUIREMENTS.md` REQ-20261025-02、`TASKS/REQ-20261025-02-M1.1-拆解.md`；账本 `DEC-20261025-37`/`ART-20261025-19`、`DEC-20261025-38`/`ART-20261025-20`。
 - **M1.1 T2′（v0.1.12）**：离线完成，只读观测宿主 `compaction/prune`：`prune-observed`（工具名按替换 `callId` 反查 `tool/call`，未知记 `unknown`；同 `shadowedRange` 去重；`cycle=current/outside`）；`compaction-cost` 增 `tokensPruned`(measured/null)/`pruneCount`/`pruneTools`(top5)，`auditVersion=cost-v1.2`；`/cg status [last-cost]` 显示 `pruned=<tokens> tools=<top5>`。生产代码零折叠/spill，T1 实验只在 `analysis/t1/`。记录 `analysis/t2prime/T2prime-交付记录.md`。
 - **0.1.12 P3 收口（6 条）**：P3-1 `ctx.inject` 返回 Fiber → `stop()` 调 `fiber.dispose()`（修实现）；P3-2 T5 文档同步 `last-cost`；P3-3 T8 文档 `cost-v1.2`；P3-4/5 文档写明成本行延迟；P3-6 读方按 `cost-v1` 前缀匹配 + 测试。另 3 条（tokenGuard 源码不可复核、baseline 时间闸、其余小项）不改。
-- **测试**：全量 **183/183 通过**（`node --test "test/*.test.mjs"`；T2′ 新增 5 条 prune 用例 + P3-1 Fiber 1 条）。
-- **真机**：已安装（deps 14 / bundles 17 / redirect 0.1.0-context-zip / junction 已建）。v0.1.6 已验证工具/感知/审计；**v0.1.12 已于 20:34:54 重启加载，待真实压缩验证**（`version=0.1.12`、`capability@apply/@ready`、`prune-observed`、`cost-v1.2` 的 `tokensPruned`/`pruneCount`/`pruneTools`、`/cg status` 的 `pruned=… tools=…`、审计轮转、只读脚本；S3 默认关）。
+- **测试**：全量 **189/189 通过**（`node --test "test/*.test.mjs"`；T2′ 5 条 prune + P3-1 Fiber 1 条；**0.1.13 新增 6 条**：JSON 反例 skip、`8000/1500` 正例、关键字-only skip+reason、日期/助手正文、strict=false 三态、`protection-skip` 审计落盘）。
+- **真机**：已安装（deps 14 / bundles 17 / redirect 0.1.0-context-zip / junction 已建）。v0.1.6 已验证工具/感知/审计；**v0.1.12 已于 20:34:54 加载**，20:46 首次真实手动压缩已验证 `auditVersion=cost-v1.2`（`tokensBefore=407146`/`tokensAfter=3525`、`tokensPruned=null`、`pruneCount=0`——手动 `compactNow` 不调 pruner）；**`prune-observed` 正路径仍未验**，需自动压力/溢出压缩（0.1.13 未安装，等审后统一重启）。
 - **T6/T7/T8**：均离线完成；真机验收项列在“下一步”。
 - **T8/T9**：T8-1 修 ROB-01/06；T8-2 实现 `compaction-cost`（A 口径）；**T9 已被 T8-2 吸收，不再排期**。
 
@@ -45,21 +45,22 @@ M1 成本“前后水位未知”原按降级接受，2026-10-25 复查为插件
 ## 等待用户/外部
 
 - **真插件安装**：已完成结构安装（junction 指向源码，改完重启即生效）；开发不重启。
-- M1.1：T2′ 已离线完成（v0.1.12）；**审核复核已出（0 阻断/0 P2/6 P3）**；真机已于 20:34:54 重启加载，待真实压缩验证。
+- M1.1：T2′ 已离线完成（v0.1.12）；**审核复核已出（0 阻断/0 P2/6 P3）**；真机已于 20:34:54 加载、20:46 首次真实手动压缩验证 `cost-v1.2`。
+- 0.1.13（REQ-20261025-04）：开发已交付（189/189，报告 `analysis/req-20261025-04/`），待审核复核；未安装/未重启。
 - M1.2：离线完成（0.1.11 冻结）；已并入 0.1.12（已重启加载）。
 - M2：真实压缩验证后评估。
 - 暂存：GitHub 发布用的仓库地址与账号（发布前需要）。
 
 ## 阻塞
 
-- 无（v0.1.12 已于 20:34:54 重启加载，待真实压缩验证；只读演练需人工制造不可写根，开发不自行改动安装态）
+- 无（v0.1.12 已加载并完成首次真实手动压缩验证；0.1.13 待审；只读演练需人工制造不可写根，开发不自行改动安装态）
 
 ## 下一步
 
-1. 0.1.12 已于 20:34:54 重启加载；真实压缩发生后校验 `version=0.1.12`、`perception=event event-api=on`、`capability@apply/@ready`、`events=N` 随真实压缩增长、`prune-observed` 出现、`compaction-cost` 的 `auditVersion=cost-v1.2` 且 `tokensBefore/After` 非 null、带 `tokensPruned`/`pruneCount`/`pruneTools`、`/cg status` 的 `pruned=… tools=…`、审计轮转。
+1. 0.1.12 真机：20:46 首次真实手动压缩已验证 `cost-v1.2`（`tokensBefore/After` 非 null、`tokensPruned=null`/`pruneCount=0`）与 `/cg status` 的 `pruned=0 tools=-`；**`prune-observed` 只有自动压力/溢出压缩才出现**（宿主 `compactNow` 不调 pruner，与审核结论一致），等自然触发或审核离线回放，不催用户压缩。
 2. 用户按 `docs/T7-只读降级人工验证.md` 跑一次只读演练（制造不可写根 → read-only → 恢复）。
 3. S3 header 默认关闭；要启用需用户拍板改 `memoryHeader.enabled`。
-4. 00 转用户验收 → 审核打包独立复核 0.1.12（T2′ + 6 条 P3）。
+4. 审核打包独立复核 **0.1.13**（batch 判据收窄 + `get.compaction` 归因）；0.1.12 复核已出（0 阻断/0 P2/6 P3），00 转用户验收。
 5. T2′ 已实现；审核复核时**必须核对“生产代码无折叠”**（`packages/` 内无 fold/spill/`[cg-fold]`/`fold.*`；证据 `analysis/t2prime/zero-fold-grep.txt`）。
-6. 重启验收后：`ctx.compaction` 在本部署仍不可得（apply/ready 的 `get.compaction` 均 absent），**不再按“可得”评估回注时点**；下次探测用 `ctx.get('compaction', false)` 区分“本 scope 未提供”（`undefined`）与“有 impl 但未 active”（`obj`，可能被 redirect/未装载），再决定 P1 是否具备前提。M2 待 M1.2 验收后评估。
-7. **0.1.13（`REQ-20261025-04`）**：batch 假阳性真修（只看用户/助手消息、`ratios=[]` → `skip`、补带 `x/y` 回归样本）+ `get.compaction` strict=false 归因；不改折叠/回注、`auditVersion` 维持 `cost-v1.2`。已出单待派。
+6. 重启验收后：`ctx.compaction` 在本部署仍不可得（apply/ready 的 `get.compaction` 均 absent），**不再按“可得”评估回注时点**；0.1.13 已实现 `ctx.get('compaction', false)`（`obj`=有 impl 未 active / `undefined`=本 scope 未提供 / 不支持=`unknown`），真机取值待重启后 `capability@apply` 行确认，再决定 P1 是否具备前提。M2 待 M1.2 验收后评估。
+7. **0.1.13（`REQ-20261025-04`）**：batch 假阳性真修（只看用户/助手消息、`ratios=[]` → `skip`、补 `x/y` 回归）+ `get.compaction` strict=false 归因；不改折叠/回注、`auditVersion` 维持 `cost-v1.2`。**开发已交付**（189/189；报告 `analysis/req-20261025-04/`），待审核复核；未安装/未重启/未 push。

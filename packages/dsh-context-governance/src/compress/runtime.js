@@ -1462,6 +1462,20 @@ export class CompressionGuard {
             manual: state.manual ?? null,
           });
           state.report = this.#record(report, state);
+          // 保护校验中有“明确原因”的 skip（如 batch 只有关键字、没有数字比例）要留痕，便于回溯改判。
+          const explainedSkips = report.checks.filter(
+            (item) => item.status === 'skip' && typeof item.reason === 'string' && item.reason !== '',
+          );
+          if (explainedSkips.length > 0) {
+            this.#auditEvent('protection-skip', {
+              sessionId: state.sessionId,
+              compactionId: id,
+              manual: state.manual,
+              count: explainedSkips.length,
+              reason: explainedSkips[0].reason,
+              names: explainedSkips.map((item) => item.name),
+            });
+          }
           if (state.manual === true) {
             const protectedFailures = report.failures
               .map((failure) => failure.name)

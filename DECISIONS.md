@@ -218,3 +218,10 @@
 - 选择：生产代码不折/不写 spill/不提供 fold 开关；只读 `compaction/prune` + 紧随替换 `tool/result`，写 `prune-observed`（工具名按 `callId` 反查 `tool/call`，查不到 `unknown`；同 range 去重；`cycle=current/outside`）；`compaction-cost` 增 `tokensPruned`（measured，无 prune 为 null）/`pruneCount`/`pruneTools`（top5），`auditVersion=cost-v1.2`；`/cg status` 与 `last-cost` 显示 `pruned`/`tools`。
 - 影响：只增加可见性，不改模型可见内容；无 pruner 时 `pruneCount=0` + `tokensPruned=null`，不伪造；P3-1 改为 `fiber.dispose()`；P3-6 读方按 `cost-v1` 前缀匹配。
 - 关联：`src/compress/runtime.js`、`src/audit.js`、`src/commands/cg-status.js`、`test/prune-observed.test.mjs`、`docs/T5-状态命令与审计.md`、`docs/T8-回注自愈与成本归属.md` §7；状态：active。
+
+## DEC-PLUGIN-20261025-30 [tech] 0.1.13：batch 判据收窄（真修假阳性）+ `get.compaction(strict=false)` 归因
+
+- 背景：0.1.12 复核 §11 指认 batch 假阳性——`textOf(event)` 扫全部事件，工具结果/审计 JSON 里的 `"batch"` 字段命中宽正则；取不到 `x/y` 时 `ratios=[]`，旧 `ratiosCovered([])` 只要求摘要非空 → 空泛 pass（`protection.js:396`）。另 `get.compaction` 只记 `absent`，分不清“本 scope 未提供”与“有 impl 未 active”。
+- 选择：batch 只从人类 `user/message` 与 `assistant/message` 正文取“数字/数字”明确比例（排除 `tool/*`、规则注入、JSON/代码块，日期不算）；`ratios=[]` 判 `skip` + `reason=no-ratio-in-user-messages`，写 `protection-skip` 审计（白名单加 `names`）；带比例的消息优先于仅关键字。能力探测加 `ctx.get('compaction', false)`：`obj`=有 impl 未 active / `undefined`=本 scope 未提供 / 不支持或抛错=`unknown`，不猜。
+- 影响：原先“假通过”样本变“真 skip”（预期行为变化，非回归）；`auditVersion` 维持 `cost-v1.2`；不改折叠/回注/记忆/成本路径。离线回放 6 场景 4 改判（`analysis/req-20261025-04/replay-diff.txt`）；全量 **189/189**。
+- 关联：`src/compress/protection.js`、`src/capabilities.js`、`src/audit.js`、`src/compress/runtime.js`、`test/compress-protection.test.mjs`、`test/compress-integration.test.mjs`、`test/perception-capabilities.test.mjs`、`docs/T3-压缩适配与保护.md`、`docs/T8-回注自愈与成本归属.md` §6.5、`docs/T5-状态命令与审计.md`；状态：active。
