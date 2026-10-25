@@ -444,9 +444,21 @@
 
 **任一失败都要先报用户与 00，再改范围，不得自行降级。**
 
+### 项目层安全口径（2026-10-25 定，P2 潜在问题）
+
+项目文件 `<project>/.cg-policy.json` 是**仓库可控输入，按不可信处理**：
+
+- **P-A：禁止项目层设置 `compact.lowThresholdAck`**——出现即拒绝整层（该确认只允许在会话层由用户本人显式操作）；
+- **P-A：`compact.estimateSafety` 不开放给项目层**——仅插件配置文件可设，项目层出现即拒（单列，不进项目白名单）；
+- **P-C：项目层 `compact.at` 下限 `0.45`**——低于即拒绝该层；上限仍为动态 `native`；
+- **拒绝语义**：**整层拒绝**（不逐键降级）+ `policy-invalid` 审计（`source=project`、拒绝键、原因），并回退到下一层生效；
+- **可见性**：`/cg status` 必须显示“被拒的层与原因”，不能只写 audit（用户只看 status）；
+- **不采用 B**：不加 `policy.allowProjectLayer` 开关，安全口径默认生效、不依赖用户手动开启；
+- 恶意项目文件不得造成：阈值低于 0.45、自盖 `<0.30` 确认、静默降级。
+
 ### 验收（分段）
 
-- **0.2.0**：四层覆盖正确、非法配置拒绝可追溯、`/cg status` 合成链与 `native` 正确、`/cg policy show` 可用、`research` 显示 `early=off`、全量测试通过、S1–S6 不回归。
+- **0.2.0**：四层覆盖正确——**项目层经 `apply` 真实生效**（`buildPolicyState` 接线，不许内联重建），并有**经 apply 的集成测试**；非法配置与**被拒的项目层**都可在 `/cg status` 直接看到原因，不只写审计；`/cg status` 合成链与 `native` 正确；`/cg policy show` 可用；`research` 显示 `early=off`；项目层安全口径（P-A/P-C）有单测覆盖（`lowThresholdAck`/`estimateSafety`/`at<0.45` 三类拒绝）；全量测试通过、S1–S6 不回归。
 - **0.2.1**（G1–G3 通过后）：到点主动压一次（`early-forced` 审计、事件流完整）；`effective ≥ native−0.02` 不抢；失败不伤宿主；`early-aborted` 静默；长 turn 不打断；手动压两步确认（冷却期 `--force`）；参数越界被拒。
 - **0.2.2**：聚合 = 逐条求和；两实测数 + 假设行置顶的估算；`backend` 用 `cost-v1.4` 枚举（含 `none`）；未知保持 unknown；`/cg cost` 可查。
 - **总回归**：M1 的 S1–S6；生产代码无折叠、**无引擎包装**。
