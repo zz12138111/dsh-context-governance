@@ -11,6 +11,7 @@
 export const POLICY_DEFAULTS = Object.freeze({
   'compact.at': 0.60,
   'compact.early': true,
+  'compact.early.armed': true,
   'compact.cooldownMin': 10,
   'compact.minDeltaTokens': 20000,
   'compact.estimateSafety': 1.35,
@@ -158,6 +159,16 @@ export function validateLayer(raw, { source = 'builtin', native = NATIVE_DEFAULT
       invalid.push({ source, key, reason: 'unknown-key' });
       continue;
     }
+    if (projectLayer && key === 'compact.early.armed') {
+      // 审核 §4.6：项目层出现 armed 一律不生效，但**不清空整层**（防恶意仓库用一个越权键作废整层配置）。
+      invalid.push({
+        source,
+        key,
+        reason: 'project-excluded',
+        detail: '项目层不得设置 armed（恶意仓库不得替用户打开真实压缩）',
+      });
+      continue;
+    }
     if ((sessionLayer || projectLayer) && !SESSION_KEYS.includes(key)) {
       // 项目层与 /cg set 都不得改 estimateSafety / lowThresholdAck（防仓库自盖确认）。
       invalid.push({
@@ -188,6 +199,11 @@ export function validateLayer(raw, { source = 'builtin', native = NATIVE_DEFAULT
         break;
       }
       case 'compact.early': {
+        if (typeof value !== 'boolean') { invalid.push({ source, key, reason: 'not-boolean' }); break; }
+        values[key] = value;
+        break;
+      }
+      case 'compact.early.armed': {
         if (typeof value !== 'boolean') { invalid.push({ source, key, reason: 'not-boolean' }); break; }
         values[key] = value;
         break;
@@ -233,7 +249,8 @@ export function validateLayer(raw, { source = 'builtin', native = NATIVE_DEFAULT
     }
   }
   // 项目层按不可信输入处理：任一键被拒 → 整层拒绝（不逐键降级），退回下一层生效。
-  if (projectLayer && invalid.length > 0) return { values: {}, invalid };
+  // 例外（审核 §4.6）：仅 `compact.early.armed` 的 project-excluded 不触发整层拒绝。
+  if (projectLayer && invalid.some((item) => item.reason !== 'project-excluded')) return { values: {}, invalid };
   return { values, invalid };
 }
 
@@ -271,6 +288,9 @@ export function resolvePolicy(layers = [], { native = NATIVE_DEFAULT_RATIO } = {
     invalid,
     native,
     early: values['compact.early'] === true,
+    /** 0.2.4：armed 与来源（default=builtin / config=plugin / session）；项目层永不出现。 */
+    earlyArmed: values['compact.early.armed'] === true,
+    armedSource: sources['compact.early.armed'],
   };
 }
 
@@ -294,7 +314,19 @@ export function summarizePolicy(policy) {
     : window.degenerate === true
       ? 'unknown (degenerate)'
       : `${nativeValue === null ? '-' : nativeValue} (${String(window.currentSource).startsWith('projection') ? window.currentSource : 'config-fallback'})`;
-  return `compact.at=${at.toFixed(2)} (source=${source}) native=${nativeText} early=${policy.early ? 'on' : 'off'}`;
+  // 0.2.4：early= 要一眼看出开/关与来源（default/config/session；policy 关闭时标 policy:<来源>）。
+  const armedSource = policy.sources?.['compact.early.armed'] ?? 'builtin';
+  const armedLabel = armedSource === 'builtin' ? 'default' : armedSource === 'plugin' ? 'config' : armedSource;
+  let earlyText;
+  if (policy.early !== true) {
+    const enabledSource = String(policy.sources?.['compact.early'] ?? 'builtin').replace(/^profile=/, '');
+    earlyText = `off (policy:${enabledSource})`;
+  } else if (policy.earlyArmed !== false) {
+    earlyText = `on (${armedLabel})`;
+  } else {
+    earlyText = `off (${armedLabel})`;
+  }
+  return `compact.at=${at.toFixed(2)} (source=${source}) native=${nativeText} early=${earlyText}`;
 }
 
 /** 四层来源逐键展开（供 /cg policy show）。 */

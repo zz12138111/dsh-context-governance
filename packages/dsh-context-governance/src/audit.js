@@ -138,6 +138,8 @@ export const AUDIT_EVENTS = Object.freeze([
   'early-forced',
   'early-aborted',
   'early-failed',
+  'early-armed',
+  'early-disarmed',
 ]);
 
 function redactText(value) {

@@ -110,7 +110,7 @@ export function wireEarlyCompaction(options = {}) {
 
     const decision = decideEarly({
       armed: true,
-      early: true,
+      early: policy.early !== false,
       turnEnded: true,
       agentIdle: true,
       hasAgent: agent !== null,

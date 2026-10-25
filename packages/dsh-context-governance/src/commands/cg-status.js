@@ -265,6 +265,12 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
     }
     const next = { ...sessionValues };
     for (const [key, rawValue] of pairs) {
+      if (key === 'compact.early.armed') {
+        return {
+          kind: 'error',
+          text: 'context-governance set: armed 不能经 /cg set 修改；会话内用 /cg compact arm|disarm，全局用配置 compact.early.armed',
+        };
+      }
       if (CONFIG_ONLY_KEYS.includes(key)) {
         return {
           kind: 'error',
@@ -370,6 +376,29 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
           return { kind: 'success', text: `context-governance header\nheader: ${arg} (source=session)` };
         }
         return { kind: 'error', text: 'Usage: /cg header [status|on|off]' };
+      }
+      if (raw === 'compact' || raw.startsWith('compact ')) {
+        if (policy === null || policy.sessionLayer === undefined) {
+          return { kind: 'error', text: '[context-governance] session layer is unavailable (policy not wired)' };
+        }
+        const sessionValues = policy.sessionLayer.values;
+        const arg = raw.slice('compact'.length).trim();
+        if (arg === '' || arg === 'status') {
+          const resolved = typeof policy.resolve === 'function' ? policy.resolve() : null;
+          const on = sessionValues['compact.early.armed'] ?? (resolved?.values?.['compact.early.armed'] === true);
+          const source = sessionValues['compact.early.armed'] === undefined ? 'config/default' : 'session';
+          return { kind: 'success', text: `context-governance compact\narmed: ${on ? 'on' : 'off'} (source=${source})` };
+        }
+        if (arg === 'arm' || arg === 'disarm') {
+          sessionValues['compact.early.armed'] = arg === 'arm';
+          const sessionId = invocation.sessionId ?? invocation.session?.id ?? null;
+          audit?.append?.(arg === 'arm' ? 'early-armed' : 'early-disarmed', {
+            source: 'session',
+            sessionId,
+          });
+          return { kind: 'success', text: `context-governance compact\narmed: ${arg === 'arm' ? 'on' : 'off'} (source=session)` };
+        }
+        return { kind: 'error', text: 'Usage: /cg compact [status|arm|disarm]' };
       }
       if (raw === 'set' || raw.startsWith('set ') || raw === 'reset') {
         try {

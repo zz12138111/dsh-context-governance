@@ -523,7 +523,13 @@ export async function apply(ctx, rawConfig = {}) {
               return null;
             }
           },
-          getArmed: () => false,
+          getArmed: () => {
+            try {
+              return policyState.resolve().values['compact.early.armed'] === true;
+            } catch {
+              return false;
+            }
+          },
           audit: guard.auditLog ?? null,
           logger: ctx.logger,
         });
