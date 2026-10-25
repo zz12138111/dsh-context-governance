@@ -236,6 +236,6 @@
 ## DEC-PLUGIN-20261025-32 [tech] `ctx.compaction` 不可得根因：agent preset `isolate`
 
 - 背景：0.1.14 真机 `get.compaction(strict=false)=undefined` 只定性到“本 scope 未提供”，根因未定位（此前怀疑挂载时机/redirect）。
-- 事实：agent preset 把 `compaction-basic` 与 `tool-result-pruner` 放进 `cordis:group` 并设 `isolate: { compaction: true, toolResultPruner: true }`（`@local/dsh-computer-use/presets/cordis.patch.yml`，三套 preset 一致）→ 两个服务被隔离在 preset 组作用域内，根级插件不可见；与 token 拼写、挂载时机无关。
+- 事实：agent preset 把 `compaction-basic` 与 `tool-result-pruner` 放进 `cordis:group` 并设 `isolate: { compaction: true, toolResultPruner: true }`（本机可见的 `@local/dsh-computer-use/presets/cordis.patch.yml` 三套 custom preset 均带；`standard` 的 `@deepseek-ai/dsh-web-app/presets/standard.patch.yml` 同口径，见需求核对）→ 两个服务被隔离在 preset 组作用域内，根级插件不可见；与 token 拼写、挂载时机无关。
 - 影响：provider 路线在现有部署下**不可行**（要动需宿主级改动，M1 不做）；插件继续走 `session/event` 事件级；prune 观测走事件流，不依赖该服务；`/cg status` 的 `get.compaction=absent`、`get.compaction(strict=false)=undefined` 是设计行为，不再当异常。
 - 关联：`docs/T3-压缩适配与保护.md` §6.4、`docs/T8-回注自愈与成本归属.md` §6.5、`logs/governance.log` capability@apply/@ready；状态：active。
