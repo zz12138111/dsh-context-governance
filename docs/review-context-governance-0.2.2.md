@@ -148,3 +148,28 @@ node --test "test/*.test.mjs"          # 290/290 pass
 **三条验收判据（00 采纳）**：① P3-1 fixture 用 G2-B 真实文案；② 单测覆盖“保护失败 + 回注成功 → 仍算可用、不重试”；③ 文案不得把 protection 失败渲染成“压缩失败”。
 
 **复核时同时确认**：`armed=false` 全程成立；第 5 步未开；0.2.2 交付记录里 `ok=false` 语义与本节一致。
+
+## 9. 四项复核结果（`629a3a0`，2026-10-26）
+
+基线：HEAD `629a3a0`，工作树干净；在独立 worktree 跑全量 **297/297 pass**。
+
+| 项 | 判定 | 依据 |
+|---|---|---|
+| ① P3-1（`25268bc`） | **通过** | 真实文案 fixture（`code='busy'`、idle-required message）→ `busy`；`code` 大小写不敏感；`unrelated ManualCompactionError` 仍 `failed`；`attempt` 断言 `accepted:false, reason:busy` |
+| ② 契约/stats/status（`2fd4f6f`+`aacea07`） | **通过（附两条跟踪）** | 全仓无 `attempt().ok` 调用点；返回仅 `accepted`；`stats.failures` → `compactionFailures`/`protectionFailures`/`observerErrors`；单测断言 protection failed 时 `compactionFailures=0`、`protectionFailures=1`；`shouldEscalateEarly` 纯函数测试覆盖 |
+| ③ logger（`3179ddf`） | **通过** | `#logger = ctx.logger`（`index.js:500` 传入）→ 不进 `governance.log` 属**设计**；新增 `diagnosticsLogFile` 落点（只记 names + compactionId，<200 字符），单测覆盖；README/T5 已同步 |
+| ④ audit（`629a3a0`） | **不通过（`messagesLength`）** | `messagesLength: 1` 是 `index.js` 里的**硬编码常量**，不读决策数组，不随基线变化——无法证明“注入形态”，也回答不了 T3 的原始证据缺口 |
+
+### 9.1 对第 4 步的两条决定
+
+1. **`messagesLength` 不可接受，改为真实差值**：`onInjected` 目前只收到 `header`，拿不到决策消息数组。建议把 `onInjected` 扩为 `(header, { messagesBefore, messagesAfter })`（`header.js` 里两值现成），审计写 `injected = messagesAfter - messagesBefore`（0/1），或直接记 `messagesBefore`/`messagesAfter` 两个字段。无候选时不会触发 `onInjected`，`injected=0` 由“无该事件”表达，与 T3 口径一致。
+2. **`textHash` 保留，但限定内部用途**：sha256 前 8 位不可反推，但对低熵文本可作“确认攻击”；**audit 不进发布物**，将来若要公开 audit 必须改 HMAC/加盐。当前实现不写正文（白名单仅 `textHash`/`messagesLength`，测试断言无 `title`），可接受。
+
+### 9.2 两条跟踪项（不阻塞 0.2.2 本批）
+
+- **`compactionFailures` 恒 0**：代码中**没有**注释说明“留给第 5 步”（开发自述与代码不符）；`compaction='failed'` 当前也没有生产者（`#record` 只写 committed/skipped）。第 5 步接线时必须补上失败路径记录，否则 `shouldEscalateEarly` 的 `failed` 分支永远走不到。**建议现在补一行注释**，避免下一个人误判为 bug。
+- **同步 busy 文案**：`agent.runMaintenance` 的 `already has active work`（普通 `Error`，无 name/code）仍未识别为 `busy`，会映射 `failed`；属边界路径（调用方给出 idle 事实后才会撞上），可加 `/already has active work/` 或文档注明。
+
+### 9.3 结论
+
+① ② ③ 通过；④ 因 `messagesLength` 硬编码**不通过**，待改为真实差值后复验。四项未全通过前**不 push**（00 边界）。
