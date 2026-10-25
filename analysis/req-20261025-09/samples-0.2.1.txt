@@ -1,0 +1,98 @@
+# sample: 示意/裁剪，非实跑（mock guard/fixture；events=42 与 window/pressure 自洽；数字与 T5 示例同一组）
+
+# fixture: profile=(none), projectFile=(absent), host=0.2.1-rc.3, cmd="/cg status"
+$ /cg status
+context-governance status
+time: 2026-10-25T00:00:00.000Z
+policy: compact.at=0.60 (source=builtin) native=0.6934 (projection) early=on
+window: current=1M (session 58a2e845) observed 2026-10-26T00:00:00.000Z source=projection conservative=1M (session 58a2e845) native-current=0.6934(projection) native-conservative=0.6934 validated
+compression: mode=full adapter=context-zip backend-kind=context-zip perception=event event-api=on events=42 summary=readable/five-section host=0.2.1-rc.3 backend=unknown
+capabilities: control=host-pressure hooks=best-effort/event protectionRole=validator
+pressure: measured=0.556 estimated=0.393 adjusted=0.531(×1.35) effective=0.556 ratio=1.41 window=1M (session 58a2e845) at=0.60 effective<at
+degraded: none
+conflicts: host-version-unverified(warning)
+write-latency: n=0 p50=- p95=- max=-
+last-compaction: none
+last-cost: none
+protection: writes=0 writeFailures=0 reinjections=0 injectionFailures=0 pendingJournals=0 reinjection=enabled(streak=0,maxFailures=3)
+memory: unavailable
+audit: unavailable
+
+# fixture: profile=(none), projectFile=(absent), host=0.2.1-rc.3, cmd="/cg policy show"
+$ /cg policy show
+context-governance policy
+compact.at=0.60 (source=builtin) native=0.6934 (projection) early=on
+layers: plugin (empty) -> project (empty) -> session (empty)
+session: none
+compact.at=0.6 (source=builtin)
+compact.early=true (source=builtin)
+compact.cooldownMin=10 (source=builtin)
+compact.minDeltaTokens=20000 (source=builtin)
+compact.estimateSafety=1.35 (source=builtin)
+compact.lowThresholdAck=false (source=builtin)
+cost.remainingTurns=null (source=builtin)
+invalid: none
+
+# fixture: profile=(none), projectFile=.cg-policy.json{"compact.at":0.52}, host=0.2.1-rc.3, cmd="/cg set compact.at=0.55"
+$ /cg set compact.at=0.55
+context-governance set
+applied: compact.at=0.55
+session: compact.at=0.55
+policy: compact.at=0.55 (source=session) native=0.6934 (projection) early=on
+
+# fixture: profile=(none), projectFile=.cg-policy.json, host=0.2.1-rc.3, cmd="/cg policy show"（会话覆盖后）
+$ /cg policy show
+context-governance policy
+compact.at=0.55 (source=session) native=0.6934 (projection) early=on
+layers: plugin (empty) -> project -> session
+session: compact.at=0.55
+compact.at=0.55 (source=session)
+compact.early=true (source=builtin)
+compact.cooldownMin=10 (source=builtin)
+compact.minDeltaTokens=20000 (source=builtin)
+compact.estimateSafety=1.35 (source=builtin)
+compact.lowThresholdAck=false (source=builtin)
+cost.remainingTurns=null (source=builtin)
+invalid: none
+
+# fixture: profile=(none), projectFile=.cg-policy.json{at:0.5,lowThresholdAck:true}, host=0.2.1-rc.3, cmd="/cg status"
+$ /cg status
+context-governance status
+time: 2026-10-25T00:00:00.000Z
+policy: compact.at=0.58 (source=plugin) native=0.6934 (projection) early=on
+window: current=1M (session 58a2e845) observed 2026-10-26T00:00:00.000Z source=projection conservative=1M (session 58a2e845) native-current=0.6934(projection) native-conservative=0.6934 validated
+policy-invalid: 1 (project/compact.lowThresholdAck:project-denied)
+compression: mode=full adapter=context-zip backend-kind=context-zip perception=event event-api=on events=42 summary=readable/five-section host=0.2.1-rc.3 backend=unknown
+capabilities: control=host-pressure hooks=best-effort/event protectionRole=validator
+pressure: measured=- estimated=- adjusted=- effective=- ratio=- window=1M (session 58a2e845) (no usage/tokenMeter yet)
+degraded: none
+conflicts: host-version-unverified(warning)
+write-latency: n=0 p50=- p95=- max=-
+last-compaction: none
+last-cost: none
+protection: writes=0 writeFailures=0 reinjections=0 injectionFailures=0 pendingJournals=0 reinjection=enabled(streak=0,maxFailures=3)
+memory: unavailable
+audit: unavailable
+
+# fixture: profile=(none), projectFile=.cg-policy.json{at:0.4}, host=0.2.1-rc.3, cmd="/cg policy show"
+$ /cg policy show
+context-governance policy
+compact.at=0.58 (source=plugin) native=0.6934 (projection) early=on
+layers: plugin -> project (empty) -> session (empty)
+session: none
+compact.at=0.58 (source=plugin)
+compact.early=true (source=builtin)
+compact.cooldownMin=10 (source=builtin)
+compact.minDeltaTokens=20000 (source=builtin)
+compact.estimateSafety=1.35 (source=builtin)
+compact.lowThresholdAck=false (source=builtin)
+cost.remainingTurns=null (source=builtin)
+invalid:
+compact.at (source=project): below-min — 项目层 compact.at 下限 0.45
+
+# fixture: profile=(none), projectFile=(absent), host=0.2.1-rc.3, cmd="/cg set compact.estimateSafety=1.2; /cg set compact.at=0.25"
+$ /cg set compact.estimateSafety=1.2
+context-governance set: compact.estimateSafety 只能在配置文件改（安全参数不随会话覆盖；改完需重启）
+$ /cg set compact.at=0.25
+context-governance set: compact.at=0.25 低于 0.30，需在配置文件设 compact.lowThresholdAck=true 后重启（该确认不随会话覆盖）
+

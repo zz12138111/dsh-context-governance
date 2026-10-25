@@ -4,11 +4,10 @@
 $ /cg status
 context-governance status
 time: 2026-10-25T00:00:00.000Z
-policy: compact.at=0.60 (source=builtin) native=0.6934 (projection) early=on
-window: current=1M (session 58a2e845) observed 2026-10-26T00:00:00.000Z source=projection conservative=1M (session 58a2e845) native-current=0.6934(projection) native-conservative=0.6934 validated
+policy: compact.at=0.60 (source=builtin) native=0.6785 early=on
 compression: mode=event-level adapter=none backend-kind=none perception=event event-api=on events=0(no session/event observed yet) summary=readable/free-form host=0.2.1-rc.3 backend=unknown
 capabilities: control=unknown hooks=best-effort/event protectionRole=validator
-pressure: measured=0.556 estimated=0.393 adjusted=0.531(×1.35) effective=0.556 ratio=1.41 window=1M (session 58a2e845) at=0.60 effective<at
+pressure: measured=0.583 estimated=0.412 adjusted=0.556(×1.35) effective=0.583 ratio=1.42 window=1.00M at=0.60 effective<at
 degraded: none
 conflicts: none
 write-latency: n=0 p50=- p95=- max=-
@@ -21,7 +20,7 @@ audit: unavailable
 # fixture: profile=(none), projectFile=(absent), host=0.2.1-rc.3, cmd="/cg policy show"
 $ /cg policy show
 context-governance policy
-compact.at=0.60 (source=builtin) native=0.6934 (projection) early=on
+compact.at=0.60 (source=builtin) native=0.6785 early=on
 layers: plugin (empty) -> project (empty) -> session (empty)
 session: none
 compact.at=0.6 (source=builtin)
@@ -38,12 +37,12 @@ $ /cg set compact.at=0.55
 context-governance set
 applied: compact.at=0.55
 session: compact.at=0.55
-policy: compact.at=0.55 (source=session) native=0.6934 (projection) early=on
+policy: compact.at=0.55 (source=session) native=0.6785 early=on
 
 # fixture: profile=(none), projectFile=.cg-policy.json, host=0.2.1-rc.3, cmd="/cg policy show"（会话覆盖后）
 $ /cg policy show
 context-governance policy
-compact.at=0.55 (source=session) native=0.6934 (projection) early=on
+compact.at=0.55 (source=session) native=0.6785 early=on
 layers: plugin (empty) -> project -> session
 session: compact.at=0.55
 compact.at=0.55 (source=session)
@@ -59,12 +58,11 @@ invalid: none
 $ /cg status
 context-governance status
 time: 2026-10-25T00:00:00.000Z
-policy: compact.at=0.58 (source=plugin) native=0.6934 (projection) early=on
-window: current=1M (session 58a2e845) observed 2026-10-26T00:00:00.000Z source=projection conservative=1M (session 58a2e845) native-current=0.6934(projection) native-conservative=0.6934 validated
+policy: compact.at=0.58 (source=plugin) native=0.6785 early=on
 policy-invalid: 1 (project/compact.lowThresholdAck:project-denied)
 compression: mode=event-level adapter=none backend-kind=none perception=event event-api=on events=0(no session/event observed yet) summary=readable/free-form host=0.2.1-rc.3 backend=unknown
 capabilities: control=unknown hooks=best-effort/event protectionRole=validator
-pressure: measured=- estimated=- adjusted=- effective=- ratio=- window=1M (session 58a2e845) (no usage/tokenMeter yet)
+pressure: measured=- estimated=- adjusted=- effective=- ratio=- window=1.00M (no usage/tokenMeter yet)
 degraded: none
 conflicts: none
 write-latency: n=0 p50=- p95=- max=-
@@ -77,7 +75,7 @@ audit: unavailable
 # fixture: profile=(none), projectFile=.cg-policy.json{at:0.4}, host=0.2.1-rc.3, cmd="/cg policy show"
 $ /cg policy show
 context-governance policy
-compact.at=0.58 (source=plugin) native=0.6934 (projection) early=on
+compact.at=0.58 (source=plugin) native=0.6785 early=on
 layers: plugin -> project (empty) -> session (empty)
 session: none
 compact.at=0.58 (source=plugin)
