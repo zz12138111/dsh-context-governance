@@ -17,7 +17,7 @@
 
 ## 1. 结论摘要
 
-- **阻断（P1）：0**；**应修（P2）：0**（P2-4 回填闭环，见 §13）；**建议（P3）：2**（P3-12/13，回填标注可读性）。
+- **阻断（P1）：0**；**应修（P2）：0**（P2-4 回填闭环，见 §13）；**建议（P3）：0**（P3-12/13 于 `4af1dc2` 闭环，见 §14）。
 - 六条验收 **4 条完全成立、1 条部分（⑥ 的审计子项）、1 条报告证据不完整**；十项清单里 **⑩ 数字更新未做**（详见 §4）。
 - 代码检索与 spy 双证：**本版没有任何压缩调用路径**（我用自己的全量 pattern + 3 个真实 API 名 spy 复核，0 次）。
 
@@ -264,3 +264,30 @@ pressure: measured=0.563 estimated=0.393 adjusted=0.531(×1.35) effective=0.563 
 - 新建会话：真实 `request/context` → `source=projection`（实时），`observedAt` 为观察时间。
 
 **计数更新**：P1=0 / **P2=0**（P2-4 回填闭环）/ **P3=2**（P3-12/13，标注建议级）。
+
+## 14. P3-12/13 复验（2026-10-26 01:1x，`4af1dc2`，264/264）
+
+**基线**：`4af1dc2` 快照 **264/264** ✔；独立探针：三来源标注 **15/15**、回归三组 **8/8 + 6/6 + 7/7**；工作树干净。
+
+### 三来源标注（逐字实测）
+| 来源 | `window:` 行 | `policy:` 行 | `pressure:` 行 |
+|---|---|---|---|
+| **回填** | `source=projection(backfilled)` + `native-current=0.6934(projection(backfilled))` | `native=0.6934 (projection(backfilled))` | `window=1M (session 58a2e845, backfilled)` |
+| **实时** | `source=projection` + `native-current=0.6934(projection)`（无 backfilled） | `native=0.6934 (projection)` | `window=1M (session aaaaaaaa)`（无 backfilled） |
+| **回退** | `source=config-fallback` + `native-current=0.6785(config-fallback)` | `native=0.6785 (config-fallback)` | `window=1M (config-fallback)` |
+
+- **P3-12 闭环**：`native-current` 用完整 `currentSource`（不再折叠成 `projection`）——回填场景同行两字段都带 `backfilled`，无同行矛盾；实时/回退各自只有一种写法。
+- **P3-13 闭环**：`pressure` 行有 session 时按来源写 `(session …, backfilled)` / `(session …)`；无 session 且回退写 `(config-fallback)`；**每行恰好一套括注**（实测 `backfilled`/`config-fallback` 各只出现 1 次）；实时行 `doesNotMatch /backfilled/`。
+- 代码：`summarizeWindow` 的 `nativeSource` 改为完整 `currentSource`；`summarizePressure` 按来源拼单套后缀。
+
+### 回归（独立探针，非只跑仓库测试）
+- 窗口观察/删除/1M+128k 同源/退化 A/无观察/运行时审计/零压缩 spy：**8/8**
+- P2-1 退化审计三路径（audit/warn/status、over-native 回归、无观察 0 条）：**6/6**
+- 四条联动（退化 set 审计、恢复四路干净、跨 episode、P3-7 真实 apply 2 条）：**7/7**
+- `stateOf` 每会话一次：仓库 `window-021` 用例覆盖（264/264 通过）；我的回填探针也断言“2 事件只调 1 次”。
+
+### 真机重启后验收（待执行）
+- 既有会话 → `window: current=1M (session …) observed <该会话历史 request/context 时间> source=projection(backfilled)`、`native=0.6934`、`pressure … window=1M (session …, backfilled)`；`observed` 我会与日志时间戳逐条比对。
+- 新建会话 → `source=projection`（实时，不带 backfilled）。
+
+**计数更新**：**P1=0 / P2=0 / P3=0**（P3-12/13 闭环）。0.2.1 代码层复核全部收口；剩余为真机重启验证。
