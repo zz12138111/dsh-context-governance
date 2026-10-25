@@ -142,6 +142,8 @@ export class CompressionGuard {
   /** 0.2.1 backfill：首次事件时从 sessionProjections 回填历史 contextWindow（每会话一次）。 */
   #sessionProjections = null;
   #windowBackfillAttempted = new Set();
+  /** 回填诊断：每会话/每原因只记一条日志（区分“服务取不到”与“state 无窗口”）。 */
+  #windowBackfillLogged = new Set();
   #pendingCosts = new Map();
   #lastCost = null;
   #toolNames = new Map();
@@ -489,17 +491,24 @@ export class CompressionGuard {
    */
   /**
    * M1.2：按需取 tokenMeter；成功才缓存，失败不缓存 null（服务可能晚注册）。
-   * 不把 tokenMeter 加进硬 inject：缺服务时插件仍要能装载。
+   * 同 P2-5：真机 `ctx.tokenMeter` 可能是抛错 getter，两种取法各自 try，`ctx.get` 优先可回退。
    */
   #getTokenMeter() {
     if (this.#tokenMeter !== null) return this.#tokenMeter;
     try {
-      const meter = this.#ctx?.tokenMeter
-        ?? (typeof this.#ctx?.get === 'function' ? this.#ctx.get('tokenMeter') : null)
-        ?? null;
-      if (meter !== null && typeof meter?.measure === 'function') {
-        this.#tokenMeter = meter;
-        return meter;
+      const direct = this.#ctx?.tokenMeter;
+      if (direct !== null && direct !== undefined && typeof direct.measure === 'function') {
+        this.#tokenMeter = direct;
+        return direct;
+      }
+    } catch {
+      /* 属性 getter 抛错：继续走 ctx.get */
+    }
+    try {
+      const viaGet = typeof this.#ctx?.get === 'function' ? this.#ctx.get('tokenMeter') : null;
+      if (viaGet !== null && viaGet !== undefined && typeof viaGet.measure === 'function') {
+        this.#tokenMeter = viaGet;
+        return viaGet;
       }
     } catch {
       /* 服务未就绪/代理抛错：下次再试 */
@@ -607,18 +616,32 @@ export class CompressionGuard {
     }
   }
 
-  /** 按需取 sessionProjections（晚挂载；成功才缓存，失败下次再试，与 tokenMeter 同策略）。 */
+  /**
+   * 按需取 sessionProjections（晚挂载；成功才缓存，失败下次再试）。
+   * 真机形态：`ctx.sessionProjections` 是**抛错的 getter**（属性访问直接 throw），
+   * 而 `ctx.get('sessionProjections')` 是 obj——所以两种取法必须各自 try，不能共用一条 `??`。
+   */
   #getSessionProjections() {
     if (this.#sessionProjections !== null) return this.#sessionProjections;
     try {
-      const service = this.#ctx?.sessionProjections
-        ?? (typeof this.#ctx?.get === 'function' ? this.#ctx.get('sessionProjections') : null)
-        ?? null;
-      if (service !== null && typeof service?.stateOf === 'function') this.#sessionProjections = service;
+      const direct = this.#ctx?.sessionProjections;
+      if (direct !== null && direct !== undefined && typeof direct.stateOf === 'function') {
+        this.#sessionProjections = direct;
+        return direct;
+      }
+    } catch {
+      /* 属性 getter 抛错：继续尝试 ctx.get（这才是真机的可用路径） */
+    }
+    try {
+      const viaGet = typeof this.#ctx?.get === 'function' ? this.#ctx.get('sessionProjections') : null;
+      if (viaGet !== null && viaGet !== undefined && typeof viaGet.stateOf === 'function') {
+        this.#sessionProjections = viaGet;
+        return viaGet;
+      }
     } catch {
       /* 未就绪/代理抛错：下次事件再试 */
     }
-    return this.#sessionProjections;
+    return null;
   }
 
   /**
@@ -629,20 +652,34 @@ export class CompressionGuard {
   #backfillWindow(session) {
     const key = this.#sessionKey(session);
     if (key === null || this.#windowBackfillAttempted.has(key)) return;
+    const logOnce = (reason, detail) => {
+      const logKey = `${key}|${reason}`;
+      if (this.#windowBackfillLogged.has(logKey)) return;
+      this.#windowBackfillLogged.add(logKey);
+      this.#logger?.info?.(
+        `[context-governance] window backfill: ${reason} (session=${key}${detail === undefined ? '' : ` ${detail}`})`,
+      );
+    };
     const projections = this.#getSessionProjections();
-    if (projections === null) return; // 服务未就绪：保持未尝试，下条事件再试
+    if (projections === null) {
+      // “服务取不到”与“state 无窗口”分开记，真机诊断不用再猜。
+      logOnce('sessionProjections-unavailable');
+      return; // 服务未就绪：保持未尝试，下条事件再试
+    }
     this.#windowBackfillAttempted.add(key);
     if (this.#windows.has(key)) return; // 已有实时观察，不覆盖
     let state = null;
     try {
       state = projections.stateOf(session, 'contextPressure');
     } catch {
+      logOnce('stateOf-threw');
       return;
     }
     const tokens = state?.contextWindow;
     if (!Number.isInteger(tokens) || tokens <= 0) {
       // 投影里“有字段但非法”也算一次非法观测（保持 unknown，不造值）。
       if (tokens !== undefined) this.#stats.windowInvalidObservations += 1;
+      logOnce(tokens === undefined ? 'contextWindow-absent' : 'contextWindow-invalid', `value=${String(tokens).slice(0, 20)}`);
       return;
     }
     // observedAt 必须取历史 request/context 事件的时间戳（不是回填时刻）。

@@ -710,3 +710,72 @@ test('0.2.1 P3-12/P3-13 三来源字符串：backfilled/live/config 各自可辨
   assert.match(fallback, /native-current=0\.6785\(config-fallback\)/);
   assert.match(fallback, /pressure: .*window=1M \(config-fallback\)/);
 });
+
+test('0.2.1 P2-5 真机形态：sessionProjections 属性 getter 抛错、ctx.get 可用 → 回填成功', () => {
+  let stateOfCalls = 0;
+  const projections = { stateOf: () => { stateOfCalls += 1; return { contextWindow: 1_048_576 }; } };
+  const handlers = [];
+  const ctx = {
+    get: (name) => (name === 'sessionProjections' ? projections : undefined),
+    on: (event, handler) => { handlers.push(handler); return () => {}; },
+    logger: { info: () => {}, warn: () => {} },
+  };
+  Object.defineProperty(ctx, 'sessionProjections', {
+    get() { throw new Error('proxy service property throws'); },
+  });
+  const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.3' });
+  guard.start();
+  try {
+    const session = { id: 'session-58a2e845-1111', header: { id: 'session-58a2e845-1111', cwd: process.cwd() }, ownEvents: () => [] };
+    handlers[0](session, { type: 'assistant/message', seq: 1, data: {} });
+    assert.equal(guard.windowState.current?.tokens, 1_048_576, 'getter 抛错不能短路 ctx.get');
+    assert.equal(guard.windowState.current?.source, 'backfilled');
+    assert.equal(stateOfCalls, 1);
+  } finally {
+    guard.stop();
+  }
+});
+
+test('0.2.1 P2-5 tokenMeter 同形态：属性 getter 抛错、ctx.get 可用 → 估算仍可读', () => {
+  const meter = { measure: () => ({ nodes: [{ tokens: 400_000 }] }) };
+  const handlers = [];
+  const ctx = {
+    get: (name) => (name === 'tokenMeter' ? meter : undefined),
+    on: (event, handler) => { handlers.push(handler); return () => {}; },
+    logger: { info: () => {}, warn: () => {} },
+  };
+  Object.defineProperty(ctx, 'tokenMeter', { get() { throw new Error('proxy service property throws'); } });
+  const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.3' });
+  guard.start();
+  try {
+    const session = { id: 'session-aaaaaaaa-2222', header: { id: 'session-aaaaaaaa-2222', cwd: process.cwd() } };
+    handlers[0](session, { type: 'assistant/message', seq: 2, data: { usage: { inputTokens: 5_000 } } });
+    assert.equal(guard.pressure().estimatedTokens, 400_000, 'tokenMeter 取法也不能被抛错短路');
+  } finally {
+    guard.stop();
+  }
+});
+
+test('0.2.1 P2-5 回填诊断：区分“服务取不到”与“state 无窗口”各记一条', () => {
+  const run = (ctxExtra, label) => {
+    const logs = [];
+    const handlers = [];
+    const ctx = {
+      on: (event, handler) => { handlers.push(handler); return () => {}; },
+      logger: { info: (...args) => logs.push(args.join(' ')), warn: () => {} },
+      ...ctxExtra,
+    };
+    const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.3' });
+    guard.start();
+    const session = { id: 'session-cccccccc-3333', header: { id: 'session-cccccccc-3333', cwd: process.cwd() }, ownEvents: () => [] };
+    handlers[0](session, { type: 'assistant/message', seq: 1, data: {} });
+    handlers[0](session, { type: 'assistant/message', seq: 2, data: {} });
+    guard.stop();
+    return logs.filter((line) => line.includes('window backfill:'));
+  };
+  const unavailable = run({ get: () => { throw new Error('not ready'); } });
+  assert.ok(unavailable.some((line) => /sessionProjections-unavailable/.test(line)), JSON.stringify(unavailable));
+  assert.equal(unavailable.length, 1, '每会话/每原因只记一条');
+  const noWindow = run({ get: (name) => (name === 'sessionProjections' ? { stateOf: () => ({}) } : undefined) });
+  assert.ok(noWindow.some((line) => /contextWindow-absent/.test(line)), JSON.stringify(noWindow));
+});
