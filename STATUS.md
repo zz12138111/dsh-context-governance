@@ -29,6 +29,7 @@
 - **测试**：全量 **196/196 通过**（`node --test "test/*.test.mjs"`；0.1.13 为 189；**0.1.14 新增 7 条**：`2/6`/`183/183`/仅`8000/1500` 三种 skip+reason、`批次 8000/1500` 正例、`2026/10` 日期排除、`{511/958}` 保留、`protection-skip(no-batch-semantics)` 审计且无 `manual-compaction-loss`）。
 - **真机**：已安装（deps 14 / bundles 17 / redirect 0.1.0-context-zip / junction 已建）。v0.1.6 已验证工具/感知/审计；**v0.1.14 已于 21:18 重启加载**（`governance capability@apply version=0.1.14`、`get.compaction(strict=false)=undefined`）；v0.1.12 于 20:46 首次真实手动压缩验证 `auditVersion=cost-v1.2`（`tokensBefore=407146`/`tokensAfter=3525`、`tokensPruned=null`、`pruneCount=0`——手动 `compactNow` 不调 pruner）；**`prune-observed` 正路径仍未验**，需自动压力/溢出压缩。
 - **T6/T7/T8**：均离线完成；真机验收项列在“下一步”。
+- **M1.3 原生后端验证（REQ-20261025-06，2026-10-25）**：隔离 profile `native-test`（web 模板、无 context-zip/redirect，端口 18765，已停）实跑——**D1-1 不通过**（原生下 `adapter=none`，根因仍是 preset `isolate`；功能不受影响）；**D1-2/D1-4 通过**（原生自由摘要 9,193 字符/0 五段标题、readable；`protection-write`→`manual-compaction-loss`→`reinjection`(seq 82)→`compaction-cost` 齐全，回注为标题+最后一句）；**D1-3 手动链路通过、自动压力未触发**（需 ≈678K tokens，建议 overflow 补验）；D1-5 隔离证据齐全。报告 `analysis/req-20261025-06/`；未改代码、未 push。**0.1.15 A/B 待需求确认**（A 事件形态推断 host-basic；B 文档化 `none` 合法）。
 - **T8/T9**：T8-1 修 ROB-01/06；T8-2 实现 `compaction-cost`（A 口径）；**T9 已被 T8-2 吸收，不再排期**。
 
 ## 已知风险（当前无代码风险）
@@ -48,6 +49,7 @@ M1 成本“前后水位未知”原按降级接受，2026-10-25 复查为插件
 - M1.1：T2′ 已离线完成（v0.1.12）；**审核复核已出（0 阻断/0 P2/6 P3）**；真机已于 20:34:54 加载、20:46 首次真实手动压缩验证 `cost-v1.2`。
 - 0.1.13（REQ-20261025-04）：开发已交付（189/189，报告 `analysis/req-20261025-04/`）；0.1.14 已覆盖其 batch 判据（不改 `get.compaction` 归因）。
 - 0.1.14（REQ-20261025-05）：开发已交付（196/196，报告 `analysis/req-20261025-05/`，含真实快照 A/B 三列对照）；**已于 21:18 重启加载**，待审核复核。
+- **M1.3 原生后端验证（REQ-20261025-06）**：报告 `analysis/req-20261025-06/`；**D1-1 不通过、D1-2/D1-4 通过、D1-3 自动分支未触发**；隔离实例 `native-test` 已停（profile 保留可复验）。**待需求确认 0.1.15 A/B**（事件形态推断 vs 文档化 `none`）。
 - M1.2：离线完成（0.1.11 冻结）；已并入 0.1.12（已重启加载）。
 - **M1 收尾（2026-10-25）**：架构升至 **v1.1**（事实回写：preset 阈值≈67.85%/patch 无效、`tokenMeter`=chars/4 估算、`ctx.compaction` 本 scope 不可得、工具输出折叠取消）；`REQ-20261025-01` 改结项口径（双后端=事件级、成本 source 写明、rc.3、结项说明+四条边界）；v1.0 标历史。
 - **M2 需求草案 v0.6**：`docs/M2-需求草案-v0.6.md`（`research` 默认 `compact.early=false`；`estimateSafety` 改注释式警告；`/cg cost` 假设行置顶；新增“可关闭”验收）；**使用说明草案 v0.2** `docs/M2-使用说明-草案-v0.2.md`（新增“压完还是觉得贵”FAQ、长 turn 表述、research 说明）；v0.1–v0.5 保留作对照；**待评审复核**。
