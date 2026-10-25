@@ -182,3 +182,21 @@ node --test "test/*.test.mjs"          # 290/290 pass
 ### 9.3 结论
 
 **① ② ③ ④ 全部通过**（④ 于 `0c77f0d` 复验）。四项全过，可按 00 边界一次性推分支（只推分支，不打 tag、不碰 main），推后回报「远端 = 本地 HEAD」hash。
+
+### 9.4 推送记录
+
+- `c143793..5a79e08` 已推（四项通过之后）；远端 = 本地 = `5a79e08`；未打 tag、未改 main。
+- 推送前 `compliance-scan`：`blocker=0 review=2`（均为 §9.4/§9.4 类文档示意串误报）。
+
+## 10. 第 5 步复核口径（预登记，2026-10-26）
+
+范围：`turn/end` 门禁 + `early-*` 审计；**`armed` 仍 false、不打开真实触发**。复核时逐条：
+
+1. **开关未打开**：`EarlyCompactor` 构造处 `armed` 为默认 `false`；全仓无 `arm()` 调用点；无配置项/命令可打开。
+2. **门禁双事实**：仅在 `turnEnded === true && agentIdle === true` 时调用 `attempt`；缺任一不取引擎、不试探（单测覆盖 turn 中）。
+3. **审计字段**：`early-*` 事件含 `compaction=committed|skipped|failed` + `protection=ok|failed` + `failures[]` + `reinjected` + `accepted`（或等价），**不得再出现 `ok`**。
+4. **不升级**：`protection=failed` 不触发重试/关开关（spy 断言 `compactNow` 只调一次、`armed` 保持、无 disable）；只有 `compaction=failed` 或 `reinjected=false` 才升级。
+5. **`compaction='failed'` 有生产者**：失败路径必须写报告/审计，否则 §9.2 的跟踪未闭。
+6. **无真实触发**：`armed=false` 时门禁走 disabled 分支，不调 `compactNow`。
+7. **回归**：全量测试通过；全仓无 `attempt().ok` 残留读取。
+8. **边界声明**：复核结论必须写明“**armed 未打开、不构成真实触发**；打开 armed 需用户再批一次”。
