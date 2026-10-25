@@ -138,22 +138,32 @@ export function wireEarlyCompaction(options = {}) {
     }
 
     state.set(sessionId, { at: nowMs, effective });
+    // 审核 §10-⑤：attempt 前取 prevReport；失败时没有新报告，绝不能抄上一轮。
+    const prevReport = getGuard()?.status?.lastReport ?? null;
     const compactor = new EarlyCompactor({ getEngine: () => engine, armed: true, logger });
     const result = await compactor.attempt({
       agent,
       signal: new AbortController().signal,
       sourceCommandId: 'early-auto',
+      // idle 是 turn/end 后的假设，不是测量；靠宿主 busy 拒绝兜底（G2-B），失败映射 early-aborted。
       turnEnded: true,
       agentIdle: true,
     });
     const report = getGuard()?.status?.lastReport ?? null;
+    const fresh = result.accepted === true
+      && report !== null
+      && report.compactionId !== prevReport?.compactionId
+      ? report
+      : null;
     const fields = {
       sessionId,
       accepted: result.accepted === true,
-      compaction: report?.compaction ?? (result.accepted === true ? 'committed' : 'failed'),
-      protection: report?.protection ?? 'ok',
-      failures: Array.isArray(report?.failures) ? report.failures.map((failure) => failure.name) : [],
-      reinjected: report?.reinjected ?? null,
+      compaction: fresh?.compaction ?? (result.accepted === true ? 'committed' : 'failed'),
+      protection: result.accepted === true ? (fresh?.protection ?? 'ok') : null,
+      failures: result.accepted === true && Array.isArray(fresh?.failures)
+        ? fresh.failures.map((failure) => failure.name)
+        : [],
+      reinjected: result.accepted === true ? (fresh?.reinjected ?? null) : null,
       reason: result.reason ?? null,
       delayMs: EARLY_DELAY_MS,
       effective,
@@ -168,6 +178,8 @@ export function wireEarlyCompaction(options = {}) {
   const dispose = typeof ctx?.on === 'function'
     ? ctx.on('session/event', (session, event) => {
       if (event?.type !== 'turn/end') return;
+      // 审核 §10-⑤ 附注：armed=false 时不排定时器（无服务/审计副作用，也不积 timers）。
+      if (!armedNow()) return;
       const timer = schedule(() => {
         timers.delete(timer);
         void check(session).catch((error) => {

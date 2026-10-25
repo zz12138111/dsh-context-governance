@@ -60,11 +60,16 @@ test('0.2.2 接线：armed=false 时静默（不审计、不取服务、不调�
 });
 
 test('0.2.2 接线：armed=true + 压力在位 → early-decision + early-forced（带 protection/failures/reinjected）', async () => {
-  const engine = makeEngine();
+  const guard = makeGuard({
+    lastReport: { compactionId: 'old', compaction: 'skipped', protection: 'ok', failures: [], reinjected: null },
+  });
+  const fresh = { compactionId: 'new', compaction: 'committed', protection: 'failed', failures: [{ name: 'latest-user-message' }], reinjected: true };
+  const engine = {
+    calls: 0,
+    async compactNow() { this.calls += 1; guard.status.lastReport = fresh; },
+  };
   const { ctx } = makeCtx({ engine });
   const audit = makeAudit();
-  const lastReport = { compaction: 'committed', protection: 'failed', failures: [{ name: 'latest-user-message' }], reinjected: true };
-  const guard = makeGuard({ lastReport });
   const wiring = wireEarlyCompaction({ ctx, getGuard: () => guard, getPolicy: () => POLICY, audit, getArmed: () => true, now: () => 0 });
   await wiring.check({ id: 's1' });
   assert.equal(engine.calls, 1);
@@ -82,10 +87,17 @@ test('0.2.2 接线：busy → early-aborted；其他失败 → early-failed', as
   const busyEngine = makeEngine('busy');
   const audit = makeAudit();
   const { ctx } = makeCtx({ engine: busyEngine });
-  const guard = makeGuard({ lastReport: { compaction: 'committed', protection: 'ok', failures: [], reinjected: null } });
+  const guard = makeGuard({
+    lastReport: { compactionId: 'old', compaction: 'committed', protection: 'ok', failures: [], reinjected: true },
+  });
   const wiring = wireEarlyCompaction({ ctx, getGuard: () => guard, getPolicy: () => POLICY, audit, getArmed: () => true, now: () => 0 });
   await wiring.check({ id: 's1' });
   assert.deepEqual(audit.entries.map((entry) => entry.event), ['early-decision', 'early-aborted']);
+  const aborted = audit.entries[1];
+  assert.equal(aborted.compaction, 'failed', '不得抄上一轮的 committed');
+  assert.equal(aborted.protection, null, '失败路径 protection 必须 null');
+  assert.deepEqual(aborted.failures, []);
+  assert.equal(aborted.reinjected, null);
 
   const failEngine = makeEngine('fail');
   const audit2 = makeAudit();
@@ -93,6 +105,11 @@ test('0.2.2 接线：busy → early-aborted；其他失败 → early-failed', as
   const wiring2 = wireEarlyCompaction({ ctx: ctx2, getGuard: () => guard, getPolicy: () => POLICY, audit: audit2, getArmed: () => true, now: () => 0 });
   await wiring2.check({ id: 's1' });
   assert.deepEqual(audit2.entries.map((entry) => entry.event), ['early-decision', 'early-failed']);
+  const failed = audit2.entries[1];
+  assert.equal(failed.compaction, 'failed');
+  assert.equal(failed.protection, null);
+  assert.deepEqual(failed.failures, []);
+  assert.equal(failed.reinjected, null);
 });
 
 test('0.2.2 接线：低于 at → early-skipped(below-threshold)，不调用', async () => {
@@ -121,14 +138,21 @@ test('0.2.2 接线：冷却期内不重复压（cooldown）', async () => {
   assert.equal(skipped.at(-1).reason, 'cooldown');
 });
 
-test('0.2.2 接线：只在 turn/end 后调度（其他事件不排）', () => {
-  const { ctx, handlers } = makeCtx();
+test('0.2.2 接线：只在 turn/end 后调度（armed=false 不排定时器）', () => {
   const scheduled = [];
-  const wiring = wireEarlyCompaction({ ctx, getGuard: () => makeGuard(), getPolicy: () => POLICY, getArmed: () => false, schedule: (fn, ms) => { scheduled.push(ms); return 0; } });
+  const { ctx, handlers } = makeCtx();
+  const wiring = wireEarlyCompaction({ ctx, getGuard: () => makeGuard(), getPolicy: () => POLICY, getArmed: () => true, schedule: (fn, ms) => { scheduled.push(ms); return 0; } });
   const handler = handlers.find((item) => item.event === 'session/event').handler;
   handler({ id: 's1' }, { type: 'assistant/message' });
   assert.equal(scheduled.length, 0);
   handler({ id: 's1' }, { type: 'turn/end' });
   assert.deepEqual(scheduled, [EARLY_DELAY_MS]);
   wiring.stop();
+
+  const scheduled2 = [];
+  const second = makeCtx();
+  const wiring2 = wireEarlyCompaction({ ctx: second.ctx, getGuard: () => makeGuard(), getPolicy: () => POLICY, getArmed: () => false, schedule: (fn, ms) => { scheduled2.push(ms); return 0; } });
+  second.handlers.find((item) => item.event === 'session/event').handler({ id: 's1' }, { type: 'turn/end' });
+  assert.equal(scheduled2.length, 0, 'armed=false 不得排定时器');
+  wiring2.stop();
 });
