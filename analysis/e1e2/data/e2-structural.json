@@ -1,0 +1,295 @@
+{
+  "experiment": "E2 结构实验：回注是否被下一次压缩吞掉",
+  "method": [
+    "读取本机会话日志中的 compaction/summary.shadowedRange 与 checkpoint user/message seq",
+    "假设治理层在 checkpoint 后立刻注入一条短消息（seq = checkpoint + 1）",
+    "判断该 seq 是否落在下一次压缩的 shadowedRange 内"
+  ],
+  "sessionsWithPair": 1,
+  "pairs": 6,
+  "insideNextShadow": 6,
+  "nextStartsAtPreviousCheckpoint": 6,
+  "singletonCompactions": 10,
+  "details": [
+    {
+      "session": "267cb36757",
+      "workspace": "7064106291",
+      "previous": {
+        "compactionId": "b90c7203-0648-4043-a7d0-ef15bf488118",
+        "manual": false,
+        "shadowedRange": {
+          "start": 16,
+          "end": 2571
+        },
+        "checkpointSeq": 3527,
+        "summarySeq": 3526,
+        "endSeq": 3528
+      },
+      "next": {
+        "compactionId": "e9b154d9-5f4a-4f74-9697-08d92e609ce6",
+        "manual": false,
+        "shadowedRange": {
+          "start": 3527,
+          "end": 5986
+        },
+        "startEventSeq": 7659
+      },
+      "injectionSeq": 3528,
+      "insideNextShadow": true,
+      "nextStartsAtPreviousCheckpoint": true,
+      "gapEvents": 4131
+    },
+    {
+      "session": "267cb36757",
+      "workspace": "7064106291",
+      "previous": {
+        "compactionId": "e9b154d9-5f4a-4f74-9697-08d92e609ce6",
+        "manual": false,
+        "shadowedRange": {
+          "start": 3527,
+          "end": 5986
+        },
+        "checkpointSeq": 7662,
+        "summarySeq": 7661,
+        "endSeq": 7663
+      },
+      "next": {
+        "compactionId": "99238988-ad79-4bfc-9819-b5613ae6a8ea",
+        "manual": false,
+        "shadowedRange": {
+          "start": 7662,
+          "end": 9804
+        },
+        "startEventSeq": 11476
+      },
+      "injectionSeq": 7663,
+      "insideNextShadow": true,
+      "nextStartsAtPreviousCheckpoint": true,
+      "gapEvents": 3813
+    },
+    {
+      "session": "267cb36757",
+      "workspace": "7064106291",
+      "previous": {
+        "compactionId": "99238988-ad79-4bfc-9819-b5613ae6a8ea",
+        "manual": false,
+        "shadowedRange": {
+          "start": 7662,
+          "end": 9804
+        },
+        "checkpointSeq": 11479,
+        "summarySeq": 11478,
+        "endSeq": 11480
+      },
+      "next": {
+        "compactionId": "2cf0c5cf-34bc-467c-8c3d-1709b74f74a2",
+        "manual": false,
+        "shadowedRange": {
+          "start": 11479,
+          "end": 14338
+        },
+        "startEventSeq": 16090
+      },
+      "injectionSeq": 11480,
+      "insideNextShadow": true,
+      "nextStartsAtPreviousCheckpoint": true,
+      "gapEvents": 4610
+    },
+    {
+      "session": "267cb36757",
+      "workspace": "7064106291",
+      "previous": {
+        "compactionId": "2cf0c5cf-34bc-467c-8c3d-1709b74f74a2",
+        "manual": false,
+        "shadowedRange": {
+          "start": 11479,
+          "end": 14338
+        },
+        "checkpointSeq": 16094,
+        "summarySeq": 16093,
+        "endSeq": 16095
+      },
+      "next": {
+        "compactionId": "947d6eb7-90ad-4cb2-b03d-daa42829185e",
+        "manual": true,
+        "shadowedRange": {
+          "start": 16094,
+          "end": 20929
+        },
+        "startEventSeq": 20937
+      },
+      "injectionSeq": 16095,
+      "insideNextShadow": true,
+      "nextStartsAtPreviousCheckpoint": true,
+      "gapEvents": 4842
+    },
+    {
+      "session": "267cb36757",
+      "workspace": "7064106291",
+      "previous": {
+        "compactionId": "947d6eb7-90ad-4cb2-b03d-daa42829185e",
+        "manual": true,
+        "shadowedRange": {
+          "start": 16094,
+          "end": 20929
+        },
+        "checkpointSeq": 20940,
+        "summarySeq": 20939,
+        "endSeq": 20941
+      },
+      "next": {
+        "compactionId": "50db9810-61bf-400e-a12f-bcd756eed33f",
+        "manual": false,
+        "shadowedRange": {
+          "start": 20940,
+          "end": 25508
+        },
+        "startEventSeq": 25534
+      },
+      "injectionSeq": 20941,
+      "insideNextShadow": true,
+      "nextStartsAtPreviousCheckpoint": true,
+      "gapEvents": 4593
+    },
+    {
+      "session": "267cb36757",
+      "workspace": "7064106291",
+      "previous": {
+        "compactionId": "50db9810-61bf-400e-a12f-bcd756eed33f",
+        "manual": false,
+        "shadowedRange": {
+          "start": 20940,
+          "end": 25508
+        },
+        "checkpointSeq": 25537,
+        "summarySeq": 25536,
+        "endSeq": 25538
+      },
+      "next": {
+        "compactionId": "3eadb299-b82c-4f63-a486-0d1f0f643cc4",
+        "manual": true,
+        "shadowedRange": {
+          "start": 25537,
+          "end": 28856
+        },
+        "startEventSeq": 28865
+      },
+      "injectionSeq": 25538,
+      "insideNextShadow": true,
+      "nextStartsAtPreviousCheckpoint": true,
+      "gapEvents": 3327
+    }
+  ],
+  "singletons": [
+    {
+      "session": "267cb36757",
+      "workspace": "7064106291",
+      "compactionId": "3eadb299-b82c-4f63-a486-0d1f0f643cc4",
+      "manual": true,
+      "shadowedRange": {
+        "start": 25537,
+        "end": 28856
+      },
+      "checkpointSeq": 28868
+    },
+    {
+      "session": "c1c4d97a48",
+      "workspace": "004a63a6a3",
+      "compactionId": "0dc56814-1146-4db0-a498-4a677ec01f54",
+      "manual": true,
+      "shadowedRange": {
+        "start": 9,
+        "end": 2298
+      },
+      "checkpointSeq": 2310
+    },
+    {
+      "session": "ff45131173",
+      "workspace": "004a63a6a3",
+      "compactionId": "b83866fe-d31d-41c4-854c-b9405d275cc7",
+      "manual": true,
+      "shadowedRange": {
+        "start": 9,
+        "end": 919
+      },
+      "checkpointSeq": 931
+    },
+    {
+      "session": "ea836425af",
+      "workspace": "004a63a6a3",
+      "compactionId": "ce060dbe-f5ac-4acc-8d18-48df9dc33c11",
+      "manual": true,
+      "shadowedRange": {
+        "start": 9,
+        "end": 3076
+      },
+      "checkpointSeq": 3087
+    },
+    {
+      "session": "f1264d601a",
+      "workspace": "cb905817e4",
+      "compactionId": "ba11a500-71fb-4d98-8edb-0e4b5c0a775a",
+      "manual": true,
+      "shadowedRange": {
+        "start": 9,
+        "end": 705
+      },
+      "checkpointSeq": 716
+    },
+    {
+      "session": "b99e605ebe",
+      "workspace": "cb905817e4",
+      "compactionId": "e0996374-d792-4576-87d2-4b30b1e8a581",
+      "manual": false,
+      "shadowedRange": {
+        "start": 16,
+        "end": 3373
+      },
+      "checkpointSeq": 4813
+    },
+    {
+      "session": "209209a1de",
+      "workspace": "cb905817e4",
+      "compactionId": "217f9995-049d-4da7-b820-56466c8b3c9f",
+      "manual": true,
+      "shadowedRange": {
+        "start": 9,
+        "end": 801
+      },
+      "checkpointSeq": 812
+    },
+    {
+      "session": "9e3c3b920f",
+      "workspace": "cb905817e4",
+      "compactionId": "78f896df-ef15-4c7f-a0e4-ab068d3ce139",
+      "manual": true,
+      "shadowedRange": {
+        "start": 9,
+        "end": 1081
+      },
+      "checkpointSeq": 1093
+    },
+    {
+      "session": "1f36c592b7",
+      "workspace": "7064106291",
+      "compactionId": "283782b6-a011-44ba-b057-0d61d33a55b1",
+      "manual": true,
+      "shadowedRange": {
+        "start": 9,
+        "end": 2089
+      },
+      "checkpointSeq": 2101
+    },
+    {
+      "session": "c35983b217",
+      "workspace": "7064106291",
+      "compactionId": "6ce18560-e0d9-4a7f-879a-6bad845f0bd8",
+      "manual": true,
+      "shadowedRange": {
+        "start": 9,
+        "end": 41
+      },
+      "checkpointSeq": 50
+    }
+  ]
+}

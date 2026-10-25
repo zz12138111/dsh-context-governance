@@ -1,0 +1,98 @@
+{
+  "experiment": "E2 回注形态 × context-zip 摘要输入（真实引擎代码 + 桩 LLM）",
+  "date": "2026-10-25T09:02:24.734Z",
+  "engineSource": "%USERPROFILE%\\.dsh\\profiles\\desktop\\node_modules\\dsh-context-zip\\engine\\lib\\engine.js",
+  "engineVersion": "dsh-context-zip 0.1.10（profile 内实际安装版本）",
+  "method": [
+    "只读复制已装插件 engine/lib/engine.js 到临时目录",
+    "用桩 @deepseek-ai/dsh-llm 满足模块加载；不发任何模型请求",
+    "deps.summarize 截获传给摘要器的完整 messages（含五段式指令）",
+    "三种回注形态各放一条 user/message 进被压缩区间；另测连续注入两次与工作笔记对照"
+  ],
+  "results": [
+    {
+      "case": "baseline",
+      "label": "无回注",
+      "injectionChars": 0,
+      "promptMessages": 6,
+      "promptChars": 4722,
+      "instructionChars": 4391,
+      "fiveHeadingsInInstruction": 5,
+      "markerHits": 0,
+      "notesInInstruction": false,
+      "notesInMessages": false,
+      "injectedTextPresent": false,
+      "promptCharsDeltaVsBaseline": 0
+    },
+    {
+      "case": "detail",
+      "label": "详情回注",
+      "injectionChars": 176,
+      "promptMessages": 7,
+      "promptChars": 4899,
+      "instructionChars": 4391,
+      "fiveHeadingsInInstruction": 5,
+      "markerHits": 1,
+      "notesInInstruction": false,
+      "notesInMessages": false,
+      "injectedTextPresent": true,
+      "promptCharsDeltaVsBaseline": 177
+    },
+    {
+      "case": "title",
+      "label": "标题+指针",
+      "injectionChars": 42,
+      "promptMessages": 7,
+      "promptChars": 4765,
+      "instructionChars": 4391,
+      "fiveHeadingsInInstruction": 5,
+      "markerHits": 1,
+      "notesInInstruction": false,
+      "notesInMessages": false,
+      "injectedTextPresent": true,
+      "promptCharsDeltaVsBaseline": 43
+    },
+    {
+      "case": "id",
+      "label": "ID+状态",
+      "injectionChars": 25,
+      "promptMessages": 7,
+      "promptChars": 4748,
+      "instructionChars": 4391,
+      "fiveHeadingsInInstruction": 5,
+      "markerHits": 1,
+      "notesInInstruction": false,
+      "notesInMessages": false,
+      "injectedTextPresent": true,
+      "promptCharsDeltaVsBaseline": 26
+    },
+    {
+      "case": "duplicate",
+      "label": "ID+状态（连续注入两次）",
+      "injectionChars": 50,
+      "promptMessages": 9,
+      "promptChars": 4778,
+      "instructionChars": 4391,
+      "fiveHeadingsInInstruction": 5,
+      "markerHits": 2,
+      "notesInInstruction": false,
+      "notesInMessages": false,
+      "injectedTextPresent": true,
+      "promptCharsDeltaVsBaseline": 56
+    },
+    {
+      "case": "notes",
+      "label": "context-zip 工作笔记（对照组）",
+      "injectionChars": 0,
+      "promptMessages": 6,
+      "promptChars": 4965,
+      "instructionChars": 4634,
+      "fiveHeadingsInInstruction": 5,
+      "markerHits": 0,
+      "notesInInstruction": true,
+      "notesInMessages": false,
+      "injectedTextPresent": false,
+      "promptCharsDeltaVsBaseline": 243
+    }
+  ]
+}

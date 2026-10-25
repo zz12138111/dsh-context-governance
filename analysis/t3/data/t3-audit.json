@@ -1,0 +1,939 @@
+{
+  "generatedAt": "2026-10-25T10:04:36.127Z",
+  "source": "本机 DSH 会话日志，只读；ID 已哈希；不含消息正文",
+  "compactions": 16,
+  "manual": 10,
+  "automatic": 6,
+  "fiveSection": 10,
+  "byCheck": {
+    "latest-user-message": {
+      "pass": 5,
+      "fail": 11,
+      "skip": 0
+    },
+    "rule-injection": {
+      "pass": 16,
+      "fail": 0,
+      "skip": 0
+    },
+    "batch-list": {
+      "pass": 11,
+      "fail": 5,
+      "skip": 0
+    },
+    "rollback-point": {
+      "pass": 10,
+      "fail": 6,
+      "skip": 0
+    },
+    "summary-readable": {
+      "pass": 16,
+      "fail": 0,
+      "skip": 0
+    }
+  },
+  "byMode": {
+    "manual": {
+      "compactions": 10,
+      "withFailures": 10,
+      "failureKinds": [
+        "latest-user-message",
+        "batch-list",
+        "rollback-point"
+      ]
+    },
+    "automatic": {
+      "compactions": 6,
+      "withFailures": 1,
+      "failureKinds": [
+        "latest-user-message"
+      ]
+    }
+  },
+  "ruleSnapshotsShadowed": 16,
+  "ruleReinjectedLater": 16,
+  "compactionsWithFailures": 11,
+  "details": [
+    {
+      "session": "c1c4d97a48",
+      "workspace": "004a63a6a3",
+      "compaction": "5a1f0b0e6b",
+      "summarySeq": 2309,
+      "manual": true,
+      "fiveSections": 5,
+      "shadowedSeqs": 704,
+      "shadowedTokenCount": 198619,
+      "checks": [
+        {
+          "name": "latest-user-message",
+          "status": "fail",
+          "seq": 2257
+        },
+        {
+          "name": "rule-injection",
+          "status": "pass",
+          "lost": [
+            {
+              "kind": "agent-instructions",
+              "seq": 2258
+            },
+            {
+              "kind": "skill-catalog",
+              "seq": 1315
+            }
+          ],
+          "note": "shadowed snapshot, but a newer instruction baseline was re-injected after this compaction"
+        },
+        {
+          "name": "batch-list",
+          "status": "pass",
+          "seq": 2302
+        },
+        {
+          "name": "rollback-point",
+          "status": "pass",
+          "seq": 2302
+        },
+        {
+          "name": "tool-pairing",
+          "status": "not-replayed",
+          "detail": "host asserts balanced cuts at commit; covered by synthetic tests"
+        },
+        {
+          "name": "summary-readable",
+          "status": "pass",
+          "chars": 4020
+        }
+      ],
+      "failures": [
+        "latest-user-message"
+      ],
+      "ruleReinjectedLater": true
+    },
+    {
+      "session": "ff45131173",
+      "workspace": "004a63a6a3",
+      "compaction": "504d341216",
+      "summarySeq": 930,
+      "manual": true,
+      "fiveSections": 5,
+      "shadowedSeqs": 303,
+      "shadowedTokenCount": 73013,
+      "checks": [
+        {
+          "name": "latest-user-message",
+          "status": "fail",
+          "seq": 870
+        },
+        {
+          "name": "rule-injection",
+          "status": "pass",
+          "lost": [
+            {
+              "kind": "agent-instructions",
+              "seq": 871
+            },
+            {
+              "kind": "skill-catalog",
+              "seq": 363
+            }
+          ],
+          "note": "shadowed snapshot, but a newer instruction baseline was re-injected after this compaction"
+        },
+        {
+          "name": "batch-list",
+          "status": "pass",
+          "seq": 869
+        },
+        {
+          "name": "rollback-point",
+          "status": "pass",
+          "seq": 923
+        },
+        {
+          "name": "tool-pairing",
+          "status": "not-replayed",
+          "detail": "host asserts balanced cuts at commit; covered by synthetic tests"
+        },
+        {
+          "name": "summary-readable",
+          "status": "pass",
+          "chars": 3799
+        }
+      ],
+      "failures": [
+        "latest-user-message"
+      ],
+      "ruleReinjectedLater": true
+    },
+    {
+      "session": "ea836425af",
+      "workspace": "004a63a6a3",
+      "compaction": "107e404127",
+      "summarySeq": 3086,
+      "manual": true,
+      "fiveSections": 5,
+      "shadowedSeqs": 955,
+      "shadowedTokenCount": 361412,
+      "checks": [
+        {
+          "name": "latest-user-message",
+          "status": "fail",
+          "seq": 3065
+        },
+        {
+          "name": "rule-injection",
+          "status": "pass",
+          "lost": [
+            {
+              "kind": "agent-instructions",
+              "seq": 3001
+            },
+            {
+              "kind": "skill-catalog",
+              "seq": 308
+            }
+          ],
+          "note": "shadowed snapshot, but a newer instruction baseline was re-injected after this compaction"
+        },
+        {
+          "name": "batch-list",
+          "status": "fail",
+          "seq": 3011
+        },
+        {
+          "name": "rollback-point",
+          "status": "fail",
+          "seq": 3046
+        },
+        {
+          "name": "tool-pairing",
+          "status": "not-replayed",
+          "detail": "host asserts balanced cuts at commit; covered by synthetic tests"
+        },
+        {
+          "name": "summary-readable",
+          "status": "pass",
+          "chars": 4352
+        }
+      ],
+      "failures": [
+        "latest-user-message",
+        "batch-list",
+        "rollback-point"
+      ],
+      "ruleReinjectedLater": true
+    },
+    {
+      "session": "f1264d601a",
+      "workspace": "cb905817e4",
+      "compaction": "a1881fdef5",
+      "summarySeq": 715,
+      "manual": true,
+      "fiveSections": 5,
+      "shadowedSeqs": 244,
+      "shadowedTokenCount": 73340,
+      "checks": [
+        {
+          "name": "latest-user-message",
+          "status": "fail",
+          "seq": 680
+        },
+        {
+          "name": "rule-injection",
+          "status": "pass",
+          "lost": [
+            {
+              "kind": "agent-instructions",
+              "seq": 681
+            },
+            {
+              "kind": "skill-catalog",
+              "seq": 12
+            }
+          ],
+          "note": "shadowed snapshot, but a newer instruction baseline was re-injected after this compaction"
+        },
+        {
+          "name": "batch-list",
+          "status": "pass",
+          "seq": 679
+        },
+        {
+          "name": "rollback-point",
+          "status": "fail",
+          "seq": 692
+        },
+        {
+          "name": "tool-pairing",
+          "status": "not-replayed",
+          "detail": "host asserts balanced cuts at commit; covered by synthetic tests"
+        },
+        {
+          "name": "summary-readable",
+          "status": "pass",
+          "chars": 3096
+        }
+      ],
+      "failures": [
+        "latest-user-message",
+        "rollback-point"
+      ],
+      "ruleReinjectedLater": true
+    },
+    {
+      "session": "b99e605ebe",
+      "workspace": "cb905817e4",
+      "compaction": "8ad2d9fdaa",
+      "summarySeq": 4812,
+      "manual": false,
+      "fiveSections": 0,
+      "shadowedSeqs": 969,
+      "shadowedTokenCount": 408085,
+      "checks": [
+        {
+          "name": "latest-user-message",
+          "status": "pass",
+          "seq": 4352
+        },
+        {
+          "name": "rule-injection",
+          "status": "pass",
+          "lost": [
+            {
+              "kind": "skill-catalog",
+              "seq": 19
+            }
+          ],
+          "note": "shadowed snapshot, but a newer instruction baseline was re-injected after this compaction"
+        },
+        {
+          "name": "batch-list",
+          "status": "pass",
+          "seq": 4795
+        },
+        {
+          "name": "rollback-point",
+          "status": "pass",
+          "seq": 4098
+        },
+        {
+          "name": "tool-pairing",
+          "status": "not-replayed",
+          "detail": "host asserts balanced cuts at commit; covered by synthetic tests"
+        },
+        {
+          "name": "summary-readable",
+          "status": "pass",
+          "chars": 9585
+        }
+      ],
+      "failures": [],
+      "ruleReinjectedLater": true
+    },
+    {
+      "session": "209209a1de",
+      "workspace": "cb905817e4",
+      "compaction": "b326c0a9f0",
+      "summarySeq": 811,
+      "manual": true,
+      "fiveSections": 5,
+      "shadowedSeqs": 257,
+      "shadowedTokenCount": 67019,
+      "checks": [
+        {
+          "name": "latest-user-message",
+          "status": "fail",
+          "seq": 776
+        },
+        {
+          "name": "rule-injection",
+          "status": "pass",
+          "lost": [
+            {
+              "kind": "agent-instructions",
+              "seq": 777
+            },
+            {
+              "kind": "skill-catalog",
+              "seq": 12
+            }
+          ],
+          "note": "shadowed snapshot, but a newer instruction baseline was re-injected after this compaction"
+        },
+        {
+          "name": "batch-list",
+          "status": "fail",
+          "seq": 787
+        },
+        {
+          "name": "rollback-point",
+          "status": "fail",
+          "seq": 794
+        },
+        {
+          "name": "tool-pairing",
+          "status": "not-replayed",
+          "detail": "host asserts balanced cuts at commit; covered by synthetic tests"
+        },
+        {
+          "name": "summary-readable",
+          "status": "pass",
+          "chars": 3296
+        }
+      ],
+      "failures": [
+        "latest-user-message",
+        "batch-list",
+        "rollback-point"
+      ],
+      "ruleReinjectedLater": true
+    },
+    {
+      "session": "9e3c3b920f",
+      "workspace": "cb905817e4",
+      "compaction": "ce2a2a3347",
+      "summarySeq": 1092,
+      "manual": true,
+      "fiveSections": 5,
+      "shadowedSeqs": 357,
+      "shadowedTokenCount": 108551,
+      "checks": [
+        {
+          "name": "latest-user-message",
+          "status": "fail",
+          "seq": 1030
+        },
+        {
+          "name": "rule-injection",
+          "status": "pass",
+          "lost": [
+            {
+              "kind": "agent-instructions",
+              "seq": 1031
+            },
+            {
+              "kind": "skill-catalog",
+              "seq": 12
+            }
+          ],
+          "note": "shadowed snapshot, but a newer instruction baseline was re-injected after this compaction"
+        },
+        {
+          "name": "batch-list",
+          "status": "pass",
+          "seq": 1085
+        },
+        {
+          "name": "rollback-point",
+          "status": "pass",
+          "seq": 1085
+        },
+        {
+          "name": "tool-pairing",
+          "status": "not-replayed",
+          "detail": "host asserts balanced cuts at commit; covered by synthetic tests"
+        },
+        {
+          "name": "summary-readable",
+          "status": "pass",
+          "chars": 3245
+        }
+      ],
+      "failures": [
+        "latest-user-message"
+      ],
+      "ruleReinjectedLater": true
+    },
+    {
+      "session": "1f36c592b7",
+      "workspace": "7064106291",
+      "compaction": "cc84a6aa57",
+      "summarySeq": 2100,
+      "manual": true,
+      "fiveSections": 5,
+      "shadowedSeqs": 606,
+      "shadowedTokenCount": 180379,
+      "checks": [
+        {
+          "name": "latest-user-message",
+          "status": "fail",
+          "seq": 2065
+        },
+        {
+          "name": "rule-injection",
+          "status": "pass",
+          "lost": [
+            {
+              "kind": "agent-instructions",
+              "seq": 1997
+            },
+            {
+              "kind": "skill-catalog",
+              "seq": 657
+            }
+          ],
+          "note": "shadowed snapshot, but a newer instruction baseline was re-injected after this compaction"
+        },
+        {
+          "name": "batch-list",
+          "status": "fail",
+          "seq": 2007
+        },
+        {
+          "name": "rollback-point",
+          "status": "fail",
+          "seq": 2046
+        },
+        {
+          "name": "tool-pairing",
+          "status": "not-replayed",
+          "detail": "host asserts balanced cuts at commit; covered by synthetic tests"
+        },
+        {
+          "name": "summary-readable",
+          "status": "pass",
+          "chars": 4014
+        }
+      ],
+      "failures": [
+        "latest-user-message",
+        "batch-list",
+        "rollback-point"
+      ],
+      "ruleReinjectedLater": true
+    },
+    {
+      "session": "267cb36757",
+      "workspace": "7064106291",
+      "compaction": "d96a7fb284",
+      "summarySeq": 3526,
+      "manual": false,
+      "fiveSections": 0,
+      "shadowedSeqs": 701,
+      "shadowedTokenCount": 405320,
+      "checks": [
+        {
+          "name": "latest-user-message",
+          "status": "pass",
+          "seq": 3482
+        },
+        {
+          "name": "rule-injection",
+          "status": "pass",
+          "lost": [
+            {
+              "kind": "skill-catalog",
+              "seq": 19
+            }
+          ],
+          "note": "shadowed snapshot, but a newer instruction baseline was re-injected after this compaction"
+        },
+        {
+          "name": "batch-list",
+          "status": "pass",
+          "seq": 3488
+        },
+        {
+          "name": "rollback-point",
+          "status": "pass",
+          "seq": 3011
+        },
+        {
+          "name": "tool-pairing",
+          "status": "not-replayed",
+          "detail": "host asserts balanced cuts at commit; covered by synthetic tests"
+        },
+        {
+          "name": "summary-readable",
+          "status": "pass",
+          "chars": 9570
+        }
+      ],
+      "failures": [],
+      "ruleReinjectedLater": true
+    },
+    {
+      "session": "267cb36757",
+      "workspace": "7064106291",
+      "compaction": "dca5c0912a",
+      "summarySeq": 7661,
+      "manual": false,
+      "fiveSections": 0,
+      "shadowedSeqs": 974,
+      "shadowedTokenCount": 395116,
+      "checks": [
+        {
+          "name": "latest-user-message",
+          "status": "pass",
+          "seq": 7651
+        },
+        {
+          "name": "rule-injection",
+          "status": "pass",
+          "lost": [
+            {
+              "kind": "skill-catalog",
+              "seq": 3532
+            },
+            {
+              "kind": "agent-instructions",
+              "seq": 4448
+            }
+          ],
+          "note": "shadowed snapshot, but a newer instruction baseline was re-injected after this compaction"
+        },
+        {
+          "name": "batch-list",
+          "status": "pass",
+          "seq": 7151
+        },
+        {
+          "name": "rollback-point",
+          "status": "pass",
+          "seq": 7657
+        },
+        {
+          "name": "tool-pairing",
+          "status": "not-replayed",
+          "detail": "host asserts balanced cuts at commit; covered by synthetic tests"
+        },
+        {
+          "name": "summary-readable",
+          "status": "pass",
+          "chars": 7483
+        }
+      ],
+      "failures": [],
+      "ruleReinjectedLater": true
+    },
+    {
+      "session": "267cb36757",
+      "workspace": "7064106291",
+      "compaction": "1dcdd1d7d0",
+      "summarySeq": 11478,
+      "manual": false,
+      "fiveSections": 0,
+      "shadowedSeqs": 1123,
+      "shadowedTokenCount": 388383,
+      "checks": [
+        {
+          "name": "latest-user-message",
+          "status": "pass",
+          "seq": 11468
+        },
+        {
+          "name": "rule-injection",
+          "status": "pass",
+          "lost": [
+            {
+              "kind": "skill-catalog",
+              "seq": 7666
+            }
+          ],
+          "note": "shadowed snapshot, but a newer instruction baseline was re-injected after this compaction"
+        },
+        {
+          "name": "batch-list",
+          "status": "pass",
+          "seq": 11386
+        },
+        {
+          "name": "rollback-point",
+          "status": "pass",
+          "seq": 11468
+        },
+        {
+          "name": "tool-pairing",
+          "status": "not-replayed",
+          "detail": "host asserts balanced cuts at commit; covered by synthetic tests"
+        },
+        {
+          "name": "summary-readable",
+          "status": "pass",
+          "chars": 8646
+        }
+      ],
+      "failures": [],
+      "ruleReinjectedLater": true
+    },
+    {
+      "session": "267cb36757",
+      "workspace": "7064106291",
+      "compaction": "a5172b4ddc",
+      "summarySeq": 16093,
+      "manual": false,
+      "fiveSections": 0,
+      "shadowedSeqs": 1342,
+      "shadowedTokenCount": 341269,
+      "checks": [
+        {
+          "name": "latest-user-message",
+          "status": "pass",
+          "seq": 16083
+        },
+        {
+          "name": "rule-injection",
+          "status": "pass",
+          "lost": [
+            {
+              "kind": "skill-catalog",
+              "seq": 13524
+            }
+          ],
+          "note": "shadowed snapshot, but a newer instruction baseline was re-injected after this compaction"
+        },
+        {
+          "name": "batch-list",
+          "status": "pass",
+          "seq": 16072
+        },
+        {
+          "name": "rollback-point",
+          "status": "pass",
+          "seq": 15886
+        },
+        {
+          "name": "tool-pairing",
+          "status": "not-replayed",
+          "detail": "host asserts balanced cuts at commit; covered by synthetic tests"
+        },
+        {
+          "name": "summary-readable",
+          "status": "pass",
+          "chars": 11640
+        }
+      ],
+      "failures": [],
+      "ruleReinjectedLater": true
+    },
+    {
+      "session": "267cb36757",
+      "workspace": "7064106291",
+      "compaction": "a38bbe2b75",
+      "summarySeq": 20939,
+      "manual": true,
+      "fiveSections": 5,
+      "shadowedSeqs": 1930,
+      "shadowedTokenCount": 497298,
+      "checks": [
+        {
+          "name": "latest-user-message",
+          "status": "fail",
+          "seq": 20873
+        },
+        {
+          "name": "rule-injection",
+          "status": "pass",
+          "lost": [
+            {
+              "kind": "skill-catalog",
+              "seq": 16098
+            },
+            {
+              "kind": "agent-instructions",
+              "seq": 20043
+            }
+          ],
+          "note": "shadowed snapshot, but a newer instruction baseline was re-injected after this compaction"
+        },
+        {
+          "name": "batch-list",
+          "status": "fail",
+          "seq": 20721
+        },
+        {
+          "name": "rollback-point",
+          "status": "fail",
+          "seq": 20847
+        },
+        {
+          "name": "tool-pairing",
+          "status": "not-replayed",
+          "detail": "host asserts balanced cuts at commit; covered by synthetic tests"
+        },
+        {
+          "name": "summary-readable",
+          "status": "pass",
+          "chars": 3413
+        }
+      ],
+      "failures": [
+        "latest-user-message",
+        "batch-list",
+        "rollback-point"
+      ],
+      "ruleReinjectedLater": true
+    },
+    {
+      "session": "267cb36757",
+      "workspace": "7064106291",
+      "compaction": "f3272ea3e8",
+      "summarySeq": 25536,
+      "manual": false,
+      "fiveSections": 5,
+      "shadowedSeqs": 1393,
+      "shadowedTokenCount": 458675,
+      "checks": [
+        {
+          "name": "latest-user-message",
+          "status": "fail",
+          "seq": 25331
+        },
+        {
+          "name": "rule-injection",
+          "status": "pass",
+          "lost": [
+            {
+              "kind": "skill-catalog",
+              "seq": 20951
+            },
+            {
+              "kind": "agent-instructions",
+              "seq": 24945
+            }
+          ],
+          "note": "shadowed snapshot, but a newer instruction baseline was re-injected after this compaction"
+        },
+        {
+          "name": "batch-list",
+          "status": "pass",
+          "seq": 25531
+        },
+        {
+          "name": "rollback-point",
+          "status": "pass",
+          "seq": 25523
+        },
+        {
+          "name": "tool-pairing",
+          "status": "not-replayed",
+          "detail": "host asserts balanced cuts at commit; covered by synthetic tests"
+        },
+        {
+          "name": "summary-readable",
+          "status": "pass",
+          "chars": 3906
+        }
+      ],
+      "failures": [
+        "latest-user-message"
+      ],
+      "ruleReinjectedLater": true
+    },
+    {
+      "session": "267cb36757",
+      "workspace": "7064106291",
+      "compaction": "5fc1fadcce",
+      "summarySeq": 28867,
+      "manual": true,
+      "fiveSections": 5,
+      "shadowedSeqs": 920,
+      "shadowedTokenCount": 304316,
+      "checks": [
+        {
+          "name": "latest-user-message",
+          "status": "fail",
+          "seq": 28824
+        },
+        {
+          "name": "rule-injection",
+          "status": "pass",
+          "lost": [
+            {
+              "kind": "skill-catalog",
+              "seq": 25554
+            },
+            {
+              "kind": "agent-instructions",
+              "seq": 25553
+            }
+          ],
+          "note": "shadowed snapshot, but a newer instruction baseline was re-injected after this compaction"
+        },
+        {
+          "name": "batch-list",
+          "status": "fail",
+          "seq": 28842
+        },
+        {
+          "name": "rollback-point",
+          "status": "pass",
+          "seq": 28254
+        },
+        {
+          "name": "tool-pairing",
+          "status": "not-replayed",
+          "detail": "host asserts balanced cuts at commit; covered by synthetic tests"
+        },
+        {
+          "name": "summary-readable",
+          "status": "pass",
+          "chars": 5018
+        }
+      ],
+      "failures": [
+        "latest-user-message",
+        "batch-list"
+      ],
+      "ruleReinjectedLater": true
+    },
+    {
+      "session": "c35983b217",
+      "workspace": "7064106291",
+      "compaction": "668d3fba65",
+      "summarySeq": 49,
+      "manual": true,
+      "fiveSections": 0,
+      "shadowedSeqs": 11,
+      "shadowedTokenCount": 1818,
+      "checks": [
+        {
+          "name": "latest-user-message",
+          "status": "fail",
+          "seq": 41
+        },
+        {
+          "name": "rule-injection",
+          "status": "pass",
+          "lost": [
+            {
+              "kind": "agent-instructions",
+              "seq": 10
+            },
+            {
+              "kind": "skill-catalog",
+              "seq": 12
+            }
+          ],
+          "note": "shadowed snapshot, but a newer instruction baseline was re-injected after this compaction"
+        },
+        {
+          "name": "batch-list",
+          "status": "pass",
+          "seq": 8
+        },
+        {
+          "name": "rollback-point",
+          "status": "fail",
+          "seq": 10
+        },
+        {
+          "name": "tool-pairing",
+          "status": "not-replayed",
+          "detail": "host asserts balanced cuts at commit; covered by synthetic tests"
+        },
+        {
+          "name": "summary-readable",
+          "status": "pass",
+          "chars": 2260
+        }
+      ],
+      "failures": [
+        "latest-user-message",
+        "rollback-point"
+      ],
+      "ruleReinjectedLater": true
+    }
+  ]
+}

@@ -16,6 +16,9 @@ logs/
 .cross-session/
 STATUS.local.md
 
+# 插件运行时状态（记忆库、保护 journal、写者锁；不进库）
+memory/governance/
+
 # 凭据（一律不进库）
 .env
 .env.*

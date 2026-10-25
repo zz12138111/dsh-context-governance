@@ -1,0 +1,44 @@
+{
+  "experiment": "E2 辅助：真实压缩摘要的可读性与结构化保留",
+  "source": "本机会话日志中全部 compaction/summary（16 次）",
+  "caveat": "MEM-* 记忆 ID 尚未投产，本机摘要里没有该形态的样本；DEC-/ART-/批次号/路径是代理指标。",
+  "total": {
+    "n": 16,
+    "charsMin": 2260,
+    "charsMax": 11640,
+    "charsAvg": 5459,
+    "withDecisionIds": 7,
+    "totalDecisionIds": 26,
+    "withBatchRatios": 7,
+    "totalBatchRatios": 17,
+    "withWindowsPaths": 16,
+    "totalWindowsPaths": 224,
+    "withMemoryIds": 0
+  },
+  "fiveSection": {
+    "n": 10,
+    "charsMin": 3096,
+    "charsMax": 5018,
+    "charsAvg": 3816,
+    "withDecisionIds": 6,
+    "totalDecisionIds": 19,
+    "withBatchRatios": 3,
+    "totalBatchRatios": 10,
+    "withWindowsPaths": 10,
+    "totalWindowsPaths": 120,
+    "withMemoryIds": 0
+  },
+  "freeForm": {
+    "n": 6,
+    "charsMin": 2260,
+    "charsMax": 11640,
+    "charsAvg": 8197,
+    "withDecisionIds": 1,
+    "totalDecisionIds": 7,
+    "withBatchRatios": 4,
+    "totalBatchRatios": 7,
+    "withWindowsPaths": 6,
+    "totalWindowsPaths": 104,
+    "withMemoryIds": 0
+  }
+}

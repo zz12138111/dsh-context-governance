@@ -1,0 +1,38 @@
+{
+  "name": "dsh-context-governance",
+  "version": "0.1.2",
+  "private": true,
+  "license": "MIT",
+  "description": "上下文治理（M1）：任务态记忆文件 + 压缩前后不断线。零硬依赖薄治理层，压缩沿用宿主或 context-zip。",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./memory": "./src/memory/index.js",
+    "./memory/contract": "./src/memory/contract.js",
+    "./memory/store": "./src/memory/store.js",
+    "./compress": "./src/compress/index.js",
+    "./tools": "./src/tools/mem-tools.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "test",
+    "README.md",
+    "cordis.patch.yml"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.mjs\""
+  },
+  "engines": {
+    "node": ">=22.19.0",
+    "dsh": ">=0.2.1-rc.2 <0.3.0-0"
+  }
+}
+
+

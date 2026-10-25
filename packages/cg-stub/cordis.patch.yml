@@ -1,0 +1,16 @@
+# cg-stub bundle patch：把探针挂成宿主加载树里的一行。
+#
+# 这一行是本包的“装载入口”，不是配置编辑器里的默认值：
+# - `name` 必须与 package.json 的 name 完全一致（@local/dsh-cg-stub），
+#   宿主按这个 specifier 从 profile 的 node_modules 解析包；
+# - `id` 是加载树里的行 id，去掉本包时这一行随之消失；
+# - `config` 会原样传给 index.mjs 的 apply(ctx, config)。
+- insert:
+    - id: cg-stub
+      name: "@local/dsh-cg-stub"
+      config:
+        # 探针开关；设 false 时只写一行 enabled=false，不注册观察器。
+        enabled: true
+        # 显式钉住日志路径，避免“包被 link 后 import.meta.url 解析到 profile”导致
+        # 日志写进 C:\Users\...\.dsh\profiles\logs。部署到别的机器时改这一行即可。
+        logFile: "D:/DS-PROJECT/DSH插件开发/logs/cg-stub.log"

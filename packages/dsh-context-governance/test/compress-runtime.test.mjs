@@ -1,0 +1,203 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import { CompressionGuard } from '../src/compress/runtime.js';
+import {
+  FIVE_SECTION_SUMMARY,
+  FREE_FORM_SUMMARY,
+  buildCompaction,
+  healthyMessages,
+} from './compress-helpers.mjs';
+
+class BasicCompactionEngine {
+  compactNow() {}
+  compactRegion() {}
+}
+
+class ContextZipEngine {
+  constructor() {
+    this.undoManualSeat = () => {};
+    this.declaredConfig = {};
+  }
+  compactNow() {}
+  compactRegion() {}
+}
+
+function makeCtx(compaction) {
+  const handlers = [];
+  const logs = [];
+  let disposed = 0;
+  return {
+    handlers,
+    logs,
+    get disposed() { return disposed; },
+    get(name) { return name === 'compaction' ? compaction : undefined; },
+    on(event, handler) {
+      handlers.push({ event, handler });
+      return () => { disposed += 1; };
+    },
+    logger: {
+      info: (...args) => logs.push(['info', ...args]),
+      warn: (...args) => logs.push(['warn', ...args]),
+      error: (...args) => logs.push(['error', ...args]),
+    },
+  };
+}
+
+function emitAll(ctx, { session, events, postSurface }) {
+  const handler = ctx.handlers.find((item) => item.event === 'session/event').handler;
+  for (const event of events) {
+    if (event.type === 'compaction/end') session.surface.nodes = [...postSurface];
+    handler(session, event);
+  }
+}
+
+test('宿主默认：完整压缩事务产生 full 模式与通过报告', () => {
+  const ctx = makeCtx(new BasicCompactionEngine());
+  const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.2' });
+  guard.start();
+  assert.equal(ctx.handlers[0].event, 'session/event');
+  assert.equal(guard.mode, 'full');
+  assert.equal(guard.adapter.kind, 'host-basic');
+
+  const built = buildCompaction({ before: healthyMessages(), summary: FREE_FORM_SUMMARY, start: 2, end: 11 });
+  emitAll(ctx, built);
+  const status = guard.status;
+  assert.equal(status.stats.starts, 1);
+  assert.equal(status.stats.summaries, 1);
+  assert.equal(status.stats.ends, 1);
+  assert.equal(status.lastReport.ok, true, JSON.stringify(status.lastReport.failures));
+  assert.equal(status.lastReport.lateSnapshot, false);
+  assert.equal(guard.reports().length, 1);
+  assert.equal(ctx.logs.some(([level]) => level === 'warn' && String(level).includes('protection')), false);
+  guard.stop();
+});
+
+test('context-zip：识别五段摘要并保持 full', () => {
+  const ctx = makeCtx(new ContextZipEngine());
+  const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.2', backendVersion: '0.1.10' });
+  guard.start();
+  assert.equal(guard.adapter.kind, 'context-zip');
+  const built = buildCompaction({ before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 11 });
+  emitAll(ctx, built);
+  assert.equal(guard.adapter.summary.style, 'five-section');
+  assert.equal(guard.status.lastReport.ok, true);
+  assert.equal(guard.status.adapter.selfCheck.state, 'pass');
+});
+
+test('保护失败：报告 fail、写 warn，但不向宿主抛错', () => {
+  const ctx = makeCtx(new BasicCompactionEngine());
+  const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.2' });
+  guard.start();
+  const built = buildCompaction({ before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 13 });
+  assert.doesNotThrow(() => emitAll(ctx, built));
+  const report = guard.status.lastReport;
+  assert.equal(report.ok, false);
+  assert.ok(report.failures.some((failure) => failure.name === 'latest-user-message'));
+  assert.ok(ctx.logs.some(([level, message]) => level === 'warn' && String(message).includes('protection failed')));
+});
+
+test('插件在压缩事务中途挂上：用 summary 时补快照并标 lateSnapshot', () => {
+  const ctx = makeCtx(new BasicCompactionEngine());
+  const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.2' });
+  guard.start();
+  const built = buildCompaction({ before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 11 });
+  const handler = ctx.handlers[0].handler;
+  const summaryEvent = built.events.find((item) => item.type === 'compaction/summary');
+  const checkpointEvent = built.events.find((item) => item.type === 'user/message' && item.data.source.kind === 'compact-checkpoint');
+  const endEvent = built.events.find((item) => item.type === 'compaction/end');
+  handler(built.session, summaryEvent);
+  handler(built.session, checkpointEvent);
+  built.session.surface.nodes = built.postSurface;
+  handler(built.session, endEvent);
+  const report = guard.status.lastReport;
+  assert.equal(report.lateSnapshot, true);
+  assert.equal(report.ok, true, JSON.stringify(report.failures));
+});
+
+test('没有 compaction 服务：走事件级感知（event-level），不抛错', () => {
+  const ctx = makeCtx(null);
+  const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.2' });
+  guard.start();
+  assert.equal(guard.mode, 'event-level');
+  assert.ok(guard.status.reasons.includes('event-perception-only'));
+  assert.ok(guard.status.conflicts.some((conflict) => conflict.code === 'no-compaction-service'));
+  assert.doesNotThrow(() => guard.stop());
+});
+
+test('畸形事件被忽略而不是抛错', () => {
+  const ctx = makeCtx(new BasicCompactionEngine());
+  const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.2' });
+  guard.start();
+  const handler = ctx.handlers[0].handler;
+  assert.doesNotThrow(() => handler(null, null));
+  assert.doesNotThrow(() => handler({ surface: {} }, { type: 'compaction/summary', data: null }));
+  assert.equal(guard.status.stats.events, 2);
+  assert.equal(guard.status.stats.failures, 0);
+});
+
+test('两个会话的压缩事务互不串报告', () => {
+  const ctx = makeCtx(new BasicCompactionEngine());
+  const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.2' });
+  guard.start();
+  const a = buildCompaction({ compactionId: 'A', startSeq: 100, summarySeq: 101, checkpointSeq: 102, endSeq: 103, before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 11 });
+  const b = buildCompaction({ compactionId: 'B', startSeq: 200, summarySeq: 201, checkpointSeq: 202, endSeq: 203, before: healthyMessages(), summary: FREE_FORM_SUMMARY, start: 2, end: 11 });
+  const handler = ctx.handlers[0].handler;
+  const startA = a.events.find((item) => item.type === 'compaction/start');
+  const summaryA = a.events.find((item) => item.type === 'compaction/summary');
+  const startB = b.events.find((item) => item.type === 'compaction/start');
+  const summaryB = b.events.find((item) => item.type === 'compaction/summary');
+  const cpA = a.events.find((item) => item.type === 'user/message' && item.data.source.kind === 'compact-checkpoint');
+  const cpB = b.events.find((item) => item.type === 'user/message' && item.data.source.kind === 'compact-checkpoint');
+  const endA = a.events.find((item) => item.type === 'compaction/end');
+  const endB = b.events.find((item) => item.type === 'compaction/end');
+  handler(a.session, startA);
+  handler(b.session, startB);
+  handler(a.session, summaryA);
+  handler(b.session, summaryB);
+  handler(a.session, cpA);
+  handler(b.session, cpB);
+  a.session.surface.nodes = a.postSurface;
+  b.session.surface.nodes = b.postSurface;
+  handler(a.session, endA);
+  handler(b.session, endB);
+  assert.equal(guard.reports().length, 2);
+  assert.equal(guard.status.stats.pending, 0);
+  assert.ok(guard.reports().every((report) => report.ok));
+});
+
+test('stop 幂等且释放订阅', () => {
+  const ctx = makeCtx(new BasicCompactionEngine());
+  const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.2' });
+  guard.start();
+  guard.stop();
+  assert.equal(ctx.disposed, 1);
+  assert.doesNotThrow(() => guard.stop());
+});
+
+test('不替换 provider：引擎实例与自有配置保持原样', () => {
+  const engine = new BasicCompactionEngine();
+  engine.config = { thresholdRatio: 0.65 };
+  const beforeKeys = Object.keys(engine).sort();
+  const ctx = makeCtx(engine);
+  const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.2' });
+  guard.start();
+  const built = buildCompaction({ before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 11 });
+  emitAll(ctx, built);
+  guard.stop();
+  assert.equal(ctx.get('compaction'), engine);
+  assert.deepEqual(Object.keys(engine).sort(), beforeKeys);
+  assert.deepEqual(engine.config, { thresholdRatio: 0.65 });
+});
+
+test('报告区分手动压缩与自动压缩', () => {
+  const ctx = makeCtx(new BasicCompactionEngine());
+  const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.2' });
+  guard.start();
+  const built = buildCompaction({ before: healthyMessages(), summary: FREE_FORM_SUMMARY, start: 2, end: 11 });
+  // 把 start 事件替换成手动压缩（sourceCommandId）。
+  const start = built.events.find((item) => item.type === 'compaction/start');
+  start.data.sourceCommandId = 'cmd-test';
+  emitAll(ctx, built);
+  assert.equal(guard.status.lastReport.manual, true);
+});

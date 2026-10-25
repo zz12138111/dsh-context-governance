@@ -49,3 +49,5 @@ ode_modules\。
 - 开发可提交源码/文档到分支；合并与 tag 由审核打包把关。
 - 网络：git 已配置 GitHub 走 Clash 代理 `http://127.0.0.1:7897`（`http.https://github.com.proxy`）；**Clash 未启动时 git 会连不上**，此时先报 00 开 VPN，不要改代理配置。
 - 凭据：本机 git 凭据由系统凭据管理器/SSH key 提供；任何凭据不得出现在仓库、日志、回执里。
+
+> 网络补充（2026-10-25 实测）：**git push/fetch 走 SSH 22 直连，不需要 VPN**（Clash 全关、7897 不通时 push 仍成功）；只有**浏览器访问 GitHub** 才需要开 Clash（随用随开、用完关闭）。`http.https://github.com.proxy` 只对 HTTPS 远端有用，注意 Clash 关着时别用 HTTPS 远端，否则会连到死代理。
