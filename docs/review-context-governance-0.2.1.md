@@ -17,7 +17,7 @@
 
 ## 1. 结论摘要
 
-- **阻断（P1）：0**；**应修（P2）：2**；**建议（P3）：8**。
+- **阻断（P1）：0**；**应修（P2）：0**（P2-1/P2-2 于 `2f7e528`/`90ca44b` 复验通过）；**建议（P3）：11**（原 8 条 + 复验新增 3 条）。
 - 六条验收 **4 条完全成立、1 条部分（⑥ 的审计子项）、1 条报告证据不完整**；十项清单里 **⑩ 数字更新未做**（详见 §4）。
 - 代码检索与 spy 双证：**本版没有任何压缩调用路径**（我用自己的全量 pattern + 3 个真实 API 名 spy 复核，0 次）。
 
@@ -97,3 +97,34 @@ cd .tmp/snapshot-021/packages/dsh-context-governance
 node --test "test/*.test.mjs"     # 250/250
 node .tmp/probe-021.mjs           # 审核侧探针 8/8（.tmp 已 gitignore）
 ```
+
+## 9. P2 复验（2026-10-26 01:0x，`2f7e528` + 文档更正 `fe917fe`/`ba3d55a`/`90ca44b`）
+
+**基线**：`90ca44b` 快照（代码 = `2f7e528`，之后 3 条均为文档）；全量 **251/251** ✔；我另跑独立探针 **6/6**。
+
+### P2-1 退化拒层审计：**通过**
+- 代码：`WINDOW_REJECT_REASONS = {over-native-runtime, native-uncomputable}`，`window-too-small` 已删（`index.js`）
+- 独立实测（W=128k/O=256k + plugin `at=0.5`）：
+  - audit **恰 1 条**：`policy-invalid`，`source=plugin`、`code=compact.at`、`reason=native-uncomputable` ✔
+  - warn **恰 1 条**：`policy layer rejected at runtime: plugin/compact.at:native-uncomputable` ✔
+  - `/cg status` **同一结论**：`policy-invalid: 1 (plugin/compact.at:native-uncomputable)` + `policy: … native=unknown (degenerate)` ✔
+  - **三处一致**（audit / warn / status），不是只有审计有 ✔
+- 回归：O=16k 的 128k 保守窗口 → 仍落 1 条 `over-native-runtime` ✔；无观察（config 1M/256k）→ 0 条 ✔
+- 残留观察（记 **P3-11**）：退化时 `/cg set compact.at` 被拒但**不写审计**（实测 audit 条数不变）；DEC-68 的“设置 at 的层一律拒绝 + 审计”若也覆盖 set 路径需补，否则请文档明确“只对运行时已生效层审计”。
+- 残留观察（原 **P3-7** 未修，符合“P3 等 P2 一起处理”）：审计去重 Set 不清空，恢复→再退化不产生第二条审计（实测仍 1 条）。
+
+### P2-2 数字：**主体通过，samples 处理有残留**
+- **`0.6934` 不再 0 命中**：`T5`（4 处，含示例行 `native=0.6934 (projection)`）、`README`（1）、`使用说明 v0.3`（3，含 69.34% 与旧版 67.85% 对照）、`samples`（8）、交付报告 §5（3）、STATUS/DECISIONS/G4 均有其位 ✔
+- **`0.6785`/`67.85` 只剩“旧版/配置回退”语境**：`T5:63`（“配置窗口只在无观察时回退，得 0.6785”）、`T5:99`（“禁止用常数 0.6785 冒充”）、`README:85/92`、`v0.3:99`（“0.2.0 及更早约 0.6785”）✔
+- **历史文件未被改**：`git diff 23dffaf..90ca44b` 中 `docs/review-*`、`docs/M2-需求草案-*`、`DECISIONS.md`、`REQUIREMENTS.md` **无改动**；仅 `STATUS.md` 更新了 0.2.1 当前状态行（0.2.0 历史行保持原样），属活文档追加 ✔
+- **交付报告 §5「数字变化」**：0.6785→0.6934（低估 +0.0149）、压力比例高估约 4.86%、0.197→0.188 等齐全 ✔
+
+**新增 P3（samples 处理）**
+
+| 编号 | 位置 | 问题 | 建议 |
+|---|---|---|---|
+| **P3-9** | `analysis/req-20261025-09/samples-0.2.0.txt` | 文件**内容已重生成 0.2.1 形态**，但文件名仍是 0.2.0；`T5:35` 仍写“0.2.0 样例见 samples-0.2.0.txt”；`docs/review-context-governance-0.2.0.md` §2.2/§9 引用它的“第 55–71 行”等行号已失效——**历史证据被覆盖**。**判定：不只是命名问题，建议恢复历史 + 另建新文件** | `git checkout 23dffaf -- analysis/req-20261025-09/samples-0.2.0.txt` 恢复 0.2.0 存档；把新内容另存为 `samples-0.2.1.txt`；更新 `T5:35`、交付报告 §5 的引用；**不要用 0.2.1 内容覆盖 0.2.0 档** |
+| **P3-10** | `samples-0.2.0.txt` 第 9–11 行 / `T5` 示例 | 样例自相矛盾：`events=0(no session/event observed yet)` 同时有 `window: current=1M …` 和 `pressure: measured=0.556…`；且同一 mock 在 `T5` 示例是 `adjusted=0.530 ratio=1.42`、samples 是 `0.531/1.41`（小数对不上） | 样例要么把 `events=` 改成与该 fixture 一致的值、要么明确“示意值不与 events 自洽”；`T5` 与 samples 用同一组 mock 数字 |
+| **P3-11** | `index.js` `/cg set` 退化拒绝路径 | 退化时 `/cg set compact.at` 报错但不写 `policy-invalid`（实测） | 若 DEC-68 的“设置即审计”覆盖命令路径则补审计；否则在 T5 写明“审计只记录运行时已生效层的拒绝” |
+
+**复验结论**：**P2 清零**（P2-1 三处一致、P2-2 数字与历史边界成立）；samples 的两条新 P3 与原有 P3 一起进入下一批。
