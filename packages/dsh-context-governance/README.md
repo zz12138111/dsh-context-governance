@@ -74,7 +74,7 @@ packages/dsh-context-governance/
 - 0.1.14：`batch-list` 改为**同消息绑定**——批次语义（`批次|进度|progress|batch`）与比例必须在同一条对话正文里，否则 `skip(no-batch-semantics)`；`YYYY/MM` 不算比例（`date-like-ratio`）；`stripStructuredPayload` 只剥像 JSON 的 `{…}`/`[…]`，正文 `{511/958}` 保留。判据原则：宁可 `skip` 不可 `fail`。
 - 0.1.15：后端识别补**事件形态推断**——原生 free-form → host-basic (inferred)、五段式 → context-zip (inferred)、混合 → mixed (unverified)；只进 /cg status/审计展示，功能路径不读推断。
 - 0.1.16：成本字段拆分——`backend`/`backendKind` 只写枚举（`host-basic`/`context-zip`/`unknown`，不含括号/空格），展示串移到 `backendLabel`，推断补位由 `backendInferred` 标记，`auditVersion=cost-v1.4`；`/cg status` 用 `backend-label=`；包内文本文件禁止控制字符（有测试闸）。0.1.17：`backend`/`backendKind` 枚举补 `none`（实测 none 不折叠）；控制字符闸扩到仓库根（排除 `.tmp`/`node_modules`/`.git`）。
-- 0.1.18：`/cg status` 改用 `backend-kind=`（实测 none 显示 none，与成本行一致；推断时另附 `backend-label=`）；控制字符闸改用 `git ls-files` 只扫 tracked 文件。
+- 0.1.18：`/cg status` 改用 `backend-kind=`（实测 none 显示 none，与成本行一致；推断时另附 `backend-label=`）。注意 `adapter=` 是实测 kind，`backend-kind=` 是解析结果——无推断时相同、推断补位时不同；`backend=` 仍指宿主/后端版本。控制字符闸改用 `git ls-files` 只扫 tracked 文件。
 
 ## 配置（bundle patch）
 
