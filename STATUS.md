@@ -7,6 +7,7 @@
 
 - **P3-1 = 并入 0.2.2 接线批，现在不解冻**（2026-10-26 · 00 定）。0.2.2 显式前置验收项：fixture = `manual compaction requires an idle agent with no waking queued work`；判据 = 该文案命中 `isBusyCompactionError` → 映射 `busy` 而非 `failed`。
 - **T3 三会话归档**（`cs_zgPDSqjsDI` / `cs_wmu59tAofx` / `cs_luHlCpRZGO`，2026-10-26 · 开发执行）：已归档，工作区列表只剩 3 个（需求 / 开发 / 审核打包）。
+- **`ok=false` 口径 = 两个正交字段**（2026-10-26 · 00 定）：`compaction=committed|skipped|failed` + `protection=ok|failed` + `failures[]` + `reinjected`；`stats` 拆 `compactionFailures` / `protectionFailures`；status 改 `protection=` 或加 legend；early 返回值改名 `accepted`。原则：`protection=failed` 不得触发重试/关开关，只有 `compaction=failed` 或 `reinjected=false` 才升级。验收：① P3-1 fixture 用 G2-B 真实文案；② 单测覆盖「保护失败 + 回注成功 → 仍算可用、不重试」；③ 文案不得把 protection 失败渲染成「压缩失败」。
 
 ## 在办
 
