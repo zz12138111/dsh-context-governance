@@ -51,3 +51,6 @@
 - 2026-10-25 · Runbook §6 收尾：改 manifest 前留 `.cg-bak-<时间戳>`、写后断言插件条目已消失；redirect 读取前 `Test-Path`；已含只删本插件条目/patch-lock 不还原/junction 退出码/.ignored 判据/备份保留 3 份/回滚点记录
 - 2026-10-25 · 已知风险落文件：ROB-01/06（一次 append 失败永久关停保护预写）写入 STATUS“已知风险”，列为 T8 第一项；本轮不修
 - 2026-10-25 · 全量测试 **161/161**（新增 SPEC-05 与 REQ-02 用例）
+- 2026-10-25 · T8-1 自愈（v0.1.8）：回注失败不再永久 `#disableReinjection`；每次失败写 `reinjection-failed(count=连续次数)`，连续 `maxFailures`（默认 3）才写 `reinjection-degraded` 并只暂停下一周期保护写；降级周期用既有记忆指针回注，成功写 `reinjection-recovered`、清计数、恢复 full；`/cg status` 显示 `reinjection=enabled(streak=N)`/`suspended(N/max)`。测试：新增 T8-1 自愈 + 更新 T4-5/S4-F
+- 2026-10-25 · T8-2 成本归属（v0.1.8）：每周期一条 `compaction-cost`（compactionId 主键；sessionId/project/backend/model/trigger/occurredAt；tokensBefore/After 用宿主 tokenMeter；tokensShadowed/tokensSummary/backendUsage 用压缩事件 usage；tokensInjected 字符估算标 estimated；tokensDropped 来自 reinjection-shadowed；backendCostSource/governanceCostSource + estimateMethod + auditVersion=cost-v1）；审计白名单新增字段，`backendUsage` 只收五个 token 数值，仍不含正文/路径
+- 2026-10-25 · 全量测试 **166/166**（新增 T8 成本 4 条 + 自愈 1 条；0.1.7 的其余行为保留）

@@ -122,6 +122,12 @@ export class CompressionGuard {
   #started = false;
   #eventApi = false;
   #reinjectionDisabled = false;
+  #reinjectionFailureStreak = 0;
+  #maxReinjectionFailures = 3;
+  #protectionSuspended = false;
+  #skipProtectionThisCycle = false;
+  #tokenMeter = null;
+  #projectName = '';
   #degradedReasons = [];
   #materializing = new Set();
   #writeDurations = [];
@@ -167,6 +173,7 @@ export class CompressionGuard {
     this.#backendVersion = options.backendVersion ?? 'unknown';
     this.#enabled = options.enabled !== false;
     this.#store = options.store ?? null;
+    this.#projectName = typeof options.project === 'string' ? options.project.trim() : '';
     // P2-1：只处理本项目会话。projectRoot 为空时无法判定，保持旧行为（不过滤）。
     this.#projectRoot = typeof options.projectRoot === 'string' ? options.projectRoot.trim() : '';
     this.#onlyProject = options.onlyProject !== false && this.#projectRoot !== '';
@@ -177,7 +184,16 @@ export class CompressionGuard {
       enabled: options.reinjection?.enabled !== false,
       maxLines: Math.min(Math.max(options.reinjection?.maxLines ?? 8, 1), 20),
       maxChars: Math.min(Math.max(options.reinjection?.maxChars ?? 800, 120), 4000),
+      maxFailures: Math.min(Math.max(options.reinjection?.maxFailures ?? 3, 1), 20),
     };
+    this.#maxReinjectionFailures = this.#reinjection.maxFailures;
+    try {
+      this.#tokenMeter = this.#ctx?.tokenMeter
+        ?? (typeof this.#ctx?.get === 'function' ? this.#ctx.get('tokenMeter') : null)
+        ?? null;
+    } catch {
+      this.#tokenMeter = null;
+    }
     this.#audit = options.audit ?? (this.#store === null
       ? null
       : new AuditLog({
@@ -371,6 +387,9 @@ export class CompressionGuard {
         auditRotations: this.#audit?.rotations ?? 0,
         pendingJournals: this.#store?.protectionPending ?? 0,
         reinjectionDisabled: this.#reinjectionDisabled,
+        reinjectionFailureStreak: this.#reinjectionFailureStreak,
+        reinjectionSuspended: this.#protectionSuspended || this.#skipProtectionThisCycle,
+        maxReinjectionFailures: this.#maxReinjectionFailures,
         readOnly: this.#readOnly,
         readOnlyReason: this.#readOnlyReason,
       },
@@ -419,14 +438,121 @@ export class CompressionGuard {
     }
   }
 
-  #disableReinjection(reason) {
-    this.#reinjectionDisabled = true;
-    if (!this.#degradedReasons.includes(reason)) this.#degradedReasons.push(reason);
-    this.#selection = {
-      ...this.#selection,
-      mode: 'observe-only',
-      reasons: [...new Set([...this.#selection.reasons, reason])],
+  /**
+   * T8-1 自愈：一次回注失败不再永久关闭。
+   * - 每次失败都记 `reinjection-failed`（count=连续失败次数）；
+   * - 连续失败达到 `maxFailures` 才进入 `degraded-protection` 并跳过**下一周期**的保护写；
+   * - 下一周期仍会重试回注（用已有记忆指针），成功即写 `reinjection-recovered` 并恢复写入。
+   */
+  /** T8-2：优先用宿主 tokenMeter 测整会话 token；取不到返回 null（记 unknown）。 */
+  #measureTokens(session) {
+    const meter = this.#tokenMeter;
+    if (meter === null || typeof meter?.measure !== 'function') return null;
+    try {
+      const measurement = meter.measure(session);
+      const nodes = Array.isArray(measurement?.nodes) ? measurement.nodes : null;
+      if (nodes === null) return null;
+      let total = 0;
+      for (const node of nodes) {
+        const value = Number.isFinite(node?.tokens) ? node.tokens : (Number.isFinite(node?.heuristicTokens) ? node.heuristicTokens : null);
+        if (value === null) continue;
+        total += value;
+      }
+      return Number.isFinite(total) ? total : null;
+    } catch {
+      return null;
+    }
+  }
+
+  #newCost(trigger, session) {
+    return {
+      trigger,
+      tokensBefore: this.#measureTokens(session),
+      tokensAfter: null,
+      tokensShadowed: 0,
+      tokensSummary: null,
+      tokensInjected: null,
+      injectedEntries: 0,
+      tokensDropped: 0,
+      backendUsage: null,
+      model: null,
+      occurredAt: null,
     };
+  }
+
+  /** 一个周期一条成本记录：end 后、回注 microtask 之后写，带上估算的注入 token。 */
+  #writeCost(state, session) {
+    if (state === undefined || state.cost === undefined) return;
+    const cost = state.cost;
+    const after = this.#measureTokens(session);
+    if (after !== null) cost.tokensAfter = after;
+    if (state.reinjection?.status === 'injected' && Number.isFinite(state.reinjection.tokens)) {
+      cost.tokensInjected = state.reinjection.tokens;
+      cost.injectedEntries = state.reinjection.lines ?? 0;
+    } else if (state.reinjection?.status !== undefined) {
+      cost.tokensInjected = 0;
+      cost.injectedEntries = 0;
+    }
+    const backendMeasured = cost.backendUsage !== null;
+    const governanceEstimated = state.reinjection?.status === 'injected';
+    this.#auditEvent('compaction-cost', {
+      sessionId: state.sessionId,
+      compactionId: state.compactionId,
+      project: this.#projectName,
+      model: cost.model,
+      trigger: cost.trigger,
+      occurredAt: cost.occurredAt ?? this.#now().toISOString(),
+      tokensBefore: cost.tokensBefore,
+      tokensAfter: cost.tokensAfter,
+      tokensShadowed: cost.tokensShadowed,
+      tokensSummary: cost.tokensSummary,
+      tokensInjected: cost.tokensInjected,
+      injectedEntries: cost.injectedEntries,
+      tokensDropped: cost.tokensDropped,
+      backendUsage: cost.backendUsage,
+      backendCostSource: backendMeasured ? 'measured' : 'unknown',
+      governanceCostSource: governanceEstimated ? 'estimated' : 'unknown',
+      estimateMethod: governanceEstimated ? 'chars/4' : 'none',
+      auditVersion: 'cost-v1',
+    });
+  }
+
+  #noteReinjectionFailure(reason) {
+    this.#reinjectionFailureStreak += 1;
+    if (!this.#degradedReasons.includes(reason)) this.#degradedReasons.push(reason);
+    if (this.#reinjectionFailureStreak >= this.#maxReinjectionFailures && !this.#protectionSuspended) {
+      this.#protectionSuspended = true;
+      this.#selection = {
+        ...this.#selection,
+        mode: 'degraded-protection',
+        reasons: [...new Set([...this.#selection.reasons, 'reinjection-suspended'])],
+      };
+      this.#auditEvent('reinjection-degraded', {
+        reason: 'max-consecutive-failures',
+        count: this.#reinjectionFailureStreak,
+      });
+      this.#logger?.warn?.(
+        `[context-governance] reinjection failed ${this.#reinjectionFailureStreak} times in a row; ` +
+        'suspending protection writes for the next cycle (reinjection will retry from existing memory)',
+      );
+    }
+  }
+
+  /** 回注成功：清连续失败计数/降级，恢复到正常选择。 */
+  #noteReinjectionRecovered() {
+    if (this.#reinjectionFailureStreak === 0 && !this.#protectionSuspended && !this.#skipProtectionThisCycle) return;
+    this.#reinjectionFailureStreak = 0;
+    this.#protectionSuspended = false;
+    this.#skipProtectionThisCycle = false;
+    this.#degradedReasons = this.#degradedReasons.filter((reason) => reason !== 'reinjection-failed');
+    this.#auditEvent('reinjection-recovered', { count: 1 });
+    this.#logger?.info?.('[context-governance] reinjection recovered; protection writes resume');
+    this.#applySelection(selectMode({
+      adapter: this.#adapter,
+      eventApi: typeof this.#ctx?.on === 'function',
+      enabled: this.#enabled,
+      summaryReadability: this.#adapter.summary.readability,
+    }));
   }
 
   #record(report, state) {
@@ -462,6 +588,17 @@ export class CompressionGuard {
         sessionId: state.sessionId,
         compactionId: id,
         reason: 'reinjection-disabled',
+      });
+      return;
+    }
+    if (this.#skipProtectionThisCycle) {
+      // T8-1：连续回注失败后的一个周期暂停写入，但压缩/回注照常（回注走既有记忆指针）。
+      state.protectionWrite = 'suspended';
+      this.#auditEvent('protection-write-skipped', {
+        sessionId: state.sessionId,
+        compactionId: id,
+        reason: 'reinjection-suspended',
+        count: this.#reinjectionFailureStreak,
       });
       return;
     }
@@ -543,15 +680,15 @@ export class CompressionGuard {
   }
 
   #applySelection(next) {
-    if (this.#reinjectionDisabled) {
+    if (this.#protectionSuspended || this.#skipProtectionThisCycle) {
       this.#selection = {
         ...next,
-        mode: 'observe-only',
-        reasons: [...new Set([...next.reasons, 'reinjection-failed'])],
+        mode: 'degraded-protection',
+        reasons: [...new Set([...next.reasons, ...this.#degradedReasons, 'reinjection-suspended'])],
       };
       return;
     }
-    if (this.#selection.mode === 'degraded-protection') {
+    if (this.#selection.mode === 'degraded-protection' && this.#degradedReasons.length > 0) {
       this.#selection = {
         ...next,
         mode: 'degraded-protection',
@@ -634,22 +771,25 @@ export class CompressionGuard {
       return;
     }
     if (!Array.isArray(state.entries) || state.entries.length === 0) {
-      const fallback = this.#readOnly ? this.#readOnlyPointers(state.sessionId) : [];
+      const fallback = (this.#readOnly || this.#skipProtectionThisCycle)
+        ? this.#readOnlyPointers(state.sessionId)
+        : [];
       if (fallback.length === 0) {
         state.reinjection = { status: 'skipped-no-entries' };
         this.#stats.reinjectionSkips += 1;
         this.#auditEvent('reinjection-skipped', {
           sessionId: state.sessionId,
           compactionId: state.compactionId,
-          reason: 'no-protected-entries',
+          reason: this.#skipProtectionThisCycle ? 'reinjection-suspended-no-entries' : 'no-protected-entries',
         });
         return;
       }
       state.entries = fallback;
-      state.protectionMeta = fallback.map(() => ({ kind: 'read-only-memory' }));
+      state.protectionMeta = fallback.map(() => ({ kind: 'recovery-memory' }));
       state.reinjectionReadOnly = true;
       this.#logger?.info?.(
-        `[context-governance] read-only reinjection: ${fallback.length} existing memory pointers for this session`,
+        `[context-governance] ${this.#skipProtectionThisCycle ? 'suspended' : 'read-only'} reinjection: ` +
+        `${fallback.length} existing memory pointers for this session`,
       );
     }
     if (this.#hasCycleMessage(session, state.compactionId)) {
@@ -706,12 +846,20 @@ export class CompressionGuard {
     };
     try {
       const appended = session.append('user/message', message, { surfaceOp: 'append' });
-      state.reinjection = { status: 'injected', seq: appended?.seq ?? null, lines: lines.length };
+      const injectedTokens = Math.max(1, Math.ceil(text.length / 4));
+      state.reinjection = { status: 'injected', seq: appended?.seq ?? null, lines: lines.length, tokens: injectedTokens };
       this.#stats.reinjections += 1;
       if (state.sessionId !== null && appended?.seq !== undefined) {
         // REQ-02：记住本次回注 seq，下一次压缩若把它 shadow 掉就记 `reinjection-shadowed`。
-        this.#lastInjection.set(state.sessionId, { seq: appended.seq, cycle: state.compactionId });
+        this.#lastInjection.set(state.sessionId, {
+          seq: appended.seq,
+          cycle: state.compactionId,
+          // T8-2：回注 token 优先用字符估算（宿主 tokenMeter 不测单条消息）。
+          tokens: Math.max(1, Math.ceil(text.length / 4)),
+          entries: lines.length,
+        });
       }
+      this.#noteReinjectionRecovered();
       this.#auditEvent('reinjection', {
         sessionId: state.sessionId,
         compactionId: state.compactionId,
@@ -725,13 +873,14 @@ export class CompressionGuard {
     } catch (error) {
       state.reinjection = { status: 'failed', reason: String(error?.message ?? error).slice(0, 200) };
       this.#stats.reinjectionFailures += 1;
+      this.#noteReinjectionFailure('reinjection-failed');
       this.#auditEvent('reinjection-failed', {
         sessionId: state.sessionId,
         compactionId: state.compactionId,
         reason: String(error?.message ?? error).slice(0, 300),
+        count: this.#reinjectionFailureStreak,
       });
       this.#logger?.warn?.(`[context-governance] reinjection failed: ${String(error?.message ?? error)}`);
-      this.#disableReinjection('reinjection-failed');
       if (state.report !== undefined) state.report.reinjection = state.reinjection;
     }
   }
@@ -757,6 +906,9 @@ export class CompressionGuard {
         case 'compaction/start': {
           if (id === null) return;
           this.#stats.starts += 1;
+          // T8-1：连续失败达到阈值后的“暂停一个周期”在这里生效；下一个 start 自动重试写入。
+          this.#skipProtectionThisCycle = this.#protectionSuspended;
+          this.#protectionSuspended = false;
           if (this.#readOnly) void this.#refreshReadOnly();
           if (this.#adapter.kind === 'none' || this.#adapter.kind === 'unknown') {
             // 加载顺序可能在 compaction 行之前：事务真正发生时再探测一次。
@@ -822,6 +974,7 @@ export class CompressionGuard {
             protectionWrite: 'not-attempted',
             reinjectionScheduled: false,
             report: null,
+            cost: this.#newCost(event.data?.sourceCommandId != null ? 'manual' : 'auto', session),
           };
           this.#pending.set(id, state);
           this.#protectBeforeSummary(session, state, id);
@@ -849,6 +1002,7 @@ export class CompressionGuard {
               protectionWrite: 'late-start',
               reinjectionScheduled: false,
               report: null,
+              cost: this.#newCost('auto', session),
             };
             this.#pending.set(id, state);
             this.#stats.lateSnapshots += 1;
@@ -862,12 +1016,22 @@ export class CompressionGuard {
           const text = summaryTextOf(event);
           state.summaryText = text;
           state.summaryReadable = text.trim() !== '';
+          // T8-2：成本字段取自压缩事件（usage/shadowedTokenCount/provider/model）。
+          const usage = event?.data?.usage;
+          if (usage !== null && typeof usage === 'object' && !Array.isArray(usage)) state.cost.backendUsage = usage;
+          state.cost.tokensSummary = Number.isFinite(usage?.outputTokens) ? usage.outputTokens : null;
+          state.cost.tokensShadowed = Number.isFinite(event?.data?.shadowedTokenCount)
+            ? event.data.shadowedTokenCount
+            : state.cost.tokensShadowed;
+          const modelParts = [event?.data?.provider, event?.data?.model].filter((part) => typeof part === 'string' && part !== '');
+          state.cost.model = modelParts.length > 0 ? modelParts.join('/') : null;
           // REQ-02：上一次回注的指针被本次压缩 shadow 掉 → 记“回注被吞”。
           const shadowedSeqs = Array.isArray(event?.data?.shadowedSeqs) ? event.data.shadowedSeqs : [];
           const lastInjection = state.sessionId === null ? undefined : this.#lastInjection.get(state.sessionId);
           if (lastInjection !== undefined && shadowedSeqs.includes(lastInjection.seq)) {
             this.#lastInjection.delete(state.sessionId);
             this.#stats.reinjectionShadowed += 1;
+            state.cost.tokensDropped += Number.isFinite(lastInjection.tokens) ? lastInjection.tokens : 0;
             this.#auditEvent('reinjection-shadowed', {
               sessionId: state.sessionId,
               compactionId: id,
@@ -944,7 +1108,20 @@ export class CompressionGuard {
           while (this.#completedOrder.length > 200) {
             this.#completedCycles.delete(this.#completedOrder.shift());
           }
+          if (state.cost !== undefined) {
+            state.cost.occurredAt = Number.isFinite(event?.time)
+              ? new Date(event.time).toISOString()
+              : this.#now().toISOString();
+          }
           this.#scheduleReinjection(session, state);
+          // T8-2：回注 microtask 之后写成本记录（同一周期一条）。
+          queueMicrotask(() => {
+            try {
+              this.#writeCost(state, session);
+            } catch (error) {
+              this.#logger?.warn?.(`[context-governance] cost audit failed: ${String(error?.message ?? error)}`);
+            }
+          });
           return;
         }
         default:

@@ -55,10 +55,15 @@ function statusText({ store, guard, audit, now }) {
         );
       }
     }
+    const reinjectionState = status.protection.reinjectionDisabled
+      ? 'disabled'
+      : (status.protection.reinjectionSuspended
+        ? `suspended(${status.protection.reinjectionFailureStreak ?? 0}/${status.protection.maxReinjectionFailures ?? '-'})`
+        : `enabled(streak=${status.protection.reinjectionFailureStreak ?? 0})`);
     lines.push(
       `protection: writes=${status.stats.protectionWrites} writeFailures=${status.stats.protectionWriteFailures} ` +
       `reinjections=${status.stats.reinjections} injectionFailures=${status.stats.reinjectionFailures} ` +
-      `pendingJournals=${status.protection.pendingJournals} reinjection=${status.protection.reinjectionDisabled ? 'disabled' : 'enabled'}` +
+      `pendingJournals=${status.protection.pendingJournals} reinjection=${reinjectionState}` +
       `${status.protection.readOnly ? ` read-only=${status.protection.readOnlyReason ?? 'unknown'}` : ''}`,
     );
     if (status.stats.auditWriteFailures > 0 || status.stats.auditSkippedReadOnly > 0) {

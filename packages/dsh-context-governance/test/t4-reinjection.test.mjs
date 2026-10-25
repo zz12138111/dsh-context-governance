@@ -214,21 +214,25 @@ test('T4-4：写记忆失败 → audit + degraded，不阻断压缩、不抛宿�
   });
 });
 
-test('T4-5：回注失败 → audit + observe-only；下一周期不再写/注', async () => {
+test('T4-5：回注失败按阈值降级（maxFailures=1）；下一周期暂停写入但回注仍尝试并自愈', async () => {
   await withStore(async (store) => {
     const built = buildCompaction({ before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 11 });
     const session = liveSession(built);
     session.append = () => { throw new Error('append rejected'); };
     const ctx = makeCtx(new BasicCompactionEngine());
-    const guard = new CompressionGuard({ ctx, store, hostVersion: '0.2.1-rc.2' });
+    const guard = new CompressionGuard({
+      ctx, store, hostVersion: '0.2.1-rc.2', reinjection: { maxFailures: 1 },
+    });
     guard.start();
     try {
       emitThroughEnd(ctx, session, built);
       await flush();
       await guard.flush();
-      assert.equal(guard.status.mode, 'observe-only');
+      assert.equal(guard.status.mode, 'degraded-protection');
+      assert.equal(guard.status.protection.reinjectionFailureStreak, 1);
       const audit = await readAudit(store);
       assert.ok(audit.some((entry) => entry.event === 'reinjection-failed'));
+      assert.ok(audit.some((entry) => entry.event === 'reinjection-degraded'));
 
       const second = buildCompaction({
         compactionId: 'cmp-2', startSeq: 200, summarySeq: 201, checkpointSeq: 202, endSeq: 203,
@@ -240,9 +244,49 @@ test('T4-5：回注失败 → audit + observe-only；下一周期不再写/注',
       await flush();
       await guard.flush();
       const audit2 = await readAudit(store);
-      assert.ok(audit2.some((entry) => entry.event === 'protection-write-skipped' && entry.compactionId === 'cmp-2'));
-      assert.equal(store.protectionPending, beforePending);
-      assert.equal(session2.appended.length, 0);
+      assert.ok(audit2.some((entry) => entry.event === 'protection-write-skipped' && entry.compactionId === 'cmp-2' && entry.reason === 'reinjection-suspended'));
+      assert.equal(store.protectionPending, beforePending, 'suspended cycle must not write new protection');
+      // 降级周期仍会用既有记忆指针回注；append 成功即自愈。
+      assert.equal(session2.appended.length, 1, 'degraded cycle must still attempt reinjection');
+      assert.ok(audit2.some((entry) => entry.event === 'reinjection-recovered'));
+      assert.equal(guard.status.protection.reinjectionFailureStreak, 0);
+      assert.equal(guard.status.mode, 'full');
+    } finally {
+      guard.stop();
+    }
+  });
+});
+
+test('T8-1 自愈：一次回注失败不永久停写，下一周期恢复写入并清计数', async () => {
+  await withStore(async (store) => {
+    const ctx = makeCtx(new BasicCompactionEngine());
+    const guard = new CompressionGuard({ ctx, store, hostVersion: '0.2.1-rc.2' });
+    guard.start();
+    try {
+      const built = buildCompaction({ before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 11 });
+      const session = liveSession(built);
+      session.append = () => { throw new Error('append rejected once'); };
+      emitThroughEnd(ctx, session, built);
+      await flush();
+      await guard.flush();
+      assert.equal(guard.status.protection.reinjectionFailureStreak, 1);
+      assert.equal(guard.status.protection.reinjectionSuspended, false, '一次失败不应进入暂停');
+      assert.ok((await readAudit(store)).some((entry) => entry.event === 'reinjection-failed'));
+
+      const writesBefore = guard.status.stats.protectionWrites;
+      const second = buildCompaction({
+        compactionId: 'cmp-recovered', startSeq: 400, summarySeq: 401, checkpointSeq: 402, endSeq: 403,
+        before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 11,
+      });
+      const session2 = liveSession(second);
+      emitThroughEnd(ctx, session2, second);
+      await flush();
+      await guard.flush();
+      assert.equal(guard.status.protection.reinjectionFailureStreak, 0);
+      assert.equal(guard.status.mode, 'full');
+      assert.ok(guard.status.stats.protectionWrites > writesBefore, '下一周期应恢复保护写入');
+      assert.equal(session2.appended.length, 1, '下一周期回注应成功');
+      assert.ok((await readAudit(store)).some((entry) => entry.event === 'reinjection-recovered'));
     } finally {
       guard.stop();
     }

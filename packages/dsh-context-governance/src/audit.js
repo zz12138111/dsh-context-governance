@@ -48,6 +48,23 @@ export const AUDIT_FIELD_WHITELIST = Object.freeze({
   readOnly: 'boolean',
   status: 'text',
   window: 'number',
+  // T8-2 成本归属（REQUIREMENTS A）：只记 token，不记金额。
+  project: 'text',
+  model: 'text',
+  trigger: 'text',
+  occurredAt: 'text',
+  tokensBefore: 'nullable-number',
+  tokensAfter: 'nullable-number',
+  tokensShadowed: 'number',
+  tokensSummary: 'nullable-number',
+  tokensInjected: 'nullable-number',
+  injectedEntries: 'number',
+  tokensDropped: 'number',
+  backendUsage: 'usage',
+  backendCostSource: 'text',
+  governanceCostSource: 'text',
+  estimateMethod: 'text',
+  auditVersion: 'text',
 });
 
 /** 已知审计事件（T5 正式化清单；未知事件仍记录，但只能带白名单字段）。 */
@@ -63,6 +80,9 @@ export const AUDIT_EVENTS = Object.freeze([
   'reinjection-failed',
   'reinjection-budget',
   'reinjection-shadowed',
+  'reinjection-recovered',
+  'reinjection-degraded',
+  'compaction-cost',
   'manual-compaction-loss',
   'duplicate-cycle-start',
   'cycle-interrupted',
@@ -86,6 +106,18 @@ function sanitizeValue(key, value) {
       return typeof value === 'boolean' ? value : undefined;
     case 'number':
       return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+    case 'nullable-number':
+      if (value === null) return null;
+      return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+    case 'usage': {
+      // 只保留已知的 token 计数字段，逐个校验非负有限数；对象结构固定，不接收任意键。
+      if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+      const out = {};
+      for (const key of ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'totalTokens']) {
+        if (typeof value[key] === 'number' && Number.isFinite(value[key]) && value[key] >= 0) out[key] = value[key];
+      }
+      return Object.keys(out).length > 0 ? out : undefined;
+    }
     case 'text':
       return typeof value === 'string' ? redactText(value) : undefined;
     case 'id-array':

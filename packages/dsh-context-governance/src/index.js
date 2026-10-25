@@ -249,6 +249,7 @@ export async function apply(ctx, rawConfig = {}) {
         projectRoot: config.projectRoot,
         onlyProject: config.onlyProject,
         captureTitle: config.captureTitle,
+        project: config.project,
       });
       guard.start();
       const status = guard.status;

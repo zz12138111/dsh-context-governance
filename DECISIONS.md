@@ -173,3 +173,16 @@
 - 选择：`inject=['tools']`，`/cg status` 用 `ctx.get('commands')` 可选注册（已有 `registered:false` 降级）；`CompressionGuard` 记住每次回注 seq，在下一次 `compaction/summary` 检查 `shadowedSeqs`，命中即写 `reinjection-shadowed`（sessionId/compactionId/seq/cycle/reason）并计数。
 - 影响：缺 commands 不再阻断插件；回注被吞可审计。成本归属审计仍未实现，需需求定义字段（不自行标“未列”）。
 - 关联：`src/index.js`、`src/compress/runtime.js`、`src/audit.js`、`test/t7-p2.test.mjs`、`test/t7-scenarios.test.mjs`；状态：active。
+## DEC-PLUGIN-20261025-23 [tech] T8-1 回注失败自愈：连续 N 次才降级一个周期，成功即恢复
+
+- 背景：ROB-01/06 指出一次 `session.append` 失败会永久 `#disableReinjection`，之后保护预写全部 `protection-write-skipped`，只能重启恢复（S4=B 预写被永久关掉）。
+- 选择：删除永久关闭；每次失败写 `reinjection-failed`（count=连续失败次数）；连续 `reinjection.maxFailures`（默认 3，1–20 可配）才写 `reinjection-degraded` 并把模式设为 `degraded-protection`；只**暂停下一个周期**的保护写（`protection-write-skipped` reason=`reinjection-suspended`），该周期仍用既有记忆指针回注；回注成功写 `reinjection-recovered`、清 streak、恢复 `full` 与写入。
+- 影响：单次瞬时失败不再伤及 S4=B；降级窗口最多一个周期；`/cg status` 显示 streak/suspended。测试 T8-1/T4-5/S4-F。
+- 关联：`src/compress/runtime.js`、`test/t4-reinjection.test.mjs`、`test/t7-scenarios.test.mjs`、`docs/T8-回注自愈与成本归属.md`；状态：active。
+
+## DEC-PLUGIN-20261025-24 [tech] T8-2 成本归属：token-only，实测/估算分列，一周期一条
+
+- 背景：REQUIREMENTS ⑦ 选 A：M1 只做 token 归属、不做金额；主键 compactionId，维度 sessionId/project/backend/model/trigger/occurredAt，数值 tokensBefore/After/Shadowed/Summary/Injected/injectedEntries/Dropped，口径 backendCostSource/governanceCostSource/estimateMethod/auditVersion。
+- 选择：`compaction/end` 后回注 microtask 之后写一条 `compaction-cost`；tokensBefore/After 用宿主 `tokenMeter.measure()`（取不到为 null + unknown）；tokensShadowed/tokensSummary/backendUsage 用压缩事件 usage（measured）；tokensInjected 用字符 `ceil(chars/4)`（estimated，method `chars/4`）；tokensDropped 由 `reinjection-shadowed` 的注入估算累加；审计白名单加字段、`backendUsage` 只保留五个 token 数值，仍走 8 类凭据脱敏、不写正文/路径。
+- 影响：`/cg status` 不含成本明细（审计文件可查）；实测与估算不混算；金额由外部按单价换算。
+- 关联：`src/compress/runtime.js`、`src/audit.js`、`test/t8-cost.test.mjs`、`docs/T8-回注自愈与成本归属.md`；状态：active。

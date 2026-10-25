@@ -12,6 +12,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { PLUGIN_VERSION } from '../src/diagnostics.js';
+import { AUDIT_FIELD_WHITELIST } from '../src/audit.js';
 import { apply, resolveConfig } from '../src/index.js';
 import { CompressionGuard } from '../src/compress/runtime.js';
 import { MemoryStore } from '../src/memory/store.js';
@@ -308,10 +309,12 @@ test('S4-I 幂等：重复 start/end 不重复写/注', async () => {
   });
 });
 
-test('S4-F 写不进/注不进：降级可见、下一周期停止写入', async () => {
+test('S4-F 写不进/注不进：按阈值降级，下一周期暂停写入并尝试回注', async () => {
   await withStore(async (store) => {
     const ctx = makeCtx();
-    const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.2', store, logger: ctx.logger });
+    const guard = new CompressionGuard({
+      ctx, hostVersion: '0.2.1-rc.2', store, logger: ctx.logger, reinjection: { maxFailures: 1 },
+    });
     guard.start();
     const built = buildCompaction({ before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 11 });
     const session = liveSession(built);
@@ -320,13 +323,16 @@ test('S4-F 写不进/注不进：降级可见、下一周期停止写入', async
     await flush();
     const audit = await readAudit(store);
     assert.ok(audit.some((entry) => entry.event === 'reinjection-failed'), 'S4-F 失败：缺 reinjection-failed');
-    assert.equal(guard.mode, 'observe-only');
+    assert.ok(audit.some((entry) => entry.event === 'reinjection-degraded'), 'S4-F 失败：缺 reinjection-degraded');
+    assert.equal(guard.mode, 'degraded-protection');
     const built2 = buildCompaction({ compactionId: 'cmp-2', startSeq: 200, summarySeq: 201, checkpointSeq: 202, endSeq: 203, before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 11 });
     const session2 = liveSession(built2);
     runCycle(ctx, session2, built2);
     await flush();
     const audit2 = await readAudit(store);
-    assert.ok(audit2.some((entry) => entry.event === 'protection-write-skipped' && entry.compactionId === 'cmp-2'), 'S4-F 失败：下一周期仍写');
+    assert.ok(audit2.some((entry) => entry.event === 'protection-write-skipped' && entry.compactionId === 'cmp-2' && entry.reason === 'reinjection-suspended'), 'S4-F 失败：降级周期仍写新保护');
+    assert.equal(session2.appended.length, 1, 'S4-F 失败：降级周期没有尝试回注');
+    assert.ok(audit2.some((entry) => entry.event === 'reinjection-recovered'), 'S4-F 失败：未自愈');
     guard.stop();
   });
 });
@@ -346,7 +352,8 @@ test('S4-AUD 审计只含白名单字段，不落正文/路径/数字标题', as
     }
     for (const entry of await readAudit(store)) {
       for (const key of Object.keys(entry)) {
-        assert.ok(['ts', 'event', 'sessionId', 'compactionId', 'cycle', 'manual', 'count', 'moved', 'seq', 'ids', 'kinds', 'reason', 'code', 'durationMs', 'failures', 'entries', 'omitted', 'lines', 'mode', 'adapter', 'backend', 'host', 'version', 'perception', 'eventApi', 'readOnly', 'status', 'window'].includes(key), `S4-AUD 失败：未知字段 ${key}`);
+        const allowed = key === 'ts' || key === 'event' || Object.hasOwn(AUDIT_FIELD_WHITELIST, key);
+        assert.ok(allowed, `S4-AUD 失败：未知字段 ${key}`);
       }
     }
     guard.stop();
