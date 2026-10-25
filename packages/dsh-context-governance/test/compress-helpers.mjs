@@ -193,7 +193,7 @@ export function healthyMessages() {
     userMessage(6, '继续 T3。'),
     assistantToolCall(7, 'call-2'),
     toolResult(8, 'call-2'),
-    userMessage(9, '批次 511/958 已完成。'),
+    userMessage(9, '批次 511/958 项完成。'),
     userMessage(10, '回滚点：D:\\backup\\pre-t3.zip'),
     assistantText(11, '收到。'),
     assistantText(12, '准备下一步。'),
@@ -209,7 +209,7 @@ export const FIVE_SECTION_SUMMARY = [
   '- 事件级感知；不替换 provider。',
   '',
   '## Current state',
-  '批次 511/958 已完成；回滚点 D:\\backup\\pre-t3.zip；最新用户要求继续。',
+  '批次 511/958 项完成；回滚点 D:\\backup\\pre-t3.zip；最新用户要求继续。',
   '',
   '## Next steps',
   '- 写 Runbook。',
@@ -219,7 +219,7 @@ export const FIVE_SECTION_SUMMARY = [
 ].join('\n');
 
 export const FREE_FORM_SUMMARY = [
-  'Current state: 批次 511/958 已完成。',
+  'Current state: 批次 511/958 项完成。',
   '回滚点：D:\\backup\\pre-t3.zip。',
   '最新用户要求继续 T3。',
 ].join('\n');

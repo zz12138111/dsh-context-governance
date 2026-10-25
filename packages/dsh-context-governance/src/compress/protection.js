@@ -205,7 +205,7 @@ function batchMarkers(event) {
   if (!isProgressMessage(event)) return null;
   const text = stripStructuredPayload(textOf(event));
   if (text.trim() === '') return null;
-  // P2-4（自引用切断）：模型回引 header 的“批次进度 N/N”不得再被当成新进度。
+  // P2-4 第 2 条：模型回引 header 不得再被当成新进度。
   if (event.type === 'assistant/message' && /\[CG-MEMORY/i.test(text)) return null;
   const { ratios, dateLike } = extractRatios(text);
   const keyword = BATCH_KEYWORD_RE.exec(text)?.[0]?.toLowerCase() ?? null;

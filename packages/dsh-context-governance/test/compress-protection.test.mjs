@@ -176,7 +176,7 @@ test('正例：用户消息里的 8000/1500 能识别并正确比对', () => {
   const before = [
     systemPrompt(0),
     userMessage(1, '继续。'),
-    userMessage(2, '批次进度 8000/1500，继续跑。'),
+    userMessage(2, '批次进度 8000/1500 项，继续跑。'),
     assistantText(3, '收到。'),
     userMessage(4, '最后一条用户消息：继续。'),
   ];
@@ -307,7 +307,7 @@ test('0.1.14 正文保留：{511/958} 可识别；JSON 载荷不参选', () => {
       assistantText(3, '好。'),
       userMessage(4, '最后一条用户消息：继续。'),
     ],
-    summary: '批次 511/958 已完成。',
+    summary: '批次 511/958 项完成。',
     start: 1,
     end: 3,
   });
@@ -322,7 +322,7 @@ test('0.1.14 正文保留：{511/958} 可识别；JSON 载荷不参选', () => {
       assistantText(3, '好。'),
       userMessage(4, '最后一条用户消息：继续。'),
     ],
-    summary: '批次 511/958 已完成。',
+    summary: '批次 511/958 项完成。',
     start: 1,
     end: 3,
   });
@@ -336,7 +336,7 @@ test('0.1.14 正文保留：{511/958} 可识别；JSON 载荷不参选', () => {
 test('回滚点被吞且摘要没覆盖：fail', () => {
   const { report } = reportFor({
     before: healthyMessages(),
-    summary: 'Current state: 批次 511/958 已完成。',
+    summary: 'Current state: 批次 511/958 项完成。',
     start: 2,
     end: 11,
   });
