@@ -149,36 +149,36 @@ node --test "test/*.test.mjs"          # 290/290 pass
 
 **复核时同时确认**：`armed=false` 全程成立；第 5 步未开；0.2.2 交付记录里 `ok=false` 语义与本节一致。
 
-## 9. 四项复核结果（`629a3a0`，2026-10-26）
+## 9. 四项复核结果（基线 `629a3a0`，补验到 `0c77f0d`，2026-10-26）
 
-基线：HEAD `629a3a0`，工作树干净；在独立 worktree 跑全量 **297/297 pass**。
+基线：`629a3a0` 时全量 **297/297**；`30d4bcd` 时 **298/298**（early-022 11/11）；`0c77f0d` 时 **300/300**（均在独立 worktree 实跑）。
 
 | 项 | 判定 | 依据 |
 |---|---|---|
-| ① P3-1（`25268bc`） | **通过** | 真实文案 fixture（`code='busy'`、idle-required message）→ `busy`；`code` 大小写不敏感；`unrelated ManualCompactionError` 仍 `failed`；`attempt` 断言 `accepted:false, reason:busy` |
-| ② 契约/stats/status（`2fd4f6f`+`aacea07`） | **通过（附两条跟踪）** | 全仓无 `attempt().ok` 调用点；返回仅 `accepted`；`stats.failures` → `compactionFailures`/`protectionFailures`/`observerErrors`；单测断言 protection failed 时 `compactionFailures=0`、`protectionFailures=1`；`shouldEscalateEarly` 纯函数测试覆盖 |
+| ① P3-1（`25268bc`+`30d4bcd`） | **通过** | 两条 busy 路径都命中：idle 文案（G2-B 真机）+ `already has active work`（宿主源码 `dsh-agent-loop:823` + 单测）；`code` 大小写不敏感；反例 `agent has active work but not compaction` → `false` 防过宽；`attempt` 断言 `accepted:false, reason:busy` |
+| ② 契约/stats/status（`2fd4f6f`+`aacea07`） | **通过** | 全仓无 `attempt().ok` 调用点；返回仅 `accepted`；stats 拆三计数；单测断言 protection failed 时 `compactionFailures=0`、`protectionFailures=1`；`shouldEscalateEarly` 纯函数测试覆盖 |
 | ③ logger（`3179ddf`） | **通过** | `#logger = ctx.logger`（`index.js:500` 传入）→ 不进 `governance.log` 属**设计**；新增 `diagnosticsLogFile` 落点（只记 names + compactionId，<200 字符），单测覆盖；README/T5 已同步 |
-| ④ audit（`629a3a0`） | **不通过（`messagesLength`）** | `messagesLength: 1` 是 `index.js` 里的**硬编码常量**，不读决策数组，不随基线变化——无法证明“注入形态”，也回答不了 T3 的原始证据缺口 |
+| ④ audit（`0c77f0d`） | **通过** | `textHash` 四处已移除（src 仅 `atomic.js` 的文件哈希仍在，与本项无关）；`onInjected(header,{messagesBefore,messagesAfter})`，audit 写 `injected=差值`+两值；两个新用例钉住“基线含 system → 总长 2 但 injected=1”“零注入 → 不触发、长度不变” |
 
-### 9.1 对第 4 步的两条审核结论
+### 9.1 对第 4 步的两条审核结论（已由 `0c77f0d` 落实）
 
-1. **`messagesLength` 不可接受，改为真实差值**：`onInjected` 目前只收到 `header`，拿不到决策消息数组。应把 `onInjected` 扩为 `(header, { messagesBefore, messagesAfter })`（`header.js` 里两值现成），审计写 `injected = messagesAfter - messagesBefore`（0/1），或直接记 `messagesBefore`/`messagesAfter` 两个字段。无候选时不会触发 `onInjected`，`injected=0` 由“无该事件”表达，与 T3 口径一致。
+1. **`messagesLength` 硬编码不可接受，改真实差值**：已改为 `onInjected(header, { messagesBefore, messagesAfter })` + `injected = after - before`；`messagesAfter` 由构造式 `[header, ...messages]` 推出（before+1），两个新用例覆盖了“总长≠注入量”和“零注入不触发”。
 2. **审核结论：不做 header hash**（本记录的判断，非转述）。理由：
    - **无消费者**：注入形态由 `injected=0|1`（或 `messagesBefore/After`）+ `count=N` + `tokensInjected` 已能完整回答“注没注、注了几条、多大”；内容一致性当前没有真实需求。
    - **32 bit + 低熵**：sha256 前 8 位对低熵文本（header 来自少量记忆标题）可被持有候选文本者验证猜测，只够会话内去重、不适合作标识。
    - **少一个字段少一条边界**：删除比“限定内部使用”更省事，也避免 audit 被带出本机时多一处可确认信息。
    - 将来确有“内容一致性”需求时：用 **HMAC（每安装盐）** 取 8–16 位，并在文档写明仅内部。
-   - **开发执行清单**：移除 `header.js` 的 `createHash`/`textHash`、`audit.js` 白名单的 `textHash`、`index.js` 的 `textHash` 写入、测试里对 `textHash` 的断言；保留 `messagesLength` → 真实差值。
+   - **反向断言（`assert.equal(x.textHash, undefined)`）审核认可保留**：它钉住决定、不产生任何生产写入；建议再收紧为 `assert.equal('textHash' in obj, false)`（键不存在），不改也可接受。
 
 ### 9.1.1 文档补句（供 T5/README 引用）
 
 写入 T5/README：「**audit 是权威记录，warn 只是提示**；保护失败的持久证据是 `manual-compaction-loss`（带 `failures`），日志不是唯一观测点。」
 
-### 9.2 两条跟踪项（不阻塞 0.2.2 本批）
+### 9.2 跟踪项（不阻塞 0.2.2 本批）
 
-- **`compactionFailures` 恒 0**：代码中**没有**注释说明“留给第 5 步”（开发自述与代码不符）；`compaction='failed'` 当前也没有生产者（`#record` 只写 committed/skipped）。第 5 步接线时必须补上失败路径记录，否则 `shouldEscalateEarly` 的 `failed` 分支永远走不到。**建议现在补一行注释**，避免下一个人误判为 bug。
-- **同步 busy 文案**：`agent.runMaintenance` 的 `already has active work`（普通 `Error`，无 name/code）仍未识别为 `busy`，会映射 `failed`；属边界路径（调用方给出 idle 事实后才会撞上），可加 `/already has active work/` 或文档注明。
+- **`compactionFailures` 恒 0**：`0c77f0d` 已补注释「暂未接线（当前恒 0）；接线后由 compactNow 失败累加，勿当 bug」——此项关闭。第 5 步接线时仍需补失败路径（`compaction='failed'` 目前无生产者）。
+- **同步 busy 文案**：`30d4bcd` 已补 `already has active work`，并加反例 `agent has active work but not compaction` → `false` 防过宽；此项关闭。证据等级：idle 文案有 G2-B 真机；`already has active work` 为**宿主源码审计**（`.tmp/host/dsh-agent-loop__lib__index.js:823` 逐字一致）+ 单测，无真机。
 
 ### 9.3 结论
 
-① ② ③ 通过；④ 因 `messagesLength` 硬编码**不通过**，待改为真实差值后复验。四项未全通过前**不 push**（00 边界）。
+**① ② ③ ④ 全部通过**（④ 于 `0c77f0d` 复验）。四项全过，可按 00 边界一次性推分支（只推分支，不打 tag、不碰 main），推后回报「远端 = 本地 HEAD」hash。
