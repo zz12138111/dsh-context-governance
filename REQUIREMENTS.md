@@ -344,3 +344,39 @@
 ### 任务拆解
 
 见 `TASKS/REQ-20261025-07-0.1.16-拆解.md`。
+
+---
+
+## REQ-20261025-08 上下文治理插件 0.1.17 —— 枚举补 `none` + 控制字符闸扩到仓库根
+
+- **依据**：0.1.16 复核 P3（`446efe2` 已推）；用户 2026-10-25 决策范围 A（`DEC-20261025-52`）。
+- **优先级**：P1
+- **状态**：已排期（00 已直派开发，此单用于账本一致）
+- **版本**：0.1.17；`auditVersion` **维持 `cost-v1.4`**（只补枚举值，不改字段结构）
+- **背景/痛点**：
+  1. **P3-2 枚举缺 `none`**：真机常态就是 `adapter=none`，现在被折叠进 `unknown`，导致成本审计堆积假 unknown，M2 账本按 backend 聚合时会失真。
+  2. **P3-1 闸范围不足**：控制字符检查只扫包内，仓库根不在范围内；`AGENTS.md` 仍有 `0x0C`（@2907）。
+- **目标（可验收）**：
+  1. `backendKind` / `backend` 枚举增加 **`none`**；**实测 `none` 原样写入 `none`**，不再折叠成 `unknown`。
+  2. `mixed` 仍归 `unknown`，`backendLabel="mixed (unverified)"`，**不加 `inferenceKind`**（记 backlog）。
+  3. 控制字符闸扩到**仓库根**（含 `AGENTS.md`），排除 `.tmp/`、`node_modules/`、`.git/`；清掉 `AGENTS.md` 的 `0x0C@2907`。
+- **边界（不做什么）**：
+  - 不改功能逻辑（识别、保护、回注、压缩不动）；
+  - 不改 `auditVersion`（维持 `cost-v1.4`）；
+  - 不安装/不重启/不改 profile/不 push；
+  - **不纳入** backlog：P3-3（`mixed` 语义细化）、P3-4（闸入口形态）。
+- **验收标准**：
+  - ① 枚举**完整**：`host-basic` / `context-zip` / **`none`** / `unknown`；四种形态下 `backend === backendKind` 且**不含括号与空格**；
+  - ② **实测 none**：注入 `none` 实测 → `backend="none"`、`backendKind="none"`、`backendInferred=false`、`backendLabel` 不含 `(inferred)`；
+  - ③ **mixed**：`backend="unknown"`、`backendKind="unknown"`、`backendLabel="mixed (unverified)"`、`backendInferred=true`；
+  - ④ **无观察**：三个字段均为 `unknown`、`inferred=false`（不回归上单口径）；
+  - ⑤ **控制字符闸**：扫描范围含仓库根与 `AGENTS.md`，排除 `.tmp/`、`node_modules/`、`.git/`；`AGENTS.md` 无控制字符；**自证**（临时注入 → 看到 fail → 还原）；
+  - ⑥ 文档写明枚举含 `none`（T5/T8 同步）；
+  - ⑦ 全量测试通过；S1–S6 不回归。
+- **依赖/风险**：
+  - `none` 进入枚举后，下游若把 `none` 当“未知”处理需同步（文档标注）；
+  - `mixed` 仍映射 `unknown`，语义细化留 backlog。
+
+### 任务拆解
+
+见 `TASKS/REQ-20261025-08-0.1.17-拆解.md`。
