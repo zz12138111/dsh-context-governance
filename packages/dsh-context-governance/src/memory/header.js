@@ -64,11 +64,14 @@ export function registerMemoryHeader(ctx, store, options = {}) {
   try {
     ctx.on('agent/pre-step', async (payload, next) => {
       const decision = await next();
+      // 实测（M3 T0 探针）：next() 可能返回 undefined——必须原样返回；
+      // `{...undefined, messages}` 会造出没有 kind 的 decision，宿主读 decision.kind 直接崩。
+      if (decision === null || typeof decision !== 'object' || !('kind' in decision)) return decision;
       try {
         const session = payload?.agent?.session ?? null;
         const sessionId = typeof session?.id === 'string' ? session.id : null;
         if (sessionId === null || payload?.step !== 1 || seen.has(sessionId)) return decision;
-        if (decision?.kind === 'reject') return decision;
+        if (decision.kind === 'reject') return decision;
         const header = buildMemoryHeader(store, options);
         if (header === null) return decision;
         const messages = Array.isArray(decision?.messages) ? decision.messages : [];

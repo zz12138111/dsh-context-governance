@@ -234,6 +234,32 @@ test('S3b 默认关闭：未开启时不留行为（DSH 正常）', async () => 
   });
 });
 
+test('S3c next() 返回 undefined：header 必须原样返回，不得 fabricate decision（M3 T0 实测）', async () => {
+  await withStore(async (store) => {
+    await store.create({
+      type: 'preference',
+      title: '命名规则：插件包统一 dsh- 前缀',
+      detail: 'M3 T0 回归',
+      writer: 'user',
+      source: 'session:test#2',
+    });
+    const ctx = makeCtx();
+    const registration = registerMemoryHeader(ctx, store, { enabled: true });
+    assert.equal(registration.registered, true);
+    const handler = ctx.handlers.find((item) => item.event === 'agent/pre-step').handler;
+    const payload = { agent: { session: { id: 'session-undefined-decision' } }, step: 1 };
+    // 宿主 next() 可能没有其它监听者→undefined；把它当对象展开会让宿主读 decision.kind 崩溃。
+    const none = await handler(payload, async () => undefined);
+    assert.equal(none, undefined, 'next() 返回 undefined 时必须原样返回');
+    // 下一次拿到合法 decision 时仍能正常注入一次。
+    const base = { kind: 'accept', messages: [] };
+    const injected = await handler(payload, async () => base);
+    assert.equal(injected.kind, 'accept');
+    assert.equal(injected.messages.length, 1);
+    assert.equal(injected.messages[0].source.form, 'memory-header');
+  });
+});
+
 test('S4-A 自动压缩 5 类零丢失（可恢复、回注全 ID）', async () => {
   await withStore(async (store) => {
     const ctx = makeCtx();
