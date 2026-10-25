@@ -10,7 +10,8 @@ permissions:
 
 jobs:
   test-and-scan:
-    runs-on: ubuntu-latest
+    # 插件只支持 Windows（junction/路径/锁语义）；Linux runner 会因 Windows 路径测试失败
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
         with:
