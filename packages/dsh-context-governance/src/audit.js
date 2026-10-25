@@ -99,6 +99,7 @@ export const AUDIT_EVENTS = Object.freeze([
   'adapter-inferred',
   'policy-invalid',
   'policy-set',
+  'header-injected',
   'protection-write',
   'protection-write-failed',
   'protection-write-skipped',

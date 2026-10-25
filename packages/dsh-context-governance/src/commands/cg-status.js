@@ -346,9 +346,29 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
     definitionId: CG_COMMAND_DEFINITION_ID,
     name: CG_COMMAND_NAME,
     description: '上下文治理状态：后端/能力、策略链、记忆、上次压缩与回注、prune 成本、写盘 p50/p95、审计',
-    input: { hint: 'status | status last-cost | policy show | set <key>=<value> | set reset' },
+    input: { hint: 'status | status last-cost | policy show | set <key>=<value> | set reset | header on|off' },
     handler: async (invocation = {}) => {
       const raw = String(invocation.rawInput ?? '').trim();
+      if (raw === 'header' || raw.startsWith('header ')) {
+        if (policy === null || policy.sessionLayer === undefined) {
+          return { kind: 'error', text: '[context-governance] session layer is unavailable (policy not wired)' };
+        }
+        const sessionValues = policy.sessionLayer.values;
+        const arg = raw.slice('header'.length).trim();
+        if (arg === '' || arg === 'status') {
+          const enabled = sessionValues['header.enabled'] !== false;
+          return {
+            kind: 'success',
+            text: `context-governance header\nheader: ${enabled ? 'on' : 'off'} (source=${sessionValues['header.enabled'] === undefined ? 'config' : 'session'})`,
+          };
+        }
+        if (arg === 'on' || arg === 'off') {
+          sessionValues['header.enabled'] = arg === 'on';
+          audit?.append?.('policy-set', { source: 'session', key: 'header.enabled', value: arg });
+          return { kind: 'success', text: `context-governance header\nheader: ${arg} (source=session)` };
+        }
+        return { kind: 'error', text: 'Usage: /cg header [status|on|off]' };
+      }
       if (raw === 'set' || raw.startsWith('set ') || raw === 'reset') {
         try {
           return handleSet(raw === 'reset' ? 'reset' : raw.slice(3).trim());

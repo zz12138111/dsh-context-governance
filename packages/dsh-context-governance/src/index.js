@@ -52,9 +52,12 @@ export const DEFAULT_CONFIG = Object.freeze({
     maxFailures: 3,
   }),
   memoryHeader: Object.freeze({
-    enabled: false,
-    maxEntries: 5,
-    maxChars: 600,
+    // M3 T2（0.3.1）：默认开；`/cg header off`、项目/插件配置均可关。
+    enabled: true,
+    maxLines: 8,
+    maxChars: 800,
+    oldAgeDays: 14,
+    oldLimit: 30,
   }),
   /** P2-1：只处理本项目（cwd 匹配 projectRoot）会话的压缩事件。 */
   onlyProject: true,
@@ -147,11 +150,17 @@ export function resolveConfig(raw = {}) {
   if (typeof memoryHeader.enabled !== 'boolean') {
     throw new MemoryStoreError('CONFIG', 'memoryHeader.enabled must be a boolean');
   }
-  if (!Number.isInteger(memoryHeader.maxEntries) || memoryHeader.maxEntries < 1 || memoryHeader.maxEntries > 10) {
-    throw new MemoryStoreError('CONFIG', 'memoryHeader.maxEntries must be an integer in [1, 10]');
+  if (!Number.isInteger(memoryHeader.maxLines) || memoryHeader.maxLines < 1 || memoryHeader.maxLines > 20) {
+    throw new MemoryStoreError('CONFIG', 'memoryHeader.maxLines must be an integer in [1, 20]');
   }
   if (!Number.isInteger(memoryHeader.maxChars) || memoryHeader.maxChars < 120 || memoryHeader.maxChars > 2000) {
     throw new MemoryStoreError('CONFIG', 'memoryHeader.maxChars must be an integer in [120, 2000]');
+  }
+  if (!Number.isInteger(memoryHeader.oldAgeDays) || memoryHeader.oldAgeDays < 0 || memoryHeader.oldAgeDays > 365) {
+    throw new MemoryStoreError('CONFIG', 'memoryHeader.oldAgeDays must be an integer in [0, 365]');
+  }
+  if (!Number.isInteger(memoryHeader.oldLimit) || memoryHeader.oldLimit < 0 || memoryHeader.oldLimit > 100) {
+    throw new MemoryStoreError('CONFIG', 'memoryHeader.oldLimit must be an integer in [0, 100]');
   }
   if (typeof config.onlyProject !== 'boolean') throw new MemoryStoreError('CONFIG', 'onlyProject must be a boolean');
   if (typeof config.captureTitle !== 'boolean') throw new MemoryStoreError('CONFIG', 'captureTitle must be a boolean');
@@ -183,8 +192,10 @@ export function resolveConfig(raw = {}) {
     },
     memoryHeader: {
       enabled: memoryHeader.enabled,
-      maxEntries: memoryHeader.maxEntries,
+      maxLines: memoryHeader.maxLines,
       maxChars: memoryHeader.maxChars,
+      oldAgeDays: memoryHeader.oldAgeDays,
+      oldLimit: memoryHeader.oldLimit,
     },
     onlyProject: config.onlyProject,
     captureTitle: config.captureTitle,
@@ -417,13 +428,9 @@ export async function apply(ctx, rawConfig = {}) {
     `entries=${store.status.counts.active + store.status.counts.proposed} active/proposed`,
   );
   for (const warning of store.warnings) ctx.logger?.warn?.(`[context-governance] ${warning}`);
-  // S3（v0.1.5）：新会话记忆 header，默认关闭；开启后只注入一次/会话。
-  const header = registerMemoryHeader(ctx, store, config.memoryHeader);
-  if (header.registered) {
-    ctx.logger?.info?.('[context-governance] memory header enabled for new sessions (first step only)');
-  } else if (config.memoryHeader.enabled) {
-    ctx.logger?.warn?.(`[context-governance] memory header was not registered: ${header.reason}`);
-  }
+  // M3 T2（0.3.1）：新会话记忆 header 默认开；注册放在 guard 之后（窗口检查回调先入，保持 session/event 优先的顺序）。
+  const ruleFilePresent = ['AGENTS.md', 'CLAUDE.md']
+    .some((fileName) => fs.existsSync(path.join(config.projectRoot, fileName)));
   const storeReadOnlyReason = store.status.readOnlyReason;
   if (storeReadOnlyReason !== null) {
     // T6 只读降级：明确写原因；读与回注仍可用，压缩不被阻断。
@@ -570,6 +577,33 @@ export async function apply(ctx, rawConfig = {}) {
     };
     guard.onWindowChange(checkWindowViolations);
     checkWindowViolations();
+  }
+
+  // M3 T2（0.3.1）：新会话 header（默认开）。放在 guard 之后注册，保持 session/event 处理顺序稳定。
+  const header = registerMemoryHeader(ctx, store, {
+    enabled: config.memoryHeader.enabled,
+    isEnabled: () => config.memoryHeader.enabled && policyState.resolve().values['header.enabled'] !== false,
+    hasRuleFile: ruleFilePresent,
+    maxLines: config.memoryHeader.maxLines,
+    maxChars: config.memoryHeader.maxChars,
+    oldAgeDays: config.memoryHeader.oldAgeDays,
+    oldLimit: config.memoryHeader.oldLimit,
+    onInjected: (built) => {
+      guard?.auditLog?.append?.('header-injected', {
+        count: built.count,
+        lines: built.count,
+        mode: built.mode,
+        source: 'memory',
+        tokensInjected: Math.ceil(built.text.length / 4),
+      });
+    },
+  });
+  if (header.registered) {
+    ctx.logger?.info?.(
+      `[context-governance] memory header enabled for new sessions (first step only; rules=${ruleFilePresent ? 'present' : 'absent'})`,
+    );
+  } else if (config.memoryHeader.enabled) {
+    ctx.logger?.warn?.(`[context-governance] memory header was not registered: ${header.reason}`);
   }
 
   if (config.diagnostics.logFile !== '') {

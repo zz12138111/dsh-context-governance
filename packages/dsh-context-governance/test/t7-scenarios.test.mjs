@@ -224,8 +224,8 @@ test('S3 新会话 header 带偏好（opt-in，仅第一步一次）', async () 
   });
 });
 
-test('S3b 默认关闭：未开启时不留行为（DSH 正常）', async () => {
-  assert.equal(resolveConfig({}).memoryHeader.enabled, false);
+test('S3b 默认开（M3 T2）：显式 enabled=false 时不留行为', async () => {
+  assert.equal(resolveConfig({}).memoryHeader.enabled, true);
   await withStore(async (store) => {
     const ctx = makeCtx();
     const registration = registerMemoryHeader(ctx, store, { enabled: false });

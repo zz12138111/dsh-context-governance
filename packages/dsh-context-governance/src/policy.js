@@ -16,17 +16,19 @@ export const POLICY_DEFAULTS = Object.freeze({
   'compact.estimateSafety': 1.35,
   'compact.lowThresholdAck': false,
   'cost.remainingTurns': null,
+  'header.enabled': true,
 });
 
 export const POLICY_KEYS = Object.freeze(Object.keys(POLICY_DEFAULTS));
 
-/** 允许 `/cg set` 的键；其余只能从配置文件读。 */
+/** 允许 `/cg set` / `/cg header` 的键；其余只能从配置文件读。 */
 export const SESSION_KEYS = Object.freeze([
   'compact.at',
   'compact.early',
   'compact.cooldownMin',
   'compact.minDeltaTokens',
   'cost.remainingTurns',
+  'header.enabled',
 ]);
 
 export const CONFIG_ONLY_KEYS = Object.freeze([
@@ -186,6 +188,11 @@ export function validateLayer(raw, { source = 'builtin', native = NATIVE_DEFAULT
         break;
       }
       case 'compact.early': {
+        if (typeof value !== 'boolean') { invalid.push({ source, key, reason: 'not-boolean' }); break; }
+        values[key] = value;
+        break;
+      }
+      case 'header.enabled': {
         if (typeof value !== 'boolean') { invalid.push({ source, key, reason: 'not-boolean' }); break; }
         values[key] = value;
         break;
