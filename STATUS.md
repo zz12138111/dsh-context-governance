@@ -7,9 +7,9 @@
 
 | 会话 | 当前任务 | 状态 |
 |---|---|---|
-| 需求 | M1.1 T2′ 完成（0.1.12）；M1.2 冻结 0.1.11；0.1.13 已出单并离线完成；0.1.14 已出单并**开发已交付**（batch 比例同源修正：P2 + P3① + P3②，依 `DEC-20261025-46`）；M2 待真实压缩验证后评估 | 0.1.14 待复核 |
-| 开发 | **0.1.14 已加载**（batch 同消息绑定 + 日期排除 + 正文比例保留；junction 指向源码，21:18 重启生效，非开发执行）；0.1.12 已完成首次真实手动压缩验证；未 push | 待审核 |
-| 审核打包 | 0.1.12 复核已出：0 阻断 / 0 P2 / 6 P3；0.1.13 复核已出（0 阻断）；**0.1.14 待复核** | 待复核 |
+| 需求 | M2 首批 REQ-20261025-09 已出正式单（含 0.2.0 验收与项目层 A+C 口径，`cc33a2a`）；等 0.2.0 复核结论 | 待复核 |
+| 开发 | **0.2.0 已交付**（策略层/项目层/压力四段/`/cg set`/文档；234/234，`e6d859b` + docs）；未 push、未安装未重启 | 待审核 |
+| 审核打包 | 0.1.x 复核链已出至 0.1.18（0 阻断）；**0.2.0 待复核**（含 DEC-20261025-60 六项与 62 A+C 对照） | 待复核 |
 
 ## 进度
 
@@ -26,11 +26,11 @@
 - **M1.1 收口（2026-10-25，T2=A）**：B2 显示宿主 pruner 在压缩点已覆盖全部 >8k；49 会话统计白名单可折上限仅 15.3%，红线 `pwsh`+`read` 占 71.0% → **不做早折、不做 spill、不做批量测量**；M1.1 改为只做 **T2′ prune 观测与成本接入**（`compaction-cost` 增 `tokensPruned`/`pruneCount`/`pruneTools`，`auditVersion=cost-v1.2`）；**0.1.12 = T2′ + 0.1.11 复核 6 条 P3**。范围变更已改单：`REQUIREMENTS.md` REQ-20261025-02、`TASKS/REQ-20261025-02-M1.1-拆解.md`；账本 `DEC-20261025-37`/`ART-20261025-19`、`DEC-20261025-38`/`ART-20261025-20`。
 - **M1.1 T2′（v0.1.12）**：离线完成，只读观测宿主 `compaction/prune`：`prune-observed`（工具名按替换 `callId` 反查 `tool/call`，未知记 `unknown`；同 `shadowedRange` 去重；`cycle=current/outside`）；`compaction-cost` 增 `tokensPruned`(measured/null)/`pruneCount`/`pruneTools`(top5)，`auditVersion=cost-v1.2`；`/cg status [last-cost]` 显示 `pruned=<tokens> tools=<top5>`。生产代码零折叠/spill，T1 实验只在 `analysis/t1/`。记录 `analysis/t2prime/T2prime-交付记录.md`。
 - **0.1.12 P3 收口（6 条）**：P3-1 `ctx.inject` 返回 Fiber → `stop()` 调 `fiber.dispose()`（修实现）；P3-2 T5 文档同步 `last-cost`；P3-3 T8 文档 `cost-v1.2`；P3-4/5 文档写明成本行延迟；P3-6 读方按 `cost-v1` 前缀匹配 + 测试。另 3 条（tokenGuard 源码不可复核、baseline 时间闸、其余小项）不改。
-- **测试**：全量 **196/196 通过**（`node --test "test/*.test.mjs"`；0.1.13 为 189；**0.1.14 新增 7 条**：`2/6`/`183/183`/仅`8000/1500` 三种 skip+reason、`批次 8000/1500` 正例、`2026/10` 日期排除、`{511/958}` 保留、`protection-skip(no-batch-semantics)` 审计且无 `manual-compaction-loss`）。
+- **测试**：全量 **234/234 通过**（`node --test "test/*.test.mjs"`；0.1.14 为 196；0.1.15 202；0.1.17 205；0.1.16 204；0.1.18 218；**0.2.0 收口 +16**：经 apply 集成①/①b、项目层 A+C 三拒、路径逃逸/64KB、`/cg set`×3、压力四段×3、guard.pressure、层级链、computePressure×2）。
 - **真机**：已安装（deps 14 / bundles 17 / redirect 0.1.0-context-zip / junction 已建）。v0.1.6 已验证工具/感知/审计；**v0.1.14 已于 21:18 重启加载**（`governance capability@apply version=0.1.14`、`get.compaction(strict=false)=undefined`）；v0.1.12 于 20:46 首次真实手动压缩验证 `auditVersion=cost-v1.2`（`tokensBefore=407146`/`tokensAfter=3525`、`tokensPruned=null`、`pruneCount=0`——手动 `compactNow` 不调 pruner）；**`prune-observed` 正路径仍未验**，需自动压力/溢出压缩。
 - **T6/T7/T8**：均离线完成；真机验收项列在“下一步”。
 - **M1.3 原生后端验证（REQ-20261025-06，2026-10-25）**：隔离 profile `native-test`（web 模板、无 context-zip/redirect，端口 18765，已停）实跑——**D1-1 不通过**（原生下 `adapter=none`，根因 preset `isolate`；功能不受影响）；**D1-2/D1-4 通过**；**D1-3 手动链路通过、自动压力未触发**（≈678K tokens，记 backlog 等自然触发）；D1-5 隔离证据齐全。**0.1.15 已修**（`inferBackendFromStyles`：free-form→`host-basic (inferred)`、five-section→`context-zip (inferred)`、混合→`mixed (unverified)`；只进 `/cg status`/`adapter-inferred` 审计/`compaction-cost.backend`，新增 `backendInferred`，`auditVersion=cost-v1.3`；功能路径不读推断）；隔离实例复验 `/cg status` 显示 `adapter=none inferred=host-basic (inferred)`，全量 **202/202**。报告 `analysis/req-20261025-06/`；未安装/未重启桌面、未 push。
-- **M2 首批（REQ-20261025-09）**：**G1 通过**——agent 级 `agentPresets.serviceFor(agent,'compaction')=object`（引擎可取；`agentPresets` 约 2s 晚挂载；根级 `ctx.get('compaction')` 仍 absent 不阻塞）；G2/G3 仍部分，是 0.2.1 前置。**0.2.0 进行中**：策略核心 `8275fb4`（四层/校验/native/profile early=false）、接线 `c6563d1`（`/cg policy show` + status policy 行 + policy-invalid 审计）、项目 `.cg-policy.json` `87134cd`；**剩余** ① runtime 压力四段（measured/estimated/adjusted/effective+ratio）② `/cg set` 会话层 ③ T5/README 文档 + 样例复核。全量 **218/218**；未安装/未重启/未 push。报告 `analysis/req-20261025-09/T0-门禁报告.md`；审核 `DEC-20261025-60` 待判（early 命名/fixture 标注/单一来源/晚挂载是否误带进 0.2.0）。
+- **M2 首批（REQ-20261025-09）**：**G1 通过**——agent 级 `agentPresets.serviceFor(agent,'compaction')=object`（引擎可取；`agentPresets` 约 2s 晚挂载；根级 `ctx.get('compaction')` 仍 absent 不阻塞）；G2/G3 仍部分，是 0.2.1 前置。**0.2.0 已交付**（commit `8275fb4`→`c6563d1`→`9a380ea`→`87134cd`→**`e6d859b`**）：四层合成（内置/profile/插件/项目/会话）、`/cg policy show`、`/cg set` 会话覆盖、`/cg status` 的 `policy`/`policy-invalid`/`policy-session`/`pressure` 行、压力四段（usage 实测 vs tokenMeter 估算 ×safety，只展示）、项目文件按不可信输入加固（禁 `lowThresholdAck`/`estimateSafety`、`at≥0.45`、整层拒绝、路径 containment、64KB 上限）；审核 `DEC-20261025-60` 六项全部修复（apply 真接线 + 集成测试、invalid 可见、fixture 标注、空层标注、`early=ready` 清零）。全量 **234/234**；未安装/未重启/未 push。报告 `analysis/req-20261025-09/0.2.0-交付报告.md`、样例 `analysis/req-20261025-09/samples-0.2.0.txt`、门禁 `T0-门禁报告.md`；**待审**：复核 0.2.0；**待决**：G4（窗口/native 来源，0.2.1 动工前须给一句）。
 - **0.1.18（发布前收口）**：`/cg status` 改用 `backend-kind=`（实测 none 显示 none，与成本行同一 `resolveBackendFields`；推断时附 `backend-label=`）；控制字符闸改用 `git ls-files`（tracked **163 files / 0 violations**）；文档补 AGENTS.md 第 4 处（0x0C 吃 `feat/` 的 f）；全量测试见下；未安装/未重启/未 push。
 - **0.1.17（REQ-20261025-07 P3 收口）**：`backend`/`backendKind` 枚举补 `none`（实测 none 不折叠；unknown 才 unknown；mixed 仍 unknown+label），`auditVersion` 仍 `cost-v1.4`；控制字符闸扩到仓库根（排除 `.tmp`/`node_modules`/`.git`，`AGENTS.md` 0x0C 已清，扫描 **174 files / 0 violations**）；全量 **205/205**；未安装/未重启/未 push。
 - **0.1.16（REQ-20261025-07）**：README 控制字符（0x08/0x07）已清 + 防复发测试（包内文本禁 C0/DEL，自证注入→fail）；`compaction-cost` 拆 `backend`(枚举)/`backendKind`/`backendLabel`/`backendInferred`，`auditVersion=cost-v1.4`；`/cg status` 用 `backend-label=`；全量 **204/204**；未安装/未重启/未 push。
@@ -65,11 +65,8 @@ M1 成本“前后水位未知”原按降级接受，2026-10-25 复查为插件
 
 ## 下一步
 
-1. 0.1.12 真机：20:46 首次真实手动压缩已验证 `cost-v1.2`（`tokensBefore/After` 非 null、`tokensPruned=null`/`pruneCount=0`）与 `/cg status` 的 `pruned=0 tools=-`；**`prune-observed` 只有自动压力/溢出压缩才出现**（宿主 `compactNow` 不调 pruner，与审核结论一致），等自然触发或审核离线回放，不催用户压缩。
-2. 用户按 `docs/T7-只读降级人工验证.md` 跑一次只读演练（制造不可写根 → read-only → 恢复）。
-3. S3 header 默认关闭；要启用需用户拍板改 `memoryHeader.enabled`。
-4. 审核打包独立复核 **0.1.14**（batch 同消息绑定 + 日期排除 + 正文比例保留；真实快照 A/B）；0.1.12/0.1.13 复核已出（0 阻断），00 转用户验收。
-5. T2′ 已实现；审核复核时**必须核对“生产代码无折叠”**（`packages/` 内无 fold/spill/`[cg-fold]`/`fold.*`；证据 `analysis/t2prime/zero-fold-grep.txt`）。
-6. **`ctx.compaction` 已结案**：`get.compaction(strict=false)` 在 `@apply`(13:18:10Z) 与 `@ready`(13:18:23Z) 均 `undefined` → 本部署未提供该服务 → **「回注时点修正」不可行**，不再作为 P1 待查前提；`get.tokenMeter=obj` 稳定，M1.2 延迟获取无问题。M2 待 M1.2 验收后评估。
-7. **0.1.13（`REQ-20261025-04`）**：batch 假阳性真修（只看用户/助手消息、`ratios=[]` → `skip`、补 `x/y` 回归）+ `get.compaction` strict=false 归因；不改折叠/回注、`auditVersion` 维持 `cost-v1.2`。**已交付 + 复核已出（0 阻断）**（189/189；报告 `analysis/req-20261025-04/`）；其 batch 判据已被 0.1.14 取代。
-8. **0.1.14（`REQ-20261025-05`）**：batch 比例**同源修正**——P2 严格同消息绑定（`user`/`assistant` 正文都须带 `批次|进度|progress|batch` 关键字，无关键字 → `skip(no-batch-semantics)`，依 `DEC-20261025-46`）、P3① `YYYY/MM`（19xx/20xx + 1–12）排除、P3② 正文比例不被 `stripStructuredPayload` 吞（只剥含引号/冒号的 JSON 块）；验收四例逐一 + 三列对照（含“无关键字 → 必须 skip”反例）。P3③/④/⑤ 不纳入。**开发已交付**（196/196；报告 `analysis/req-20261025-05/`，真实快照 `snapshot-11509.json` + `replay-real.mjs`）；**已于 21:18 重启加载**，待审核复核；未 push。
+1. **审核复核 0.2.0**（`e6d859b` + 本轮 docs）：重点核对 ① 经 apply 的集成测试（真机链路等价）、② 项目层 A+C（整层拒绝/0.45 下限/路径与 64KB 闸）、压力四段只展示不压缩、`/cg set` 为**进程内**覆盖（0.2.0 不宣称按会话隔离）、`early=ready` 残留清零、`src/` 无 `agentPresets|serviceFor|compactNow`。
+2. **G4（窗口/native 来源）**：0.2.1 动工前必须给一句结论（当前 0.2.0 用 `policy.windowTokens/reservedTokens` 配置值算 native；需求建议在 G3 里试 `sessionProjections.contextPressure`）。
+3. **0.2.1 范围（未动工）**：`agentPresets.serviceFor(agent,'compaction')` 引擎接线、`early-channel`、冷却/增量门槛的实际判定；等 G4 + 0.2.0 复核通过。
+4. **真机安装/重启 0.2.0**：桌面实例仍 0.1.18（junction 指向源码），按红线需 00+用户批准后由用户执行；重启后验证 `/cg status` 的 `policy:`/`pressure:` 行、`/cg set compact.at=…`、项目 `.cg-policy.json` 生效与 `policy-invalid:` 可见性。
+5. 0.1.x 复核链已全部出结果（最新 `docs/review-context-governance-0.1.18.md`，0 阻断）；无遗留待复核版本。

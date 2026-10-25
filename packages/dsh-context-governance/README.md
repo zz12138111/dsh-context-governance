@@ -3,7 +3,7 @@
 上下文治理插件（DSH / DeepSeek Harness）。M1 目标：**压缩前后不断线**——任务态记忆落项目文件，压缩后只回注 ID/状态/指针，详情按需取。
 
 > 版本：**以 `package.json` 为唯一来源**（本文与代码都不再重复版本号；启动行/审计里的 version 由运行时读取）。
-> 当前进度：**T2–T8 + M1.2 + T2′ 离线完成**——记忆文件与契约、`mem_write`/`mem_query`、压缩适配与保护校验、压缩前固化与回注、`/cg status` 与审计正式化、故障注入/轮转/只读降级、S1–S6 验收场景 + 真实自动/手动压缩双样本回放 + 回注自愈 + 成本归属审计（T8）；M1.2 增加 `capability@apply/@ready`、`tokenMeter` 延迟获取、usage 兜底与 `cost-v1.1` 来源字段；T2′ 增加宿主 `compaction/prune` 观测与 `cost-v1.2` 成本视图（不折叠、不落盘）；**全部测试通过（数量见 `node --test` 输出）**。
+> 当前进度：**T2–T8 + M1.2 + T2′ 离线完成**——记忆文件与契约、`mem_write`/`mem_query`、压缩适配与保护校验、压缩前固化与回注、`/cg status` 与审计正式化、故障注入/轮转/只读降级、S1–S6 验收场景 + 真实自动/手动压缩双样本回放 + 回注自愈 + 成本归属审计（T8）；M1.2 增加 `capability@apply/@ready`、`tokenMeter` 延迟获取、usage 兜底与 `cost-v1.1` 来源字段；T2′ 增加宿主 `compaction/prune` 观测与 `cost-v1.2` 成本视图（不折叠、不落盘）；**M2 0.2.0 策略层**——四层配置合成（内置/profile/插件/项目 `.cg-policy.json`/会话）、`/cg policy show`、`/cg set` 会话覆盖、`/cg status` 的 `policy`/`policy-invalid`/`pressure` 行、项目文件按不可信输入加固（A+C 口径）；**全部测试通过（数量见 `node --test` 输出）**。
 > 真机：已安装（junction 指向源码目录）；最近一次真机验证记录见 `memory/ARTIFACTS.md`，待验收项见 `STATUS.md`（本文不写具体版本/数字）。S3 新会话 header 默认关闭，需用户拍板后再开。
 > 安装方式：`docs/插件安装升级-Runbook.md`（`file:` 声明 + junction + bundle；不用 pnpm）。本机已按该方式安装（junction 指向源码），其它机器按 Runbook 操作。
 
@@ -38,7 +38,8 @@ packages/dsh-context-governance/
 │  │  ├─ protection-memory.js  5 类保护项 → 标题+指针
 │  │  ├─ selection.js          冲突检测 + 模式/降级
 │  │  └─ runtime.js            CompressionGuard（start 固化 / end 回注 / 写盘耗时）
-│  ├─ commands/cg-status.js    `/cg status`
+│  ├─ policy.js                M2 策略层：四层合成/校验/native/压力四段（纯函数）
+│  ├─ commands/cg-status.js    `/cg status`、`/cg policy show`、`/cg set`
 │  └─ tools/mem-tools.js       mem_write / mem_query
 ├─ test/                       node:test（数量见运行输出；含真实压缩双样本 fixture）
 ├─ cordis.patch.yml            bundle patch（本机安装 config）
@@ -76,6 +77,22 @@ packages/dsh-context-governance/
 - 0.1.16：成本字段拆分——`backend`/`backendKind` 只写枚举（`host-basic`/`context-zip`/`unknown`，不含括号/空格），展示串移到 `backendLabel`，推断补位由 `backendInferred` 标记，`auditVersion=cost-v1.4`；`/cg status` 用 `backend-label=`；包内文本文件禁止控制字符（有测试闸）。0.1.17：`backend`/`backendKind` 枚举补 `none`（实测 none 不折叠）；控制字符闸扩到仓库根（排除 `.tmp`/`node_modules`/`.git`）。
 - 0.1.18：`/cg status` 改用 `backend-kind=`（实测 none 显示 none，与成本行一致；推断时另附 `backend-label=`）。注意 `adapter=` 是实测 kind，`backend-kind=` 是解析结果——无推断时相同、推断补位时不同；`backend=` 仍指宿主/后端版本。控制字符闸改用 `git ls-files` 只扫 tracked 文件。
 
+## 策略层（M2 / 0.2.0）
+
+**0.2.0 只做“什么时候压可控、压了值不值能算”的配置与状态层**：不提前压、不调用宿主引擎、不接管 provider（引擎接线是 0.2.1）。
+
+- 合成顺序（低 → 高）：**内置 → profile 标签 → 插件配置 → 项目 `.cg-policy.json` → 会话 `/cg set`**；`/cg policy show` 逐键给出 `source`，`layers:` 链里空层标 `(empty)`。
+- `compact.at` 是**占窗口比例**（默认 0.60），上限是动态 `native = floor(min(W×0.8, W−O−65536))/W`（1M 窗口 + 256k 预留 ≈ 0.6785）；`at > native` 拒绝并说明“M2 不支持推迟”。`at < 0.30` 需配置文件 `compact.lowThresholdAck=true`，否则回退内置值并记 `low-threshold-unacked`。
+- `compact.early` 是**纯配置 `on|off`**（默认 on；`research` profile 默认 off）；“引擎通道是否可取到”留给 0.2.1 的 `early-channel`，0.2.0 没有任何引擎接线。
+- 项目文件 `.cg-policy.json` 按**不可信输入**处理（`DEC-20261025-62` A+C）：
+  - 只允许项目内相对路径（绝对路径/`..` 拒绝），containment 复核，>64KB 不读；
+  - **禁** `compact.lowThresholdAck` / `compact.estimateSafety`（`project-denied`），`compact.at` 下限 **0.45**（`below-min`），上限 `native`；
+  - 任一键被拒 → **整层拒绝**（不逐键降级）→ 退回下一层；`source=project` + 键 + 原因进 `policy-invalid` 审计，并在 `/cg status` 的 `policy-invalid:` 行可见。
+- 压力四段（只展示，不据此压缩）：`measured`（最近 `assistant/message.usage` 的 input+cacheRead+cacheWrite 占窗口）、`estimated`（`tokenMeter` 估算）、`adjusted = estimated × estimateSafety`、`effective = max(measured, adjusted)`；`ratio = measured/estimated` 用来判断估算是否偏低。任一来源缺失写 `-`，不伪造。
+- `/cg set <key>=<value>` / `/cg set reset`：写会话层（最高优先级）。只允许 `compact.at`/`compact.early`/`compact.cooldownMin`/`compact.minDeltaTokens`/`cost.remainingTurns`；`estimateSafety`/`lowThresholdAck` 明确拒绝（只能改配置文件）。覆盖是**进程内**的，重启即失效。
+
+样例输出（带 fixture 头）见 `../../analysis/req-20261025-09/samples-0.2.0.txt`；完整口径见 `../../docs/T5-状态命令与审计.md` §1.1–§1.3。
+
 ## 配置（bundle patch）
 
 ```yaml
@@ -97,6 +114,13 @@ config:
     enabled: false                    # S3：新会话注入偏好/决定 header（opt-in，默认关）
     maxEntries: 5
     maxChars: 600
+  policy:                             # M2 / 0.2.0 策略层
+    profile: ""                       # batch | coding | research | review（空 = 不打标）
+    windowTokens: 1000000             # 窗口；native 上限据此计算
+    reservedTokens: 256000            # 输出预留；native = floor(min(W*0.8, W-O-65536))/W
+    projectFile: ".cg-policy.json"    # 只允许项目内相对路径；>64KB 不读
+    values: {}                        # 插件层（最高配置优先级，低于会话 /cg set）
+    # 例：values: {"compact.at": 0.58, "compact.early": false}
 ```
 
 配置非法 → 插件不加载（DSH 继续默认行为）。`compression.enabled=false` 时只注册记忆工具，不订阅压缩事件。
@@ -119,7 +143,7 @@ cd packages/dsh-context-governance
 node --test "test/*.test.mjs"
 ```
 
-运行 `node --test "test/*.test.mjs"`；**全部通过**（数量以输出为准）。覆盖字段/状态/并发/外部修改/锁/损坏/敏感信息/工具/宿主 schema 子集/适配器/保护/运行时/项目归属/隐私开关/固化/回注/审计/轮转/只读/能力探测/S1–S6/真实自动+手动序列回放/版本单一来源。
+运行 `node --test "test/*.test.mjs"`；**全部通过**（数量以输出为准）。覆盖字段/状态/并发/外部修改/锁/损坏/敏感信息/工具/宿主 schema 子集/适配器/保护/运行时/项目归属/隐私开关/固化/回注/审计/轮转/只读/能力探测/S1–S6/真实自动+手动序列回放/版本单一来源，以及 0.2.0 策略链（四层来源、项目层整层拒绝、路径/大小闸、压力四段、`/cg set` 覆盖与回滚、经 apply 的集成）。
 
 ## 设计约束（与架构一致）
 
