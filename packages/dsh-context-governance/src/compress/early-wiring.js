@@ -70,6 +70,7 @@ export function wireEarlyCompaction(options = {}) {
     getArmed = () => false,
     audit = null,
     logger = null,
+    onDecision = null,
     now = () => Date.now(),
     schedule = (fn, ms) => setTimeout(fn, ms),
     cooldownMs = EARLY_COOLDOWN_MS,
@@ -79,6 +80,15 @@ export function wireEarlyCompaction(options = {}) {
   const state = new Map();
   const timers = new Set();
   const armedNow = () => getArmed() === true;
+  let lastDecision = null;
+  const record = (entry) => {
+    lastDecision = entry;
+    try {
+      onDecision?.(entry);
+    } catch {
+      /* 观测回调失败不影响主流程 */
+    }
+  };
 
   async function check(session) {
     // armed=false：完全静默（不审计、不取服务）——接线 ≠ 触发。
@@ -134,6 +144,7 @@ export function wireEarlyCompaction(options = {}) {
 
     if (decision.action !== EARLY_DECISION.FORCE) {
       audit?.append?.('early-skipped', { sessionId, reason: decision.reason, effective, threshold: at, native });
+      record({ event: 'early-skipped', reason: decision.reason, effective, time: new Date(nowMs).toISOString() });
       return;
     }
 
@@ -173,6 +184,13 @@ export function wireEarlyCompaction(options = {}) {
     if (result.accepted === true) audit?.append?.('early-forced', fields);
     else if (result.reason === 'busy') audit?.append?.('early-aborted', fields);
     else audit?.append?.('early-failed', fields);
+    record({
+      event: result.accepted === true ? 'early-forced' : (result.reason === 'busy' ? 'early-aborted' : 'early-failed'),
+      reason: result.reason ?? null,
+      accepted: result.accepted === true,
+      effective,
+      time: new Date(nowMs).toISOString(),
+    });
   }
 
   const dispose = typeof ctx?.on === 'function'
@@ -192,6 +210,7 @@ export function wireEarlyCompaction(options = {}) {
 
   return {
     check,
+    getLast: () => lastDecision,
     stop() {
       for (const timer of timers) clearTimeout(timer);
       timers.clear();

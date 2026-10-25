@@ -81,6 +81,8 @@ test('0.2.2 接线：armed=true + 压力在位 → early-decision + early-forced
   assert.deepEqual(forced.failures, ['latest-user-message']);
   assert.equal(forced.reinjected, true);
   assert.equal(forced.delayMs, EARLY_DELAY_MS);
+  assert.equal(wiring.getLast().event, 'early-forced');
+  assert.equal(wiring.getLast().accepted, true);
 });
 
 test('0.2.2 接线：accepted 但无新报告 → protection=null（不得回退 ok）', async () => {
@@ -140,6 +142,8 @@ test('0.2.2 接线：低于 at → early-skipped(below-threshold)，不调用', 
   assert.deepEqual(audit.entries.map((entry) => entry.event), ['early-decision', 'early-skipped']);
   assert.equal(audit.entries[1].reason, 'below-threshold');
   assert.equal(engine.calls, 0);
+  assert.equal(wiring.getLast().event, 'early-skipped');
+  assert.equal(wiring.getLast().reason, 'below-threshold');
 });
 
 test('0.2.2 接线：冷却期内不重复压（cooldown）', async () => {

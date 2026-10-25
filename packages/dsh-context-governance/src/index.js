@@ -683,6 +683,7 @@ export async function apply(ctx, rawConfig = {}) {
     audit: guard?.auditLog ?? null,
     policy: policyState,
     logger: ctx.logger,
+    getEarlyStatus: () => (earlyWiring === null ? null : earlyWiring.getLast()),
   };
   const commandRef = { current: registerStatusCommand(ctx, commandOptions) };
   const retryStatusCommand = () => {

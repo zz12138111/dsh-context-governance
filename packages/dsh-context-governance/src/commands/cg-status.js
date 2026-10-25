@@ -57,7 +57,16 @@ function rejectedSessionKeys(resolved) {
   return keys;
 }
 
-function statusText({ store, guard, audit, now, policy = null }) {
+function formatEarlyStatus(earlyStatus) {
+  if (earlyStatus === null || earlyStatus === undefined) return 'last-early: none';
+  const event = String(earlyStatus.event ?? '').replace(/^early-/, '');
+  const reason = typeof earlyStatus.reason === 'string' && earlyStatus.reason !== '' ? ` (${earlyStatus.reason})` : '';
+  const effective = Number.isFinite(earlyStatus.effective) ? ` effective=${Number(earlyStatus.effective).toFixed(3)}` : '';
+  const at = typeof earlyStatus.time === 'string' ? ` at=${earlyStatus.time}` : '';
+  return `last-early: ${event}${reason}${effective}${at}`;
+}
+
+function statusText({ store, guard, audit, now, policy = null, earlyStatus = null }) {
   const lines = [];
   const status = guard?.status ?? null;
   lines.push('context-governance status');
@@ -74,6 +83,7 @@ function statusText({ store, guard, audit, now, policy = null }) {
     const overrides = formatSession(policy.sessionLayer?.values, rejectedSessionKeys(resolvedPolicy));
     if (overrides !== 'none') lines.push(`policy-session: ${overrides}`);
   }
+  lines.push(formatEarlyStatus(earlyStatus));
   if (status === null) {
     lines.push('compression: disabled (observer not mounted)');
   } else {
@@ -194,7 +204,7 @@ function statusText({ store, guard, audit, now, policy = null }) {
  *
  * @param {{store?:object|null, guard?:object|null, getGuard?:() => object|null, audit?:object|null, now?:() => Date}} options
  */
-export function createStatusCommand({ store = null, guard = null, getGuard = null, audit = null, policy = null, now = () => new Date(), logger = null } = {}) {
+export function createStatusCommand({ store = null, guard = null, getGuard = null, audit = null, policy = null, now = () => new Date(), logger = null, getEarlyStatus = null } = {}) {
   const currentGuard = () => (typeof getGuard === 'function' ? getGuard() : guard);
 
   const parseBoolean = (text) => {
@@ -452,7 +462,14 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
       try {
         return {
           kind: 'success',
-          text: statusText({ store, guard: currentGuard(), audit, now, policy }),
+          text: statusText({
+            store,
+            guard: currentGuard(),
+            audit,
+            now,
+            policy,
+            earlyStatus: typeof getEarlyStatus === 'function' ? getEarlyStatus() : null,
+          }),
         };
       } catch (error) {
         return {
