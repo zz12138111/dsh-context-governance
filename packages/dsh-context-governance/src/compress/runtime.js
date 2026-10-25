@@ -169,7 +169,9 @@ export class CompressionGuard {
     starts: 0,
     summaries: 0,
     ends: 0,
-    failures: 0,
+    compactionFailures: 0,
+    protectionFailures: 0,
+    observerErrors: 0,
     skipped: 0,
     lateSnapshots: 0,
     protectionWrites: 0,
@@ -1102,6 +1104,11 @@ export class CompressionGuard {
   #record(report, state) {
     const enriched = {
       ...report,
+      // 0.2.2（DEC-20261025-86）：ok 三处混用拆分——compaction 与 protection 两个正交字段。
+      // compactNow/事务到达 end 才 record：有 start 就是 committed；start 未观测（插件中途挂载）为 skipped。
+      compaction: state === null ? 'skipped' : 'committed',
+      protection: report.ok === false ? 'failed' : 'ok',
+      reinjected: null,
       startedAt: state?.snapshot?.capturedAt ?? null,
       lateSnapshot: state?.lateSnapshot === true,
       protectionWrite: state?.protectionWrite ?? 'not-attempted',
@@ -1109,8 +1116,8 @@ export class CompressionGuard {
     };
     this.#reports.push(enriched);
     if (this.#reports.length > MAX_REPORTS) this.#reports.shift();
-    if (enriched.ok === false) {
-      this.#stats.failures += 1;
+    if (enriched.protection === 'failed') {
+      this.#stats.protectionFailures += 1;
       this.#logger?.warn?.(
         `[context-governance] compaction protection failed (${enriched.failures.length}): ` +
         enriched.failures.map((failure) => `${failure.name}: ${failure.detail}`).join('; '),
@@ -1400,6 +1407,7 @@ export class CompressionGuard {
       });
       if (state.report !== undefined) {
         state.report.reinjection = state.reinjection;
+        state.report.reinjected = true;
       }
     } catch (error) {
       state.reinjection = { status: 'failed', reason: String(error?.message ?? error).slice(0, 200) };
@@ -1412,7 +1420,10 @@ export class CompressionGuard {
         count: this.#reinjectionFailureStreak,
       });
       this.#logger?.warn?.(`[context-governance] reinjection failed: ${String(error?.message ?? error)}`);
-      if (state.report !== undefined) state.report.reinjection = state.reinjection;
+      if (state.report !== undefined) {
+        state.report.reinjection = state.reinjection;
+        state.report.reinjected = false;
+      }
     }
   }
 
@@ -1769,7 +1780,7 @@ export class CompressionGuard {
         default:
       }
     } catch (error) {
-      this.#stats.failures += 1;
+      this.#stats.observerErrors += 1;
       this.#logger?.warn?.(`[context-governance] compaction observer error: ${String(error?.message ?? error)}`);
     }
   }

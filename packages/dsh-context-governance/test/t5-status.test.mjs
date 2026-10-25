@@ -140,7 +140,7 @@ test('/cg status：输出后端/模式/降级/记忆/上次压缩与回注/写�
     assert.match(result.text, /context-governance status/);
     assert.match(result.text, /mode=full adapter=context-zip/);
     assert.match(result.text, /p50=1ms p95=4ms max=5ms/);
-    assert.match(result.text, /last-compaction: id=12345678 manual=false ok=true/);
+    assert.match(result.text, /last-compaction: id=12345678 manual=false compaction=committed protection=ok/);
     assert.match(result.text, /last-reinjection: status=injected seq=200 lines=3/);
     assert.match(result.text, /memory: project=demo/);
     assert.match(result.text, /audit: file=D:\/demo\/memory\/audit\.jsonl max=8388608 size=1234 rotations=2 recentFailures=reinjection-failed/);

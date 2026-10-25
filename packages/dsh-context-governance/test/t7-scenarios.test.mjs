@@ -269,7 +269,8 @@ test('S4-A 自动压缩 5 类零丢失（可恢复、回注全 ID）', async () 
     const session = liveSession(built);
     runCycle(ctx, session, built);
     await flush();
-    assert.equal(guard.status.lastReport.ok, true, 'S4-A 失败：自动压缩保护有失败项');
+    assert.equal(guard.status.lastReport.protection, 'ok', 'S4-A 失败：自动压缩保护有失败项');
+    assert.equal(guard.status.lastReport.reinjected, true, 'S4-A 失败：回注字段应为 true');
     const [injected] = injectedOf(session);
     assert.ok(injected, 'S4-A 失败：没有回注');
     const text = injected.data.content.map((block) => block.text).join('\n');

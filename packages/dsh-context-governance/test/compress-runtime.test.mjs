@@ -66,7 +66,8 @@ test('宿主默认：完整压缩事务产生 full 模式与通过报告', () =>
   assert.equal(status.stats.starts, 1);
   assert.equal(status.stats.summaries, 1);
   assert.equal(status.stats.ends, 1);
-  assert.equal(status.lastReport.ok, true, JSON.stringify(status.lastReport.failures));
+  assert.equal(status.lastReport.protection, 'ok', JSON.stringify(status.lastReport.failures));
+  assert.equal(status.lastReport.compaction, 'committed');
   assert.equal(status.lastReport.lateSnapshot, false);
   assert.equal(guard.reports().length, 1);
   assert.equal(ctx.logs.some(([level]) => level === 'warn' && String(level).includes('protection')), false);
@@ -81,7 +82,7 @@ test('context-zip：识别五段摘要并保持 full', () => {
   const built = buildCompaction({ before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 11 });
   emitAll(ctx, built);
   assert.equal(guard.adapter.summary.style, 'five-section');
-  assert.equal(guard.status.lastReport.ok, true);
+  assert.equal(guard.status.lastReport.protection, 'ok');
   assert.equal(guard.status.adapter.selfCheck.state, 'pass');
 });
 
@@ -92,8 +93,11 @@ test('保护失败：报告 fail、写 warn，但不向宿主抛错', () => {
   const built = buildCompaction({ before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 13 });
   assert.doesNotThrow(() => emitAll(ctx, built));
   const report = guard.status.lastReport;
-  assert.equal(report.ok, false);
+  assert.equal(report.protection, 'failed');
+  assert.equal(report.compaction, 'committed');
   assert.ok(report.failures.some((failure) => failure.name === 'latest-user-message'));
+  assert.equal(guard.status.stats.protectionFailures, 1);
+  assert.equal(guard.status.stats.compactionFailures, 0);
   assert.ok(ctx.logs.some(([level, message]) => level === 'warn' && String(message).includes('protection failed')));
 });
 
@@ -112,7 +116,7 @@ test('插件在压缩事务中途挂上：用 summary 时补快照并标 lateSna
   handler(built.session, endEvent);
   const report = guard.status.lastReport;
   assert.equal(report.lateSnapshot, true);
-  assert.equal(report.ok, true, JSON.stringify(report.failures));
+  assert.equal(report.protection, 'ok', JSON.stringify(report.failures));
 });
 
 test('没有 compaction 服务：走事件级感知（event-level），不抛错', () => {
@@ -133,7 +137,8 @@ test('畸形事件被忽略而不是抛错', () => {
   assert.doesNotThrow(() => handler(null, null));
   assert.doesNotThrow(() => handler({ surface: {} }, { type: 'compaction/summary', data: null }));
   assert.equal(guard.status.stats.events, 2);
-  assert.equal(guard.status.stats.failures, 0);
+  assert.equal(guard.status.stats.protectionFailures, 0);
+  assert.equal(guard.status.stats.compactionFailures, 0);
 });
 
 test('两个会话的压缩事务互不串报告', () => {
@@ -163,7 +168,7 @@ test('两个会话的压缩事务互不串报告', () => {
   handler(b.session, endB);
   assert.equal(guard.reports().length, 2);
   assert.equal(guard.status.stats.pending, 0);
-  assert.ok(guard.reports().every((report) => report.ok));
+  assert.ok(guard.reports().every((report) => report.protection === 'ok'));
 });
 
 test('stop 幂等且释放订阅', () => {

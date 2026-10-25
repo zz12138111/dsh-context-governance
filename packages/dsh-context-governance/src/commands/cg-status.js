@@ -122,7 +122,9 @@ function statusText({ store, guard, audit, now, policy = null }) {
     else {
       lines.push(
         `last-compaction: id=${String(last.compactionId ?? '?').slice(0, 8)} manual=${last.manual === true} ` +
-        `ok=${last.ok === true} shadowed=${last.shadowedSeqs?.length ?? 0} ` +
+        `compaction=${last.compaction ?? (last.skipped === true ? 'skipped' : 'committed')} ` +
+        `protection=${last.protection ?? (last.ok === false ? 'failed' : 'ok')} ` +
+        `shadowed=${last.shadowedSeqs?.length ?? 0} ` +
         `checkpoint=${last.checkpointSeq ?? '-'} failures=${last.failures?.map((failure) => failure.name).join(',') || 'none'}`,
       );
       const reinjection = last.reinjection;
