@@ -20,12 +20,11 @@ export const EARLY_SKIP_REASONS = Object.freeze({
 
 /** G2：CompactNow 抛错形态识别（不依赖具体错误类，宿主可能跨包实例化）。
  *
- * G2-B 真机实测（2026-10-26）：宿主 busy 形态为
- * `ManualCompactionError: manual compaction requires an idle agent with no waking queued work`，
- * 且 `code` 可能为小写 `busy`。旧三条件（busy 文案 / `code==='BUSY'` / `not idle|busy`+compaction）
- * 全部不命中 → 会被误映射为 `failed`。这里补：
- * - `code` 大小写不敏感；
- * - `ManualCompactionError` 且 message 含 `idle`（命中 “requires an idle agent”）。
+ * 宿主有两条 busy 路径，文案不同（审核 2026-10-26 指出）：
+ * - idle 检查（G2-B 真机实测）：`ManualCompactionError: manual compaction requires an idle agent with no waking queued work`，
+ *   `code` 可能为小写 `busy`；
+ * - 同步 busy 拒绝（源码审计，无真机）：`runMaintenance` 抛 `Error('agent "<id>" already has active work')`，**无 idle/busy/code**。
+ * 旧三条件（busy 文案 / `code==='BUSY'` / `not idle|busy`+compaction）两句都不命中 → 都映射成 `failed`。
  */
 export function isBusyCompactionError(error) {
   if (error === null || typeof error !== 'object') return false;
@@ -33,7 +32,7 @@ export function isBusyCompactionError(error) {
   const code = String(error.code ?? '');
   const message = String(error.message ?? '');
   return (name === 'ManualCompactionError' && /busy/i.test(message))
-    || (name === 'ManualCompactionError' && /\bidle\b/i.test(message))
+    || /(already has active work|requires an idle agent|no waking queued work)/i.test(message)
     || code.toLowerCase() === 'busy'
     || (/not\s+idle|busy/i.test(message) && /compaction/i.test(message));
 }

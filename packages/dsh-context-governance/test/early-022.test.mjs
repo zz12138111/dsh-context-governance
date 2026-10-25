@@ -118,6 +118,23 @@ test('0.2.2 升级判据：protection 失败不升级，compaction 失败/回注
   assert.equal(shouldEscalateEarly({ compaction: 'committed', protection: 'ok', reinjected: false }), true);
 });
 
+test('0.2.2 P3-1 第二句：同步 busy 文案 already has active work → busy（无 idle/code）', async () => {
+  const syncError = new Error('agent "agent-7" already has active work');
+  assert.equal(isBusyCompactionError(syncError), true, '同步路径（无 code/idle）必须命中');
+
+  const engine = {
+    async compactNow() {
+      throw new Error('agent "agent-7" already has active work');
+    },
+  };
+  const compactor = new EarlyCompactor({ getEngine: () => engine, armed: true });
+  const result = await compactor.attempt({ turnEnded: true, agentIdle: true });
+  assert.deepEqual(result, { accepted: false, reason: EARLY_SKIP_REASONS.BUSY });
+
+  const unrelated = new Error('agent has active work but not compaction');
+  assert.equal(isBusyCompactionError(unrelated), false, '缺少 already/requires idle 文案时仍归 failed');
+});
+
 test('0.2.2 ask/deny 语义：pre-execute 决策形状正确', () => {
   assert.deepEqual(preExecuteAsk(), { kind: 'ask', reason: 'context-governance requires confirmation' });
   assert.deepEqual(preExecuteDeny('rm -rf outside whitelist'), { kind: 'deny', reason: 'rm -rf outside whitelist' });
