@@ -87,3 +87,29 @@ node --test "test/*.test.mjs"          # 290/290 pass
 ## 6. 边界
 
 本复核**不判**“0.2.2 能不能开开关”：按当前代码，armed=false 时行为安全；armed=true 且用真引擎时，P2-1/P2-2 会让最该防的 busy 场景漏掉。开关是否打开属用户决策，本文只给上述证据。
+
+## 7. 复验（`64c6d93`，2026-10-26 02:05）
+
+修复提交：`64c6d93`（5 files）。实测 **292/292 pass**（原 290 + 扫描回归 2）。
+
+| 原问题 | 修复 | 复验结论 |
+|---|---|---|
+| **P2-1** 同步 `attempt()` 漏捕异步 busy/失败 | `attempt()` 改 `async` + `await engine.compactNow(...)`（`early.js:62,72`）；单测 fake 改 async reject | **成立**：busy/failed 都能从异步阶段进 catch；返回类型已是 `Promise` |
+| **P2-2** 传 session、宿主收 agent | 参数改 `{agent, signal, sourceCommandId}`（`early.js:62`），原样透传三参（`:72`） | **成立**：单测断言三参 identity（`calls[0].agent/signal/sourceCommandId`） |
+
+### 7.1 重点核“无 unhandled”是否真断言
+
+- **测试体没有显式断言**：`early-022.test.mjs` 的 busy 用例标题写“不 unhandled”，但正文只有 `await attempt()` + 断言结果，**没有 `process.on('unhandledRejection')`、也没有 `setImmediate` 冲刷**。
+- **间接保证成立**（我实测）：`node --test` 对未处理拒绝会判失败（探针：`Promise.reject` 未处理 → 测试 ✖、exit 1）。且 busy 用例断言 `ok=false`——若有人删掉 `await`，结果会变 `{ok:true}`，**行为断言先失败**。所以回归能被抓住，只是不靠那句标题。
+- 建议（低优先）：补 `process.on('unhandledRejection')` + `setImmediate` 的显式断言，或把标题改成“被 await 捕获；漏 await 时行为断言+运行器双保险”，避免标题名不副实。
+
+### 7.2 重点核 signal 是否真来自调用方
+
+- `early.js` 全文 grep：**无 `AbortController`**，`signal` 只出现在参数（`:62`）与透传（`:72`）。
+- 单测用 `new AbortController().signal` 传入并断言 `calls[0].signal === signal`（identity）→ 没有骨架自造信号、也就不会“永远不取消”。
+- 小边界：`signal` 默认 `null`，真引擎首行 `signal.throwIfAborted()` 会 TypeError → 被捕获成 `failed`（fail-safe，不误压）；建议接线时把 signal 设为必传并在注释里写明。
+
+### 7.3 仍未修（沿用本报告 §4，不是本次回归）
+
+- **P3-1**：`runMaintenance` 的同步 busy 文案 `already has active work` 仍未被 `isBusyCompactionError` 识别 → 会映射 `failed` 而非 `busy`。
+- **P3-2**：`getEngine()` 仍在 `try` 外，访问器抛错会外泄给调用方。

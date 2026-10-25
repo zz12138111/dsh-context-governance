@@ -150,3 +150,32 @@ node scripts/memory-cleanup.mjs                 # DRY-RUN targets=7（不写）
 # copy memory/governance → .tmp/cleanup-test，删 .writer.json
 # node scripts/memory-cleanup.mjs --root .tmp/cleanup-test --apply --backup-dir .tmp/cleanup-bak
 ```
+
+## 7. 复验（`64c6d93`，2026-10-26 02:05）
+
+### 7.1 扫描 P2-1：整行判定 → 按匹配串
+
+- 代码：`historicalFp` 改为对 `m[0]`（命中串本身）判定（`scripts/compliance-scan.mjs:116-118`）。
+- **我独立构造四例复验**（临时 git 仓库，非仅跑开发者测试）：
+
+| 构造（`docs/review-probe.md`） | 结果 | 判定 |
+|---|---|---|
+| `格式示例 ghp_/sk-，实际 token ghp_AAA…`（同线） | **blocker=1** | 洞已闭合 ✔ |
+| `hunter2 演示，真实 key sk-proj…`（同线） | **blocker=1** | 洞已闭合 ✔ |
+| 纯样例：`raw 凭据形态（ghp_/sk-/…password=/api_key=） \| 0 \| 0` | blocker=0 / review=0 / **info=1** | 仍降级且可见 ✔ |
+| 真赋值：`password = RealSecret123`（无白名单串） | **review=1** | 未被误降 ✔ |
+
+- 回归测试：`test/compliance-scan-p21.test.mjs` 两个用例（同线真 token→blocker、纯样例→无 blocker），随全量 **292/292** 通过。
+- **全仓扫描**：`blocker=0 review=0 info=85`（215 文本文件）。相对上轮 `80/212` 的 +5 来自新增文件（我两份复核报告里的 session id + 新测试文件），**不是白名单漂移**。
+- **原 6 条降级仍在 info 明细**：逐条 grep 到 T5:174、0.1.7:44/:128、脚本 :13/:88/:90，口径未漂 ✔
+- 残留（新增 P3）：`selfRegexLiteral` 仍是**行级**判定（`line` 含 `RegExp|\b|\w|[^` 就降），只限 `contract.js` 与扫描脚本两个自述文件；真 token 落在含正则字面量的行上仍会被降 info。风险低，建议同样改成按 `m[0]` 或干脆去掉。
+
+### 7.2 cleanup P3：`writer==='rule'` + writable 预检
+
+- **writer 过滤**：副本里注入一条 `writer: model` 的 active progress 条目 → DRY-RUN 仍 `targets=7`（未把 model 条目当噪音）✔
+- **writable 预检**：副本保留 `.writer.json`（模拟 DSH 运行中）→ `无法写入记忆库：writer-lock:10076…请先退出/重启 DSH`、**exit 2、未生成备份目录** ✔
+- **无锁副本 --apply**：`applied=7`、`active 16 -> 9`（16 = 15 + 注入的 model 条目）✔，备份仍先于写。
+
+### 7.3 结论
+
+P2-1（扫描）与 P3-2/P3-3（cleanup）修复有效；6 条降级口径未漂；新增一条 P3（`selfRegexLiteral` 行级判定，仅自述文件）。
