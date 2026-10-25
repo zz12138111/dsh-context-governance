@@ -60,16 +60,22 @@ G4 材料随 **`e12d08a`** 提交（“docs: G4 结论落档”）；本记录�
 | ④ | **性能**：`stateOf` 会 `materializeCells(session)` | 每次 status/判定取一次并缓存，不按事件调用；live 引用只读不改（已写入 `DEC-PLUGIN-20261025-40`） | 接受 |
 | ⑤ | **W 取值防御**：host state 由 apply 写入原始值 | `Number.isInteger(W) && W > 0`，否则回退并标 reason（已写入 `DEC-PLUGIN-20261025-40`） | 接受；建议回退时把 reason 进状态行/审计（补充建议） |
 
-### 3.1 追加边界（⑥）：`W ≤ O + 65536` 时 `nativeRatio` 退化，会让 ④ 的验收用例失效
+### 3.1 追加边界（⑥）：`W ≤ O + 65536` 时公式退化（**已定 A：拒绝，不造数**）
 
-- 现行 `nativeRatio`（`src/policy.js`）：`tokens = floor(min(W×0.8, W−O−65536))`；**`tokens <= 0` 时返回 `NATIVE_DEFAULT_RATIO = 0.6785`**——这是一个**常数假设值，不是“native 不可算”**。
-- 例：另一会话 `W=131072`（128k）、`O=policy.reservedTokens=256000` → `W−O−65536 < 0` → `native=0.6785`。
-- 后果：保守值 `min(0.6934, 0.6785) = 0.6785` 被抬高；`compact.at=0.6` 会被判**合法**，与需求 ④ 验收“构造 1M+128k 用例：`at=0.6` 在保守值下**被拒或降级**”的期望**相反**；状态还会显示一个与真实窗口无关的 native。
-- 建议（决策归需求/开发）：该分支改为 **native 不可算（null/unknown）**，校验侧按“未经校验”处理；或另定 `O'` 的钳制公式（例如 `O'=min(O, W−65536−ε)`）。**不要把 fallback 常数当有效 native**。这条不阻塞 0.2.1 开工，但 ④ 的用例要先定公式才能写。
+- 现行 `nativeRatio`（`src/policy.js` 的配置回退函数）：`tokens = floor(min(W×0.8, W−O−65536))`；**`tokens <= 0` 时返回 `NATIVE_DEFAULT_RATIO = 0.6785`**——一个**常数假设值**。若把这个分支用到“观测窗口”上，就等于**造数冒充 native**。
+- 例：另一会话 `W=131072`（128k）、`O=policy.reservedTokens=256000` → `W−O−65536 < 0` → 会得到 `native=0.6785`。
+- 后果：保守值 `min(0.6934, 0.6785) = 0.6785` 被抬高；`compact.at=0.6` 会被判**合法**，与需求 ④ 验收“1M+128k、`at=0.6` 应被拒/降级”的期望**相反**，且状态会显示与真实窗口无关的 native。
+- **决策（`DEC-20261025-68`，需求 `ac08001`，选 A）**：
+  1. `W ≤ O+65536` → **`native = unknown (degenerate)`**，禁止常数 0.6785 冒充；
+  2. 该值无法校验 `at ≤ native`：**设置 `compact.at` 的层一律拒绝（含会话层）**，审计 `policy-invalid(reason=native-uncomputable)`；
+  3. 已生效的继承值标 **`unverified-degenerate`**；**0.2.2 提前压不得触发**（`effective < native` 无法成立）；
+  4. `/cg status` 显示 `native=unknown (degenerate: W=128k O=256k)`；W 恢复 → 自动恢复可校验状态；
+  5. 用例改写：**128k + `at=0.6` → 被拒（不是降级）**，优先于“1M+128k 双会话”的退化分支。
+- **两个状态必须分开（验收重点）**：**无观察**（还没收到任何窗口）→ 允许设 `at`、标“未经校验”；**退化**（收到窗口但 `W ≤ O+65536`）→ **拒绝设置** + `native-uncomputable`。若实现把两者合并成一个“不可校验”，验收时必须用两组用例分别抓。
 
 **补充建议（不单列为边界）**：`/cg status` 的 `window=` 标注除 `(projection)` / `(config-fallback)` 外，把回退原因（服务 absent / key 未注册 / 无 `contextWindow` / 值非法）写进审计或日志，便于复盘。
 
-**落地状态（复核后跟进）**：④性能与⑤W 防御已写入 `DEC-PLUGIN-20261025-40`；①②③ 已由需求在 `8a8de91` 定稿并记 `DEC-20261025-66`（原 `ART-20261025-70` 待定项已关闭）。**新增 ⑥ 公式退化（§3.1）尚未定**——它直接影响需求 ④ 里“1M+128k、`at=0.6` 应被拒/降级”的验收用例，建议 0.2.1 动工前先给公式口径。
+**落地状态（复核后跟进）**：④性能与⑤W 防御已写入 `DEC-PLUGIN-20261025-40`；①②③ 已由需求在 `8a8de91` 定稿并记 `DEC-20261025-66`（原 `ART-20261025-70` 待定项已关闭）；**⑥ 已定 A（`DEC-20261025-68` / `ac08001`）**，验收用例按本节 5 条执行。
 
 ## 4. Q2：0.2.0 行为影响（进 0.2.1 变更说明）
 
@@ -97,7 +103,8 @@ G4 材料随 **`e12d08a`** 提交（“docs: G4 结论落档”）；本记录�
 - [ ] 多会话/多模型：展示用 `#lastSession`，取到别项目会话 = fail；两条不同 W 的会话各自读数正确
 - [ ] W 中途变化/删除后，`native` 与四段同步变化并可辨识（不沿用 apply 时的值）；删除后显示 `window=unknown (removed by request/context)`；再观察自动恢复并记 `observedAt`
 - [ ] 无观察时允许设 `at` 且标“未经校验”；运行时 `at>native` → 拒层 + 审计（不静默降级）
-- [ ] **§3.1 公式退化**：W ≤ O+65536（如 128k + O=256k）不得返回常数 0.6785 冒充 native；需求 ④ 的“1M+128k、at=0.6 被拒/降级”用例需随公式口径一起定
+- [ ] **⑥ 退化（A）**：`W ≤ O+65536` → `native=unknown (degenerate)`，**不得返回 0.6785**；设 `at` 的层（含会话层）**拒绝**并写 `policy-invalid(reason=native-uncomputable)`；继承值标 `unverified-degenerate`；`/cg status` 显示 `native=unknown (degenerate: W=128k O=256k)`；W 恢复后自动恢复可校验；**128k+`at=0.6` 用例=被拒**
+- [ ] **⑥ 两状态不合并**：无观察 → 允许设 `at` + “未经校验”；退化 → 拒绝设置 + `native-uncomputable`。两组用例分别造，合并成一个“不可校验”即 fail
 - [ ] `stateOf` 每次 status 至多一次、不按事件；不修改返回对象
 - [ ] W 非整数/≤0 → 回退且可辨识
 - [ ] 文档/样本数字更新；变更说明写清 native 0.6785→0.6934 与比例分母变化
