@@ -17,7 +17,7 @@
 
 ## 1. 结论摘要
 
-- **阻断（P1）：0**；**应修（P2）：0**（P2-1/P2-2 于 `2f7e528`/`90ca44b` 复验通过）；**建议（P3）：11**（原 8 条 + 复验新增 3 条）。
+- **阻断（P1）：0**；**应修（P2）：1**（新 P2-3：P3-11 修复引入的陈旧 invalid/审计跨 episode 丢失；P2-1/P2-2 仍闭环）；**建议（P3）：7**（原 11 条中 P3-5/9/10/11 已闭环）。
 - 六条验收 **4 条完全成立、1 条部分（⑥ 的审计子项）、1 条报告证据不完整**；十项清单里 **⑩ 数字更新未做**（详见 §4）。
 - 代码检索与 spy 双证：**本版没有任何压缩调用路径**（我用自己的全量 pattern + 3 个真实 API 名 spy 复核，0 次）。
 
@@ -128,3 +128,35 @@ node .tmp/probe-021.mjs           # 审核侧探针 8/8（.tmp 已 gitignore）
 | **P3-11** | `index.js` `/cg set` 退化拒绝路径 | 退化时 `/cg set compact.at` 报错但不写 `policy-invalid`（实测） | 若 DEC-68 的“设置即审计”覆盖命令路径则补审计；否则在 T5 写明“审计只记录运行时已生效层的拒绝” |
 
 **复验结论**：**P2 清零**（P2-1 三处一致、P2-2 数字与历史边界成立）；samples 的两条新 P3 与原有 P3 一起进入下一批。
+
+## 10. 第二批复验（2026-10-26 01:2x，`2ffa711`/`ed11699`/`4f1409c`）
+
+**基线**：HEAD `4f1409c` 快照；全量 **252/252** ✔；独立探针 `.tmp/probe-021-p311.mjs`（另含样本字节级核对）。
+
+### ① samples 恢复 + 拆分：**通过**
+- `samples-0.2.0.txt` 与 `23dffaf` 版**逐字节一致**：我独立算 SHA-256 = `956B988C439C26AA0DAB0B49261519A92371F5A04DB19AFE747F856B061DCF4B`（两侧一致）；`git hash-object` = `0b77ffde…` = `git rev-parse 23dffaf:<path>` ✔
+- 第 55–71 行抽查：确实是 `lowThresholdAck` 拒绝 fixture，`review-0.2.0` 的行号引用重新有效 ✔
+- 新 `samples-0.2.1.txt`：0.2.1 形态（`window:` 行、`native=0.6934`），`events=42` 与 window/pressure 自洽，首行标注 mock/fixture 且“数字与 T5 同一组” ✔
+- 引用：`T5`、`README`、交付报告已改指新文件（`ed11699`）✔
+
+### ② 数字统一：**通过**
+- `T5:43` 与 `samples-0.2.1.txt:11` **逐字相同**：`measured=0.556 estimated=0.393 adjusted=0.531(×1.35) effective=0.556 ratio=1.41 window=1M (session 58a2e845)`
+- 旧 `0.530`/`ratio=1.42` 在当前事实文档中已无残留 ✔
+- 历史文件仍未改（`review-*`、`需求草案-*`、`DECISIONS`、`REQUIREMENTS`）✔
+
+### ③ P3-11（设置即审计）：主行为通过，**但引入 P2-3**
+- 退化（W=128k/O=256k）下 `set compact.at=0.5`：error + audit **恰 1 条**（`source=session`/`code=compact.at`/`reason=native-uncomputable`）+ warn + status 可见 ✔
+- 成功路径对照：同状态 `set compact.early=off` → success、只写 `policy-set`、`policy-invalid` 不增加 ✔（未误审）
+- **P2-3（新）**：拒绝条目被 `push` 进 `policyState.invalid` 且**永不清除**：
+  1. 窗口恢复（1M）后 `/cg status` 仍显示 `policy-invalid: 1 (session/compact.at:native-uncomputable)`，`resolve()` 也仍带该条——**违反“W 恢复自动恢复可校验”**
+  2. 恢复后再次退化，`set` 拒绝**不再写审计**（`alreadyReported` 读到旧条目；实测新增 0 条），审计跨 episode 永久丢事件
+- 修法建议：**不要 push 进 `policyState.invalid`**；用独立的 transient 记录“本 episode 已审计”，窗口恢复时清空；status 若要展示拒绝，用独立字段或随之清除。去重按“episode/用户动作”，不要按“进程内永久的 source|key|reason”。
+
+### P3-5 已闭环（顺带确认）
+`2f7e528` 已把证据 pattern 补全为 `compactNow|compactIfNeeded|compactRegion|ctx\.compaction|serviceFor|agentPresets`，`zero-compaction-grep.txt` 10 行、含 `adapters.js:266`；交付报告 §1 行 6 已更新 → **P3-5 关闭**。
+
+**当前计数**：P1=0 / **P2=1（新 P2-3）** / **P3=7 条**（原 11 条中 P3-5、P3-9、P3-10、P3-11 已闭环；P3-11 的回归转入 P2-3）。
+
+### 对“剩余 P3 随 0.2.1 还是 0.2.2”的建议
+- **随 0.2.1 收（6 条）**：P3-1（压力行 fallback 标注）、P3-2（`policy-session` 显示被拒覆盖）、P3-3（生效 at 超 conservative 的提示）、P3-6（非法 window 值不显示 removed）、P3-7（审计去重 Set 清理，**与 P2-3 一起做最省**）、P3-8（无观察 vs 配置退化的文档口径）——均为显示/审计/文档级，不碰引擎，回归面小。
+- **拆到 0.2.2（1 条）**：P3-4（`conservative` 全历史 min 的过期语义）——需要先定口径（TTL / `session/end` 清理 / 仅按“活跃会话”），且 0.2.2 才有执行面；0.2.1 先在文档写明“当前为全历史 min”即可。
