@@ -54,3 +54,6 @@
 - 2026-10-25 · T8-1 自愈（v0.1.8）：回注失败不再永久 `#disableReinjection`；每次失败写 `reinjection-failed(count=连续次数)`，连续 `maxFailures`（默认 3）才写 `reinjection-degraded` 并只暂停下一周期保护写；降级周期用既有记忆指针回注，成功写 `reinjection-recovered`、清计数、恢复 full；`/cg status` 显示 `reinjection=enabled(streak=N)`/`suspended(N/max)`。测试：新增 T8-1 自愈 + 更新 T4-5/S4-F
 - 2026-10-25 · T8-2 成本归属（v0.1.8）：每周期一条 `compaction-cost`（compactionId 主键；sessionId/project/backend/model/trigger/occurredAt；tokensBefore/After 用宿主 tokenMeter；tokensShadowed/tokensSummary/backendUsage 用压缩事件 usage；tokensInjected 字符估算标 estimated；tokensDropped 来自 reinjection-shadowed；backendCostSource/governanceCostSource + estimateMethod + auditVersion=cost-v1）；审计白名单新增字段，`backendUsage` 只收五个 token 数值，仍不含正文/路径
 - 2026-10-25 · 全量测试 **166/166**（新增 T8 成本 4 条 + 自愈 1 条；0.1.7 的其余行为保留）
+- 2026-10-25 · 三轮复核 P2（v0.1.9）：fixture 改**结构白名单**（`analysis/t7/structure.mjs`）——只保留 type/seq/time/枚举/数值/id 引用/source.kind/shadowedRange/usage；content/stream/texts/args/meta/summary 整段占位；重生成两份 fixture（58 KB/55 KB），scan strings=566/544、violations=0（单串/join/join-tight/raw），新增“结构字段无空白散文”断言；回放全过
+- 2026-10-25 · 三轮复核 P3-1/P3-2：commands 晚挂载时 `/cg status` 通过 `ctx.inject(['commands'], retry)` 或下个 tick 重试一次（新增晚挂载测试）；`reinjection-shadowed` 判定在 shadowedSeqs 缺失时用 shadowedRange 兜底（新增 range 测试）
+- 2026-10-25 · 全量测试 **168/168**（T8 166 + commands 晚挂载 + shadowedRange 兜底）

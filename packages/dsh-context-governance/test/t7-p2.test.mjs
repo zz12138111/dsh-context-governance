@@ -163,3 +163,35 @@ test('SPEC-05：commands 不再是硬 inject；缺命令服务仍 apply，只跳
     await fs.rm(rootDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }).catch(() => {});
   }
 });
+
+test('P3-1：commands 晚挂载时 /cg status 重试一次后注册成功', async () => {
+  const rootDir = await tempDir();
+  const warnings = [];
+  const disposers = [];
+  const registeredCommands = [];
+  let injectCallback = null;
+  let commandsService = null;
+  const ctx = {
+    tools: { register: () => {} },
+    logger: { info: () => {}, warn: (...args) => warnings.push(args.join(' ')) },
+    get(name) { return name === 'commands' ? commandsService : undefined; },
+    effect: (callback) => { disposers.push(callback()); },
+    inject(deps, callback) {
+      injectCallback = { deps, callback };
+      return () => {};
+    },
+  };
+  try {
+    await apply(ctx, { projectRoot: rootDir, project: 'test-project', compression: { enabled: false } });
+    assert.ok(warnings.some((warning) => warning.includes('/cg status was not registered')));
+    assert.deepEqual(injectCallback.deps, ['commands']);
+    assert.equal(registeredCommands.length, 0, 'commands 未挂载前不应注册');
+
+    commandsService = { register: (definition) => { registeredCommands.push(definition.name); } };
+    injectCallback.callback();
+    assert.deepEqual(registeredCommands, ['cg'], '晚挂载后应注册 cg 命令');
+  } finally {
+    for (const dispose of disposers) await dispose();
+    await fs.rm(rootDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }).catch(() => {});
+  }
+});

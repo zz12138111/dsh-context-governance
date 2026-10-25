@@ -186,3 +186,16 @@
 - 选择：`compaction/end` 后回注 microtask 之后写一条 `compaction-cost`；tokensBefore/After 用宿主 `tokenMeter.measure()`（取不到为 null + unknown）；tokensShadowed/tokensSummary/backendUsage 用压缩事件 usage（measured）；tokensInjected 用字符 `ceil(chars/4)`（estimated，method `chars/4`）；tokensDropped 由 `reinjection-shadowed` 的注入估算累加；审计白名单加字段、`backendUsage` 只保留五个 token 数值，仍走 8 类凭据脱敏、不写正文/路径。
 - 影响：`/cg status` 不含成本明细（审计文件可查）；实测与估算不混算；金额由外部按单价换算。
 - 关联：`src/compress/runtime.js`、`src/audit.js`、`test/t8-cost.test.mjs`、`docs/T8-回注自愈与成本归属.md`；状态：active。
+## DEC-PLUGIN-20261025-25 [tech] 回放 fixture 改结构白名单，正文载体整段占位
+
+- 背景：三轮复核指出“模式命中式脱敏”仍保留英文正文/工具参数（auto 835、manual 32 条 ≥30 字符），按序拼 stream/args 可还原内容；DEC-16 的“无正文”不成立。
+- 选择：新增 `analysis/t7/structure.mjs` 白名单——事件只保留 type/seq/time、枚举、数值、id 引用、source.kind、shadowedRange/usage；`content`/`message.content` 变成单块占位，`stream`/`texts`/`args`/`meta`/`summary`/`rawOutput`/`lines` 整段 `[redacted:<key>]`，未知键丢弃；生成后再跑递归兜底；T7-R2 增加“结构字段不得含空白散文”断言。
+- 影响：fixture 从 571/475 KB 降到 58/55 KB；scan violations=0；回放断言全过；后续新增 fixture 必须走 `structure.mjs`。
+- 关联：`analysis/t7/structure.mjs`、`analysis/t7/extract-replay-fixture.mjs`、`test/t7-replay.test.mjs`；状态：active。
+
+## DEC-PLUGIN-20261025-26 [tech] commands 晚挂载重试 + shadowedRange 兜底
+
+- 背景：SPEC-05 把 commands 移出 inject 后，晚挂载会导致 `/cg status` 静默缺失；`reinjection-shadowed` 只看 shadowedSeqs，缺数组时漏判。
+- 选择：首次注册失败时优先 `ctx.inject(['commands'], retry)`，否则下个 tick `setTimeout` 重试一次；重试成功写 info、dispose 最终 handler。回注被吞判定改为 `shadowedSeqs.includes(seq) || seq ∈ shadowedRange`。
+- 影响：晚挂载可恢复命令；缺 shadowedSeqs 的宿主也能记回注被吞与 tokensDropped。
+- 关联：`src/index.js`、`src/compress/runtime.js`、`test/t7-p2.test.mjs`、`test/t8-cost.test.mjs`；状态：active。

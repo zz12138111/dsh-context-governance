@@ -302,18 +302,40 @@ export async function apply(ctx, rawConfig = {}) {
   }
 
   // T5：/cg status（只读；不依赖压缩服务是否可用）。
-  const command = registerStatusCommand(ctx, {
+  // P3-1（三轮复核）：commands 可能在治理插件之后挂载——首次失败不静默，`ctx.inject` 或下个 tick 重试一次。
+  const commandOptions = {
     store,
     getGuard: () => guard,
     audit: guard?.auditLog ?? null,
-  });
-  if (!command.registered) {
-    ctx.logger?.warn?.(`[context-governance] /cg status was not registered: ${command.reason}`);
+  };
+  const commandRef = { current: registerStatusCommand(ctx, commandOptions) };
+  const retryStatusCommand = () => {
+    if (commandRef.current.registered) return;
+    const retried = registerStatusCommand(ctx, commandOptions);
+    if (retried.registered) {
+      commandRef.current = retried;
+      ctx.logger?.info?.('[context-governance] /cg status registered after commands became available');
+    }
+  };
+  if (!commandRef.current.registered) {
+    ctx.logger?.warn?.(
+      `[context-governance] /cg status was not registered: ${commandRef.current.reason}; ` +
+      'will retry once when the commands service becomes available',
+    );
+    if (typeof ctx.inject === 'function') {
+      try {
+        ctx.inject(['commands'], retryStatusCommand);
+      } catch {
+        setTimeout(retryStatusCommand, 0);
+      }
+    } else {
+      setTimeout(retryStatusCommand, 0);
+    }
   }
 
   if (typeof ctx.effect === 'function') {
     ctx.effect(() => async () => {
-      command.dispose?.();
+      commandRef.current.dispose?.();
       guard?.stop();
       await store.close();
     }, 'context-governance cleanup');

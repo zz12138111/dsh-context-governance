@@ -133,6 +133,11 @@ test('T7-R2 fixture 已脱敏：递归所有字符串 + join 整串 都无 CJK/�
       assert.equal(pattern.test(joined), false, `${path.basename(file)} join 后出现 ${label}`);
       assert.equal(pattern.test(joinedTight), false, `${path.basename(file)} join-tight 后出现 ${label}`);
     }
+    // 结构白名单：preMessages/events 里不允许出现带空白的“句子/命令/正文”（meta 说明除外）。
+    for (const { trail, value } of collectStrings(fixture)) {
+      if (!trail.startsWith('$.preMessages') && !trail.startsWith('$.events')) continue;
+      assert.equal(/\s/.test(value), false, `${path.basename(file)} 结构字段里出现正文/命令：${trail} = ${value.slice(0, 60)}`);
+    }
     // 审核点名的真实会话 id / 工作区路径不得出现（raw 文本复检）
     const raw = await fs.readFile(file, 'utf8');
     for (const needle of ['session-53ece2c2', '19091', 'DS-PROJECT', 'AGENTS.md']) {

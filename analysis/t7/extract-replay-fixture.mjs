@@ -14,6 +14,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
+import { structureEvent } from './structure.mjs';
 
 const MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
 
@@ -98,7 +99,8 @@ function decodeZstdFrames(buffer) {
 }
 
 function redactEvent(event) {
-  return sanitizeDeep({ type: event.type, seq: event.seq, time: event.time, data: event.data ?? {} });
+  // P2（三轮复核）：先按结构白名单裁剪，再用 sanitizeDeep 兜底；正文载体整段占位。
+  return sanitizeDeep(structureEvent(event));
 }
 
 function main() {

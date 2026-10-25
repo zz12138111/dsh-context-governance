@@ -224,3 +224,39 @@ test('T8-2 tokensDropped：下一次压缩 shadow 掉回注时计入成本', asy
     guard.stop();
   });
 });
+
+test('P3-2 shadowedSeqs 缺失时用 shadowedRange 兜底判定回注被吞', async () => {
+  await withStore(async (store) => {
+    const ctx = makeCtx({ meterNodes: 10 });
+    const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.2', store, logger: ctx.logger });
+    guard.start();
+    const built = buildCompaction({ before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 11 });
+    const session = liveSession(built);
+    runCycle(ctx, session, built);
+    await flush();
+    const [injected] = session.appended;
+    assert.ok(injected);
+
+    const built2 = buildCompaction({
+      compactionId: 'cmp-range',
+      startSeq: 300,
+      summarySeq: 301,
+      checkpointSeq: 302,
+      endSeq: 303,
+      before: healthyMessages(),
+      summary: FIVE_SECTION_SUMMARY,
+      start: 2,
+      end: 11,
+      shadowedSeqs: [],
+    });
+    const summaryEvent = built2.events.find((item) => item.type === 'compaction/summary');
+    summaryEvent.data.shadowedSeqs = [];
+    summaryEvent.data.shadowedRange = { start: injected.seq, end: injected.seq };
+    runCycle(ctx, liveSession(built2), built2);
+    await flush();
+    const audit = await readAudit(store);
+    assert.ok(audit.some((entry) => entry.event === 'reinjection-shadowed' && entry.compactionId === 'cmp-range'),
+      'shadowedRange 兜底失败：没有 reinjection-shadowed');
+    guard.stop();
+  });
+});

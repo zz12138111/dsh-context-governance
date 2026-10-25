@@ -1026,9 +1026,15 @@ export class CompressionGuard {
           const modelParts = [event?.data?.provider, event?.data?.model].filter((part) => typeof part === 'string' && part !== '');
           state.cost.model = modelParts.length > 0 ? modelParts.join('/') : null;
           // REQ-02：上一次回注的指针被本次压缩 shadow 掉 → 记“回注被吞”。
+          // P3-2：优先 shadowedSeqs，缺失/不完整时用 shadowedRange 兜底。
           const shadowedSeqs = Array.isArray(event?.data?.shadowedSeqs) ? event.data.shadowedSeqs : [];
+          const shadowedRange = event?.data?.shadowedRange;
+          const inShadowedRange = (seq) => Number.isFinite(shadowedRange?.start)
+            && Number.isFinite(shadowedRange?.end)
+            && seq >= shadowedRange.start
+            && seq <= shadowedRange.end;
           const lastInjection = state.sessionId === null ? undefined : this.#lastInjection.get(state.sessionId);
-          if (lastInjection !== undefined && shadowedSeqs.includes(lastInjection.seq)) {
+          if (lastInjection !== undefined && (shadowedSeqs.includes(lastInjection.seq) || inShadowedRange(lastInjection.seq))) {
             this.#lastInjection.delete(state.sessionId);
             this.#stats.reinjectionShadowed += 1;
             state.cost.tokensDropped += Number.isFinite(lastInjection.tokens) ? lastInjection.tokens : 0;
