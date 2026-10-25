@@ -1,0 +1,18 @@
+2026-10-25T16:24:41.151Z apply pid=7032
+2026-10-25T16:24:41.152Z apply pid=7032
+2026-10-25T16:24:41.152Z get.sessionProjections=absent
+2026-10-25T16:24:41.152Z get.sessions=absent
+2026-10-25T16:24:41.152Z get.agents=absent
+2026-10-25T16:24:41.152Z get.tokenMeter=absent
+2026-10-25T16:24:43.152Z after-2s pid=7032
+2026-10-25T16:24:43.152Z get.sessionProjections=object
+2026-10-25T16:24:43.152Z get.sessions=object
+2026-10-25T16:24:43.152Z get.agents=object
+2026-10-25T16:24:43.152Z get.tokenMeter=object
+2026-10-25T16:24:43.153Z sessionProjections keys=ctx,name,registrations,listeners stateOf=function register=function list=absent has=absent
+2026-10-25T16:25:19.165Z event request/context seq=14 session=session-f1491e34-e5d4-4a81-98cd-fd98df960db7 contextPressure={"contextWindow":1048576,"surfaceTokens":3048} tokenUsage={}
+2026-10-25T16:25:19.171Z request/context data={"provider":"deepseek-account","model":"deepseek-flash","contextWindow":1048576,"systemPromptUpdate":"in-history"}
+2026-10-25T16:25:19.962Z event assistant/message seq=19 session=session-f1491e34-e5d4-4a81-98cd-fd98df960db7 contextPressure={"pressureTokens":12284,"contextWindow":1048576,"surfaceTokens":3109,"sampledSurfaceTokens":3048} tokenUsage={}
+2026-10-25T16:25:19.963Z event turn/end seq=21 session=session-f1491e34-e5d4-4a81-98cd-fd98df960db7 contextPressure={"pressureTokens":12284,"contextWindow":1048576,"surfaceTokens":3109,"sampledSurfaceTokens":3048} tokenUsage={}
+2026-10-25T16:25:37.453Z event assistant/message seq=29 session=session-f1491e34-e5d4-4a81-98cd-fd98df960db7 contextPressure={"pressureTokens":12355,"contextWindow":1048576,"surfaceTokens":3147,"sampledSurfaceTokens":3122} tokenUsage={}
+2026-10-25T16:25:37.454Z event turn/end seq=31 session=session-f1491e34-e5d4-4a81-98cd-fd98df960db7 contextPressure={"pressureTokens":12355,"contextWindow":1048576,"surfaceTokens":3147,"sampledSurfaceTokens":3122} tokenUsage={}
