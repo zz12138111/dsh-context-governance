@@ -277,7 +277,7 @@ export function buildPolicyState(config, deps = {}) {
   // 会话层（`/cg set`）：最高优先级；0.2.0 起为进程内覆盖，重启即失效。
   const sessionLayer = { source: 'session', values: {} };
   layers.push(sessionLayer);
-  // 0.2.1（DEC-20261025-66）：窗口由运行时观察提供；每次 resolve 现算 native（不锁 apply）。
+  // 0.2.1（DEC-20261025-66 / 68）：窗口由运行时观察；每次 resolve 现算 native（不锁 apply）。
   let windowProvider = () => null;
   const resolveWithWindow = () => {
     const win = windowProvider() ?? null;
@@ -290,32 +290,45 @@ export function buildPolicyState(config, deps = {}) {
     const conservativeInfo = conservative === null
       ? null
       : nativeFromWindow({ windowTokens: conservative.tokens, reservedTokens });
-    // 校验用保守值；保守值不是整数值（window-invalid）时视为 unknown，退回观测/配置值但仍标 unvalidated。
-    const checkNative = conservativeInfo !== null && conservativeInfo.native !== null
-      ? conservativeInfo.native
-      : currentInfo.native;
+    const configInfo = nativeFromWindow({ windowTokens: configWindow, reservedTokens });
+    // 校验窗口：保守窗口优先；无观察用配置窗口。
+    const validationInfo = conservativeInfo ?? configInfo;
+    const checkNative = validationInfo.native;
+    // DEC-20261025-68 A：native 不可计算（退化/非法）时，不造 0 也不造 0.6785；设置 at 的层一律拒绝。
+    const degenerate = checkNative === null;
+    const degenerateTokens = conservative?.tokens ?? configWindow;
     const runtimeInvalid = [];
     const filtered = layers.map((layer) => {
       const values = { ...layer.values };
       const at = values['compact.at'];
-      if (at !== undefined && checkNative !== null && at > checkNative + 1e-9) {
-        runtimeInvalid.push({
-          source: layer.source,
-          key: 'compact.at',
-          reason: checkNative === 0 ? 'window-too-small' : 'over-native-runtime',
-          detail: `at=${at} > native=${checkNative}` +
-            (conservative === null ? '' : `（保守窗口 ${conservative.tokens}）`),
-        });
-        delete values['compact.at'];
+      if (at !== undefined) {
+        if (degenerate) {
+          runtimeInvalid.push({
+            source: layer.source,
+            key: 'compact.at',
+            reason: 'native-uncomputable',
+            detail: `W=${degenerateTokens} O=${reservedTokens}`,
+          });
+          delete values['compact.at'];
+        } else if (at > checkNative + 1e-9) {
+          runtimeInvalid.push({
+            source: layer.source,
+            key: 'compact.at',
+            reason: 'over-native-runtime',
+            detail: `at=${at} > native=${checkNative}` +
+              (conservative === null ? '' : `（保守窗口 ${conservative.tokens}）`),
+          });
+          delete values['compact.at'];
+        }
       }
       return { source: layer.source, values };
     });
-    const resolved = resolvePolicy(filtered, { native: currentInfo.native ?? NATIVE_DEFAULT_RATIO });
+    const resolved = resolvePolicy(filtered, { native: currentInfo.native });
     return {
       ...resolved,
       invalid: [...invalid, ...runtimeInvalid, ...resolved.invalid],
       window: {
-        currentTokens: win?.current ? currentTokens : (currentSource === 'config-fallback' ? null : currentTokens),
+        currentTokens: win?.current ? currentTokens : null,
         currentSessionId: win?.current?.sessionId ?? null,
         currentObservedAt: win?.current?.observedAt ?? null,
         currentSource,
@@ -325,6 +338,9 @@ export function buildPolicyState(config, deps = {}) {
         native: currentInfo.native,
         nativeConservative: conservativeInfo?.native ?? null,
         validated: conservative !== null && conservativeInfo?.native !== null,
+        degenerate,
+        degenerateWindowTokens: degenerate ? degenerateTokens : null,
+        reservedTokens,
         removed: win?.removed === true,
       },
     };
@@ -340,14 +356,14 @@ export function buildPolicyState(config, deps = {}) {
     setWindowProvider(provider) {
       windowProvider = typeof provider === 'function' ? provider : () => null;
     },
-    /** 校验用 native：有保守窗口用保守 native，否则退回配置 native（并标 unvalidated）。 */
+    /** 校验用 native：有保守窗口用保守 native，否则用配置窗口；退化/不可计算返回 null（调用方拒绝设置）。 */
     validationNative() {
       const win = windowProvider() ?? null;
       const conservative = win?.conservative ?? null;
       const info = conservative === null
         ? nativeFromWindow({ windowTokens: config.policy.windowTokens, reservedTokens: config.policy.reservedTokens })
         : nativeFromWindow({ windowTokens: conservative.tokens, reservedTokens: config.policy.reservedTokens });
-      return info.native === null ? native : info.native;
+      return info.native;
     },
     windowState: () => windowProvider() ?? null,
     resolve: resolveWithWindow,

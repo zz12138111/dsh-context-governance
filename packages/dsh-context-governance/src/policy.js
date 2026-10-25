@@ -68,18 +68,18 @@ export function nativeRatio({ windowTokens, reservedTokens } = {}) {
 }
 
 /**
- * 观测窗口（0.2.1，DEC-20261025-66）的 native：
+ * 观测窗口（0.2.1，DEC-20261025-66 + DEC-20261025-68 退化口径 A）的 native：
  *   - W 非法（非正整数）→ { native: null, reason: 'window-invalid' }（unknown，回退配置）
- *   - W ≤ O + 65536（预留比窗口还大）→ { native: 0, reason: 'window-too-small' }（任何 at>0 都不该放）
+ *   - W ≤ O + 65536（预留比窗口还大）→ { native: null, reason: 'degenerate' }（**不造 0、不造 0.6785**）
  *   - 否则 floor(min(W×0.8, W−O−65536))/W
- * 与 `nativeRatio` 的差别：观测窗口不能拿“默认 0.6785”糊弄，必须显式 unknown / 拒绝。
+ * 退化时 native 不可计算：任何设置 at 的层都必须拒绝（调用方负责）。
  */
 export function nativeFromWindow({ windowTokens, reservedTokens } = {}) {
   const window = Number(windowTokens);
   if (!Number.isInteger(window) || window <= 0) return { native: null, reason: 'window-invalid' };
   const reserved = Number.isFinite(Number(reservedTokens)) ? Number(reservedTokens) : 0;
   const headroom = Math.min(window * NATIVE_RATIO_CAP, window - reserved - NATIVE_HEADROOM_TOKENS);
-  if (!(headroom > 0)) return { native: 0, reason: 'window-too-small' };
+  if (!(headroom > 0)) return { native: null, reason: 'degenerate' };
   return { native: Math.round((Math.floor(headroom) / window) * 10000) / 10000, reason: null };
 }
 
@@ -107,13 +107,22 @@ export function summarizeWindow(window) {
   const conservative = window.conservativeTokens === null || window.conservativeTokens === undefined
     ? 'unknown'
     : `${formatWindow(window.conservativeTokens)} (session ${shortSessionId(window.conservativeSessionId)})`;
-  const nativeCurrent = window.native === null || window.native === undefined ? '-' : Number(window.native).toFixed(4);
-  const nativeConservative = window.nativeConservative === null || window.nativeConservative === undefined
-    ? '-'
-    : Number(window.nativeConservative).toFixed(4);
-  const validated = window.validated === true
-    ? 'validated'
-    : 'unvalidated (at 允许但未经保守窗口校验)';
+  // 退化（DEC-20261025-68 A）：native 不可计算，显示 unknown (degenerate: W=… O=…)，不造数。
+  const degenerate = window.degenerate === true;
+  const degenerateDetail = degenerate
+    ? `unknown (degenerate: W=${formatWindow(window.degenerateWindowTokens)} O=${formatWindow(window.reservedTokens)})`
+    : null;
+  const nativeCurrent = degenerate
+    ? degenerateDetail
+    : (window.native === null || window.native === undefined ? '-' : Number(window.native).toFixed(4));
+  const nativeConservative = degenerate
+    ? degenerateDetail
+    : (window.nativeConservative === null || window.nativeConservative === undefined
+      ? '-'
+      : Number(window.nativeConservative).toFixed(4));
+  const validated = degenerate
+    ? 'unverified-degenerate'
+    : (window.validated === true ? 'validated' : 'unvalidated (at 允许但未经保守窗口校验)');
   const mismatch = window.conservativeTokens !== null && window.conservativeTokens !== window.currentTokens
     ? ' 校验按 conservative'
     : '';
@@ -275,7 +284,9 @@ export function summarizePolicy(policy) {
   const nativeValue = window?.native ?? policy.native;
   const nativeText = window === null || window === undefined
     ? String(nativeValue)
-    : `${nativeValue === null ? '-' : nativeValue} (${window.currentSource === 'projection' ? 'projection' : 'config-fallback'})`;
+    : window.degenerate === true
+      ? 'unknown (degenerate)'
+      : `${nativeValue === null ? '-' : nativeValue} (${window.currentSource === 'projection' ? 'projection' : 'config-fallback'})`;
   return `compact.at=${at.toFixed(2)} (source=${source}) native=${nativeText} early=${policy.early ? 'on' : 'off'}`;
 }
 
@@ -372,9 +383,11 @@ export function computePressure({
   };
 }
 
-/** 窗口展示：1M / 128k（2 的幂优先），否则 1.00M / 256k；P3-3：压力行必须能看出分母。 */
+/** 窗口展示：1M / 128k / 256k（十进制优先，其次 2 的幂），否则 1.00M / 256k；P3-3：压力行必须能看出分母。 */
 function formatWindow(value) {
   if (!Number.isFinite(value) || value <= 0) return '-';
+  if (value >= 1_000_000 && value % 1_000_000 === 0) return `${value / 1_000_000}M`;
+  if (value >= 1000 && value % 1000 === 0) return `${value / 1000}k`;
   if (value >= 1024 * 1024 && value % (1024 * 1024) === 0) return `${value / (1024 * 1024)}M`;
   if (value >= 1024 && value % 1024 === 0) return `${value / 1024}k`;
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`;

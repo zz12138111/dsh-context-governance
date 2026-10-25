@@ -260,8 +260,15 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
       }
       const parsed = parseValue(key, rawValue);
       if (parsed.error !== undefined) return { kind: 'error', text: `context-governance set: ${key} ${parsed.error}` };
-      // 0.2.1（DEC-66 ③）：校验用保守窗口算出的 native；无观察时退回配置并标 unvalidated。
+      // 0.2.1（DEC-66 ③ / DEC-68 A）：校验用保守窗口算出的 native；退化/不可计算 → 拒绝设置。
       const validationNative = typeof policy.validationNative === 'function' ? policy.validationNative() : policy.native;
+      if (key === 'compact.at' && validationNative === null) {
+        return {
+          kind: 'error',
+          text: 'context-governance set: compact.at 无法校验：窗口退化（native 不可计算，reason=native-uncomputable）；' +
+            '等窗口恢复正常后再设',
+        };
+      }
       const checked = validateLayer({ [key]: parsed.value }, { source: 'session', native: validationNative, sessionLayer: true });
       if (checked.invalid.length > 0) {
         const item = checked.invalid[0];

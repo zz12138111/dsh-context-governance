@@ -78,12 +78,13 @@ function guardStatus(pressure = null) {
   };
 }
 
-test('0.2.1 nativeFromWindow：观测窗口现算，非法→unknown，过小→0（不拿默认 0.6785 糊弄）', () => {
+test('0.2.1 nativeFromWindow：观测窗口现算，非法→unknown，退化→unknown（不造 0/0.6785）', () => {
   assert.equal(nativeFromWindow({ windowTokens: 1_048_576, reservedTokens: 16_384 }).native, 0.8);
   assert.equal(nativeFromWindow({ windowTokens: 131_072, reservedTokens: 16_384 }).native, 0.375);
   assert.equal(nativeFromWindow({ windowTokens: 1_000_000, reservedTokens: 256_000 }).native, 0.6785);
   assert.deepEqual(nativeFromWindow({ windowTokens: 0, reservedTokens: 1 }), { native: null, reason: 'window-invalid' });
-  assert.deepEqual(nativeFromWindow({ windowTokens: 131_072, reservedTokens: 256_000 }), { native: 0, reason: 'window-too-small' });
+  // DEC-20261025-68 A：W ≤ O+65536 时 native 不可计算，禁止冒充常数。
+  assert.deepEqual(nativeFromWindow({ windowTokens: 131_072, reservedTokens: 256_000 }), { native: null, reason: 'degenerate' });
 });
 
 test('0.2.1 窗口观察：current=#lastSession、conservative=min(已观察)、observed 全量', () => {
@@ -127,7 +128,7 @@ test('0.2.1 窗口删除：request/context 不带 contextWindow → 删除置 un
   }
 });
 
-test('0.2.1 动态 native + conservative 校验：1M/128k 双会话下 at=0.55 被拒且状态一致', () => {
+test('0.2.1 动态 native + conservative 校验：1M/128k 双会话下 at=0.6 被拒且状态一致', () => {
   const config = resolveConfig({
     projectRoot: 'D:/tmp/window',
     policy: { reservedTokens: 16_384, values: { 'compact.at': 0.30 } },
@@ -135,7 +136,7 @@ test('0.2.1 动态 native + conservative 校验：1M/128k 双会话下 at=0.55 �
   const state = buildPolicyState(config, {
     readFile: () => { const error = new Error('missing'); error.code = 'ENOENT'; throw error; },
   });
-  state.sessionLayer.values['compact.at'] = 0.55; // 1M 下合法（native 0.8），128k 保守窗口下非法（0.375）
+  state.sessionLayer.values['compact.at'] = 0.6; // 1M 下合法（native 0.8），128k 保守窗口下非法（0.375）
   state.setWindowProvider(() => ({
     current: { sessionId: 'session-aaaaaaaa', tokens: 1_048_576, observedAt: '2026-10-26T00:00:00.000Z' },
     conservative: { sessionId: 'session-bbbbbbbb', tokens: 131_072, observedAt: '2026-10-26T00:00:01.000Z' },
@@ -234,4 +235,74 @@ test('0.2.1 验收#6：窗口观察/策略/状态全过程不产生任何压缩�
   } finally {
     guard.stop();
   }
+});
+
+test('0.2.1 退化口径 A（DEC-68）：W=128k O=256k → native unknown、at 层一律拒绝、恢复后自动可校验', () => {
+  const config = resolveConfig({
+    projectRoot: 'D:/tmp/window',
+    policy: { reservedTokens: 256_000, values: { 'compact.at': 0.30 } },
+  });
+  const state = buildPolicyState(config, {
+    readFile: () => { const error = new Error('missing'); error.code = 'ENOENT'; throw error; },
+  });
+  state.sessionLayer.values['compact.at'] = 0.6;
+  const degenerateWindow = {
+    current: { sessionId: 'session-aaaaaaaa', tokens: 131_072, observedAt: '2026-10-26T00:00:00.000Z' },
+    conservative: { sessionId: 'session-aaaaaaaa', tokens: 131_072, observedAt: '2026-10-26T00:00:00.000Z' },
+    observed: [],
+    source: 'projection',
+    removed: false,
+  };
+  state.setWindowProvider(() => degenerateWindow);
+  const resolved = state.resolve();
+  assert.equal(resolved.window.degenerate, true);
+  assert.equal(resolved.window.native, null, '退化时 native 必须是 null，不能造数');
+  assert.equal(resolved.window.nativeConservative, null);
+  assert.equal(resolved.values['compact.at'], 0.60, '继承值保留但标 unverified-degenerate');
+  assert.equal(state.validationNative(), null, '退化时校验 native 是 unknown（拒绝设置）');
+  assert.ok(resolved.invalid.some((item) => item.source === 'session' && item.reason === 'native-uncomputable'));
+  assert.ok(resolved.invalid.some((item) => item.source === 'plugin' && item.reason === 'native-uncomputable'));
+  const line = summarizeWindow(resolved.window);
+  assert.match(line, /unknown \(degenerate: W=128k O=256k\)/);
+  assert.match(line, /unverified-degenerate/);
+
+  // W 恢复 → 自动恢复可校验（不锁到 apply）
+  state.setWindowProvider(() => ({
+    current: { sessionId: 'session-aaaaaaaa', tokens: 1_048_576, observedAt: '2026-10-26T00:00:05.000Z' },
+    conservative: { sessionId: 'session-aaaaaaaa', tokens: 1_048_576, observedAt: '2026-10-26T00:00:05.000Z' },
+    observed: [],
+    source: 'projection',
+    removed: false,
+  }));
+  const recovered = state.resolve();
+  assert.equal(recovered.window.degenerate, false);
+  assert.equal(recovered.values['compact.at'], 0.6, '恢复后会话层 0.6 生效');
+  assert.equal(recovered.sources['compact.at'], 'session');
+  assert.ok(recovered.window.native > 0.6);
+});
+
+test('0.2.1 /cg status 退化显示 + /cg set 拒绝 at（native-uncomputable）', async () => {
+  const state = buildPolicyState(
+    resolveConfig({ projectRoot: 'D:/tmp/window', policy: { reservedTokens: 256_000, values: { 'compact.at': 0.30 } } }),
+    { readFile: () => { const error = new Error('missing'); error.code = 'ENOENT'; throw error; } },
+  );
+  state.setWindowProvider(() => ({
+    current: { sessionId: 'session-aaaaaaaa', tokens: 131_072, observedAt: '2026-10-26T00:00:00.000Z' },
+    conservative: { sessionId: 'session-aaaaaaaa', tokens: 131_072, observedAt: '2026-10-26T00:00:00.000Z' },
+    observed: [],
+    source: 'projection',
+    removed: false,
+  }));
+  const command = createStatusCommand({
+    guard: { status: guardStatus(null) },
+    policy: state,
+    now: () => new Date('2026-10-26T00:00:00Z'),
+  });
+  const status = await command.handler({ rawInput: 'status' });
+  assert.match(status.text, /policy: .*native=unknown \(degenerate\)/);
+  assert.match(status.text, /unknown \(degenerate: W=128k O=256k\)/);
+  assert.match(status.text, /native-uncomputable/);
+  const set = await command.handler({ rawInput: 'set compact.at=0.5' });
+  assert.equal(set.kind, 'error');
+  assert.match(set.text, /native-uncomputable/);
 });
