@@ -9,25 +9,30 @@ permissions:
   contents: read
 
 jobs:
-  test-and-scan:
-    # 插件只支持 Windows（junction/路径/锁语义）；Linux runner 会因 Windows 路径测试失败
+  # 插件只支持 Windows（junction/路径/锁语义）；单测必须在 Windows 跑
+  test:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0 # gitleaks 需要历史
-
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-
       - name: unit tests
         working-directory: packages/dsh-context-governance
         run: node --test "test/*.test.mjs"
 
+  # 扫描在 Linux 跑：gitleaks-action 的 Windows 二进制下载有已知 404 问题
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # gitleaks 需要历史
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
       - name: repo compliance scan (strict, blocker gate)
         run: node scripts/compliance-scan.mjs --strict
-
       - name: gitleaks (history)
         uses: gitleaks/gitleaks-action@v2
         env:
