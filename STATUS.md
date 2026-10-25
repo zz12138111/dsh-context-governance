@@ -8,7 +8,7 @@
 | 会话 | 当前任务 | 状态 |
 |---|---|---|
 | 需求 | M1.1 已收口（T2=A，范围变更已改单）；M1.2 已出单待验；M2 待重启验收后评估 | 已出单 |
-| 开发 | M1.2 离线完成（v0.1.11）；待实现 M1.1 T2′「prune 观测与成本接入」 | 待接单 |
+| 开发 | M1.2 离线完成（v0.1.11 冻结）；待实现 M1.1 T2′「prune 观测与成本接入」（**0.1.12**） | 待接单 |
 | 审核打包 | 复核 v0.1.11（`01a7598`/`65ecfde`） | 进行中 |
 
 ## 进度
@@ -23,7 +23,7 @@
 - **T8（回注自愈 + 成本归属）**：离线完成。ROB-01/06 改为“每次失败留审计、连续 N 次才降级、降级仍可回注、下一周期自愈”；新增 `compaction-cost` 审计（REQUIREMENTS A 字段，token 实测/估算分列，不记金额）；三轮复核后 fixture 改结构白名单、commands 晚挂载重试、shadowedRange 兜底；四轮复核接入 `reinjection.maxFailures` 配置、成本 `backend` 维度与口径修正；文档 `docs/T8-回注自愈与成本归属.md`、`docs/T8-复核三轮修复.md`。
 - **M1.2（探测修正与成本实测，v0.1.11）**：离线完成。能力探测改 `capability@apply` + 首个会话事件后 `capability@ready`（诊断 + audit，只记类型）；`tokenMeter` 不走硬 inject，改为可选注入 + 按需获取（成功才缓存）；`assistant/message.usage` 兜底，新增 `tokensBefore/AfterSource`（tokenMeter/usage/none）与可选 parts，`auditVersion=cost-v1.1`（只增字段）；`/cg status` 显示 `last-cost`；`ctx.compaction` 结论为“可获取（ready 时）”。记录 `analysis/t1/M1.2-探测修正与成本实测.md`。
 - **M1.1 T1（门禁）**：**通过**。F1 能（`tools/post-execute` 在 `tool/result` append 前替换；宿主 pruner 的 replace+shadow 也被下一请求消费）；F2 能（tokenGuard 默认只 `pwsh`；跳过 `[token-guard]`/`[cg-fold]`/spill notice/pruner 痕迹）；B1 已采（87 回合/1,819 步/2,218 调用；开发会话名单内候选 0，宿主 pruner 已折 8 条 `read`）；B2 差异表已出——T2 应「复用宿主协议 + 只做增量」。记录 `analysis/t1/T1-门禁记录.md`。
-- **M1.1 收口（2026-10-25，T2=A）**：B2 显示宿主 pruner 在压缩点已覆盖全部 >8k；49 会话统计白名单可折上限仅 15.3%，红线 `pwsh`+`read` 占 71.0% → **不做早折、不做 spill、不做批量测量**；M1.1 改为只做 **T2′ prune 观测与成本接入**（`compaction-cost` 增 `tokensPruned`/`pruneCount`/`pruneTools`，`auditVersion=cost-v1.2`）。范围变更已改单：`REQUIREMENTS.md` REQ-20261025-02、`TASKS/REQ-20261025-02-M1.1-拆解.md`；账本 `DEC-20261025-37`/`ART-20261025-19`。
+- **M1.1 收口（2026-10-25，T2=A）**：B2 显示宿主 pruner 在压缩点已覆盖全部 >8k；49 会话统计白名单可折上限仅 15.3%，红线 `pwsh`+`read` 占 71.0% → **不做早折、不做 spill、不做批量测量**；M1.1 改为只做 **T2′ prune 观测与成本接入**（`compaction-cost` 增 `tokensPruned`/`pruneCount`/`pruneTools`，`auditVersion=cost-v1.2`），版本 **0.1.12**。范围变更已改单：`REQUIREMENTS.md` REQ-20261025-02、`TASKS/REQ-20261025-02-M1.1-拆解.md`；账本 `DEC-20261025-37`/`ART-20261025-19`、`DEC-20261025-38`/`ART-20261025-20`。
 - **测试**：全量 **177/177 通过**（`node --test "test/*.test.mjs"`；M1.2 新增 7 条，T8 成本断言更新为 `cost-v1.1`）。
 - **真机**：已安装（deps 14 / bundles 17 / redirect 0.1.0-context-zip / junction 已建）。v0.1.6 已验证工具/感知/审计；**v0.1.11 待用户重启验收**（`version=0.1.11`、`capability@apply/@ready`、`cost-v1.1` 非 null、`last-cost`、审计轮转、只读脚本；S3 默认关）。
 - **T6/T7/T8**：均离线完成；真机验收项列在“下一步”。
