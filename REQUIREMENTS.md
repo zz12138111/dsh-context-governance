@@ -306,3 +306,41 @@
 ### 任务拆解
 
 见 `TASKS/REQ-20261025-06-原生后端验证-拆解.md`。
+
+---
+
+## REQ-20261025-07 上下文治理插件 0.1.16 —— 控制字符修复 + 成本 backend 字段拆分
+
+- **依据**：0.1.15 复核 P3（`caea83f` 已推）；用户 2026-10-25 决策范围 A（`DEC-20261025-51`）。
+- **优先级**：P1
+- **状态**：已排期（00 已直派开发，此单用于账本一致）
+- **版本**：0.1.16；`auditVersion` 升 **`cost-v1.4`**
+- **背景/痛点**：
+  1. **P3-1 控制字符**：`packages/dsh-context-governance/README.md` 含控制字符（0x08 `\b`、0x07 `\a` 被转义），文本文件不应出现，影响渲染与 diff。
+  2. **P3-2 `backend` 语义被污染**：0.1.15 为标注推断，把展示串写进了 `compaction-cost.backend`（形如 `host-basic (inferred)`），破坏枚举语义——M2 账本若按 `backend` 聚合会解析错。
+- **目标（可验收）**：
+  1. 清除 README 控制字符，零功能变更。
+  2. `compaction-cost` **拆三字段**：
+     - `backendKind`：枚举（`host-basic` / `context-zip` / `unknown`）；
+     - `backendLabel`：展示串（可含 ` (inferred)` 等后缀）；
+     - `backendInferred`：布尔；
+     - **`backend` 恢复只写枚举**（兼容 0.1.14 语义），`auditVersion=cost-v1.4`。
+  3. 加**防复发测试**：扫描包内文本文件（`.md/.js/.mjs/.json/.yml`），禁止控制字符（允许 `\n`、`\t`、`\r`）。
+- **边界（不做什么）**：
+  - 不改功能逻辑（识别、保护、回注、压缩一律不动）；
+  - 不安装/不重启/不改 profile/不 push；
+  - **不纳入** backlog：P3-3（`#observedStyles` 跨会话累积）、P3-4（证据缺 `apply version=0.1.15` 行）、P3-5（`adapter-inferred` 重复行）。
+- **验收标准**：
+  - ① README 无控制字符，全文可正常显示；
+  - ② 防复发测试覆盖包内文本文件，命中即 fail（给出被扫文件数与命中数）；
+  - ③ 审计样例齐全：`backend:"host-basic"`、`backendKind:"host-basic"`、`backendLabel:"host-basic (inferred)"`、`backendInferred:true`、`auditVersion:"cost-v1.4"`；无观察时 `kind=unknown`/`label=unknown`/`inferred=false`；
+  - ④ **兼容性**：`backend` 在四种形态（host-basic / context-zip / unknown / mixed）下恒为枚举，**不含括号与空格**；
+  - ⑤ `/cg status` 展示仍可读（用 `backendLabel`）；
+  - ⑥ 全量测试通过；M1 的 S1–S6 不回归；T5/T8 文档同步。
+- **依赖/风险**：
+  - 下游读取方需同时认 `backendKind` 与 `backend`；`cost-v1.3 → v1.4` 只增字段、**`backend` 恢复原语义**；
+  - 拆分后旧解析器读 `backend` 仍可用，读展示串的需改读 `backendLabel`。
+
+### 任务拆解
+
+见 `TASKS/REQ-20261025-07-0.1.16-拆解.md`。
