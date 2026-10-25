@@ -1,0 +1,19 @@
+context-governance status
+time: 2026-10-25T19:07:0x.xxxZ
+policy: compact.at=0.35 (source=session) native=0.6934 (projection) early=on (default)
+window: current=1M (session 96b9b4d2) observed 2026-10-25T19:03:0x.xxxZ source=projection(backfilled) conservative=1M (session 96b9b4d2) native-current=0.6934(projection(backfilled)) native-conservative=0.6934 validated
+policy-session: compact.at=0.35
+last-early: forced effective=0.437 at=2026-10-25T19:06:46.564Z
+compression: mode=event-level adapter=none backend-kind=host-basic backend-label=host-basic (inferred) perception=event event-api=on events=66 summary=readable/free-form host=0.2.1-rc.3 backend=unknown
+capabilities: control=unknown hooks=best-effort/event protectionRole=validator
+pressure: measured=0.437 estimated=0.003 adjusted=0.004(×1.35) effective=0.437 ratio=145.67 window=1M (session 96b9b4d2, backfilled) at=0.35 effective>=at
+degraded: none
+conflicts: no-compaction-service(warning), self-check-failed(error), backend-version-unverified(warning)
+write-latency: n=1 p50=32ms p95=32ms max=32ms
+last-compaction: id=cc144603 manual=true compaction=committed protection=failed shadowed=25 checkpoint=93 failures=latest-user-message,rule-injection,rollback-point
+last-reinjection: status=injected seq=95 lines=3
+last-cost: before=161580(tokenMeter) after=2981(tokenMeter) trigger=manual pruned=0 tools=-
+protection: writes=1 writeFailures=0 reinjections=1 injectionFailures=0 pendingJournals=0 reinjection=enabled(streak=0,maxFailures=3)
+scope: project=D:\DS-PROJECT\DSH插件开发 only-project=on capture-title=on ignored-foreign=0/0 unattributed=0
+memory: project=contextzip-test root=D:\DS-PROJECT\DSH插件开发\.tmp\ctxzip-ws\memory\governance active=2 proposed=4 total=6 pendingJournals=0
+audit: file=D:\DS-PROJECT\DSH插件开发\.tmp\ctxzip-ws\memory\governance\audit.jsonl max=8388608 size=8379 rotations=0 recentFailures=manual-compaction-loss (this-process)
