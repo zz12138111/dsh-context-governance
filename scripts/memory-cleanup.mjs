@@ -47,7 +47,15 @@ const targets = store.allEntries().filter(isRuleNoise).map((entry) => ({
 if (!apply) {
   console.log(`[memory-cleanup] DRY-RUN root=${root} targets=${targets.length}`);
   for (const item of targets) console.log(`  ${item.id} ${item.type} ${item.from}->${item.to} ${item.title}`);
-  console.log('[memory-cleanup] 加 --apply 才会写；写前会先整目录备份到仓库外。');
+  // dry-run 也要覆盖不可写：否则用户看到“N 条目标”以为能 apply，到 apply 才发现锁被占。
+  if (store.status.writable !== true) {
+    console.log(
+      `[memory-cleanup] ⚠ 当前不可写（${store.status.readOnlyReason ?? 'unknown'}）：` +
+      '--apply 会失败；请先退出/重启 DSH 释放写者锁。',
+    );
+  } else {
+    console.log('[memory-cleanup] 当前可写；加 --apply 才会写，写前会先整目录备份到仓库外。');
+  }
   await store.close();
   process.exit(0);
 }
