@@ -33,10 +33,9 @@
 ## Git 与发布
 
 - 仓库：本工作区根目录即 git 仓（远程地址见 00 记录；**不要把远程地址里的 token 写进任何文件**）。
-- 提交粒度：一个可运行的小步一提交；提交信息用 	ype: 摘要（feat/fix/docs/chore/test/review），正文写"改了什么/为什么/怎么验"。
+- 提交粒度：一个可运行的小步一提交；提交信息用 type: 摘要（feat/fix/docs/chore/test/review），正文写"改了什么/为什么/怎么验"。
 - 谁提交：开发提交源码与文档；需求提交需求单；审核打包提交复核报告与打包脚本。**冲突时先拉后改，禁止 push --force**。
-- 禁止：git push --force、改 emote 指向、git filter-branch/改写历史、git config --global 改动、把凭据/私钥/.env 入库、提交 dist\ 与 
-ode_modules\。
+- 禁止：git push --force、改 remote 指向、git filter-branch/改写历史、git config --global 改动、把凭据/私钥/.env 入库、提交 dist\ 与 node_modules\。
 - 分支：main 为可交付线；试验性改动开 feat/<插件>-<主题>，合并前必须过审核打包复核。
 - Tag 与 Release：**tag 名与 Release 内容由审核打包给出建议、用户批准后方可打**；发布前 00 转用户，不得自行 git tag -a + push。
 - 凭据：本机 git 凭据由系统凭据管理器/SSH key 提供，子会话以同一 Windows 用户运行即可使用；**任何凭据都不得出现在仓库、日志、回执里**。
