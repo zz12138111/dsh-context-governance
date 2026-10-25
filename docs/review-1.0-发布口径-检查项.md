@@ -115,8 +115,42 @@
 
 与「清理 + 加载 0.2.4 + 默认开启用」合并为**同一窗口**；该窗口涉及重启与真实触发，**需用户一次性批准三件事**（不能只批“重启一下”）。窗口申请由 00 上达；执行前我按 §4.1 P-1~P-5 与 §11（0.2.2 记录）核对。
 
+### 4.10 1.0 缺陷：跨项目会话被提前压但零保护/零记账（→ 发布阻塞判断）
+
+**事实**（`analysis/req-20261025-12/1.0-缺陷-提前压跨项目无保护.md` + 代码核对）：
+- `runtime.js` 的 `#belongsToProject` 对外项目会话直接 `return`（设计：不写本项目记忆、不回注别的会话）——这层正确；
+- `early-wiring.js check()` **没有同源过滤**；`index.js` 接线未传 `projectRoot` → **动作跨项目、观测不跨**；
+- 结果：外部工作区会话 `effective ≥ at` 会被真实压缩，但**无 `protection-write`、无 `reinjection`、无 `compaction-cost`**；首个实证是 00 会话（cwd `G:\DS-HARNESS`，0.602→0.065，只有 `compact-checkpoint`）。
+- `early-forced` 的 `compaction:"committed"` 是 fallback：没有 fresh report 也写 committed（`early-wiring.js:172` 一带），审计语义误导。
+
+**1) 是否阻塞 1.0（审核判断）**：**应阻塞“默认开”的 1.0 发布**，理由：
+- 不是边缘场景：profile 级安装 + 默认开 = 本机**任意工作区**会话都可能中招；首个实证就是 00 自己的会话；
+- 防护承诺被绕过：保护/回注/成本是本插件对“不可逆压缩”的唯一交代，外部会话三者全无，且审计看起来还有 `committed`；
+- 修复成本低（wiring 加同源过滤 + 审计 skip），先修再发比带缺陷发划算。
+- 是否接受带缺陷发由用户决定，但**我不写“风险可控/已接受”**。
+
+**2) 若用户选择带缺陷发——Release notes 可用措辞**：
+> **已知缺陷（1.0 默认开启，未修复）：提前压会作用于本机所有工作区的会话，但保护与记账只覆盖插件配置的项目根。** 具体：非本项目工作区的会话达到 `compact.at` 时会被真实压缩，但**不会写入保护项、不会回注、不会记录 `compaction-cost`**；审计只留一条 `early-forced`，其中 `compaction=committed` 是占位值，无法据此追溯压缩内容。首个实证：00 工作区会话（effective 0.602 → 0.065，仅 `compact-checkpoint`）。**规避**：在插件配置设 `compact.early.armed=false`（全局关闭提前压），或只在单一项目工作区使用本插件。该缺陷未修复；是否在修复前使用由用户自行判断。
+
+**3) 若选择“先修再发”——复核要补的验证**：
+1. 外部工作区会话（cwd 不在 `projectRoot`）→ **skip + 审计 `early-skipped reason=foreign-session`**，`compactNow` 调用 **0 次**、无 `early-decision force`；
+2. 本项目会话对照：仍产生 `protection-write` → `materialized` → `reinjection` → `compaction-cost` 四件套；
+3. 同一实例内“本项目 + 外项目”两会话并存，互不串写；`guard.ignoredForeignEvents` 与 wiring 判定一致（同一词法比较）；
+4. `onlyProject` 关闭时的行为明确（外项目是否仍 skip）；
+5. `/cg status` 能看到 skip 原因/foreign 计数；
+6. 全量测试 + 新增 spy 用例。
+
+**4) `committed` fallback**：**单独立项**（审计语义缺陷，与跨项目修复解耦）。要求：无 fresh report 时 `compaction` 写 `null`/`unknown`，不写 `committed`；补单测。它会让跨项目缺陷更显眼，但即使跨项目修好，本项目会话在“accepted 但无新报告”的边缘路径下同样会误写。
+
+### 4.11 发布阻塞清单（当前）
+
+| # | 项 | 状态 |
+|---|---|---|
+| B-1 | 跨项目会话被提前压但零保护/零记账 | **阻塞默认开发布**（待修或用户明确选择带缺陷发） |
+| B-2 | `compaction=committed` fallback（无报告也写 committed） | 单独立项，随 1.0 修复批次 |
+
 ## 5. 状态
 
 - 本文仅为口径登记；不含启用方案设计、不改变任何代码。
 - R-2 已在 host-basic（`acb89ca`）与 context-zip（`bc12050`）各完成 1 次真实自动触发；T4 三层真机复验完成（`79a4b6d`）。
-- §4.6 已定（项目层一律不生效 + `policy-invalid`）；§4.7 两条口径已固化；§4.8 已知限制措辞已定；§4.9 窗口需用户一次批三件。
+- §4.6 已定（项目层一律不生效 + `policy-invalid`）；§4.7 两条口径已固化；§4.8 已知限制措辞已定；§4.9 窗口需用户一次批三件；§4.10 跨项目缺陷阻塞默认开发布、§4.11 阻塞清单。
