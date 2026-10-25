@@ -117,13 +117,15 @@ node --test "test/*.test.mjs"          # 290/290 pass
 ## 8. 下一轮复核清单（0.2.2 范围内，00 已定 2026-10-26）
 
 > 用途：0.2.2 实现交付后，逐项给“通过/不通过”；不替用户判“能不能开 armed”。
+>
+> **复核基线（哈希链，00 2026-10-26 对齐）**：`c143793` → `a35a8a1`（7 files）→ `94b17a3`（2）→ `c470e89`（1）→ `5694028`（1）。四笔全在 `analysis/`，产品代码仍为 `c9807b6`。此后开发另有 `b707f3d`/`e79f629`（STATUS）、`25268bc`（P3-1 修复）——按本清单验。
 
 | # | 项 | 复核判据 | 证据要求 |
 |---|---|---|---|
 | 1 | **P3-1 busy 识别** | 对 G2-B 真实文案（`name=ManualCompactionError`、`code='busy'`、message=`manual compaction requires an idle agent with no waking queued work`）`isBusyCompactionError` 返回 true；`attempt` → `reason=busy`（不是 `failed`） | 单测 fixture 用原文案；根因 = `code==='BUSY'` 大小写不匹配（真实小写 `busy`） |
 | 2 | **ok 三字段口径** | `early-forced` 审计含 `compaction=committed\|skipped\|failed` + `protection=ok\|failed` + `failures[]` + `reinjected`；stats 拆 `compactionFailures`/`protectionFailures`；status 用 `protection=` 或 legend；`attempt()` 返回改 `accepted` | 审计样例 + 单测：protection failed 且回注成功 → 仍算可用、不重试 |
 | 3 | **保护失败日志落点** | `runtime.js:1112` 的 “compaction protection failed” 必须出现在可检索日志（governance.log 或宿主 logger 明确落点），armed 后能观测 | 隔离实例复现一次 protection failed，给出日志文件 + 行号 |
-| 4 | **audit 增记注入长度** | `header-injected` 增 `messages.length`（或 header hash）；无候选=0、有候选=1（`count=N`）自洽 | 真机或单测原始证据，不再靠自述 |
+| 4 | **audit 增记注入量** | `header-injected` 增 **`injected=0\|1`**（或 `messagesBefore/After`）+ header hash；**不要只记原始数组长度**——`header.js` 是 `[header, ...messages]`，总长 = 基线 + 1（`t7-scenarios` 测试：基线 1 条 system → 总长 2）；T3 记到 1 是因为当时基线为空 | 真机或单测原始证据，不再靠自述；`count=N` 仍表示条目行数 |
 
 **三条验收判据（00 采纳）**：
 
