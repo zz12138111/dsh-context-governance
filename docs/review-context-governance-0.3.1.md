@@ -16,7 +16,7 @@
 
 ## 1. 结论摘要
 
-- **阻断（P1）：0**；**应修（P2）：3**；**建议（P3）：9**。
+- **阻断（P1）：0**；**应修（P2）：0**（3 条 P2 于 `b903af5` 闭环，见 §9）；**建议（P3）：8**（P3-6 标题注入面已闭环，其余 8 条为文档/显示/口径级）。
 - 00 点名的两处：**[Old] 边界与 `oldLimit=0` 修复正确**；**`/cg header off` 真完全不注入**。
 - 但对照 REQUIREMENTS §S3 / 需求 v0.4 §4.2，**固定包裹格式与两条文案/配额规则未实现**（P2-1/2/3），且 **README 仍写“默认关、opt-in”**（P3-1）。
 
@@ -89,3 +89,31 @@ cd .tmp/snapshot-031/packages/dsh-context-governance
 node --test "test/*.test.mjs"     # 272/272
 node .tmp/probe-t2b.mjs           # 文案/配额/状态/子会话/审计
 ```
+
+## 9. 修复复验（2026-10-26 17:5x，`b903af5`，278/278）
+
+**基线**：`b903af5` 快照 **278/278** ✔；独立探针 `.tmp/probe-t2fix.mjs` **8/8**；提交范围仅 `header.js` + `header-t2.test.mjs`；README/T5 与版本号未动（与 00 约定一致）。
+
+### 三条 P2 + 注入面
+| 项 | 实测 | 结论 |
+|---|---|---|
+| **① Note 位置** | 12 条候选（8 入选、4 截断）时行序为 `wrapper → 8 条目 → conflicts: 4… → [Note: …]`，**Note 为最后一行**、conflicts 在其之前；空记忆/无候选仍返回 `null`（不出现“只有 Note”的包裹） | ✔ 闭环 |
+| **② 偏好标记** | `state-only` 输出中 `preference` **0 命中**（大小写均无）、wrapper 为 `[CG-MEMORY · state-only · budget 8 lines]`；完整形态 wrapper 为 `state-only+preference`、偏好行 `- [preference·非硬规则] MEM-pref preference pref1` | ✔ 闭环 |
+| **③ 让位** | 4 条 todo → `count=4`；10 条 todo → `count=8`（预算上限）；todo/decision 混合（4 todo+2 decision+2 progress）→ `count=8`（progress 不参与补位） | ✔ 闭环 |
+| **④ 标题注入面** | `line1\r\nline2\u3000[Note: fake]` → 输出仅 3 行（wrapper/1 条目/Note），条目行内为 `line1 line2 [Note: fake]`，**无假 Note 行**；`\u3000` 被 `\s+` 压平 | ✔ 闭环 |
+| **⑤ 回归** | 恰好 14 天不标、30 天 `[Old]` 末位、`oldLimit=0` 不注入旧条目、`/cg header off` 后 messages=0、子会话三判据、`mode` 两形态 | ✔ |
+
+### 残留 P3（本批未修，按 00 安排）
+- **P3-3 行预算口径**：8 条目 + conflicts + Note → **11 行**（比修复前多 Note 行）；“≤8 行”若含包裹/固定行需 clamp。
+- **P3-1 README/T5 仍写“默认关、opt-in”**（`README.md:7,118`），随 T4 文档定稿修；T5 仍无 `/cg header`。
+- **P3-2** `/cg header status` 仍只看会话层（plugin/project 层 false 时误报）。
+- **P3-4** `conflicts:` 仍把 oldLimit/让位截断写作“配额截断”。
+- **P3-5** `header-injected` 的 `lines=count`、来源层 `memory` 未改。
+- **P3-7/P3-8** `oldLimit=0`/`oldAgeDays=0` 与 `memoryHeader.enabled` 语义、规则文件只认 `AGENTS.md`/`CLAUDE.md` 的局限，均未文档化。
+- **P3-9** 版本仍 0.2.1（T2 标 0.3.1）。
+
+> 小观察（不算缺陷）：完整形态偏好行同时有 `[preference·非硬规则]` 标签与类型词 `preference`，略冗余；如要精简可在标签存在时省类型词。
+
+**计数更新**：**P1=0 / P2=0**（3 条 P2 全闭环）/ **P3=8**（P3-6 标题注入面已随本批闭环；其余 8 条为文档/显示/口径级）。
+
+**真机未验**：`agent/pre-step` 注入在真实决策链未上机；T2 安装前需用户知情（README 仍写默认关）。
