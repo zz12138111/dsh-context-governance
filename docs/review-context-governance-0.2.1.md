@@ -17,7 +17,7 @@
 
 ## 1. 结论摘要
 
-- **阻断（P1）：0**；**应修（P2）：1**（**P2-5**：真机回填未触发——服务取法在属性抛错时短路，见 §15；§13/§14 的回填结论仅 mock 形态成立）；**建议（P3）：0**。
+- **阻断（P1）：0**；**应修（P2）：0**（P2-5 于 `7e5786a` 闭环，见 §16）；**建议（P3）：0**。
 - 六条验收 **4 条完全成立、1 条部分（⑥ 的审计子项）、1 条报告证据不完整**；十项清单里 **⑩ 数字更新未做**（详见 §4）。
 - 代码检索与 spy 双证：**本版没有任何压缩调用路径**（我用自己的全量 pattern + 3 个真实 API 名 spy 复核，0 次）。
 
@@ -326,3 +326,32 @@ const service = this.#ctx?.sessionProjections        // ← 真机这里抛错
 4. （可选）`#backfillWindow` 失败时区分“服务取不到”与“state 无窗口”，前者不消耗 attempted（现状），后者消耗——现逻辑对，但建议加日志便于真机诊断。
 
 **计数更新**：P1=0 / **P2=1（P2-5）** / P3=0。§13/§14 的回填验收结论**仅在 mock 形态下成立**；真机需在修复后重验（既有会话 `observed=历史时间`、`projection(backfilled)`、`native=0.6934`）。
+
+## 16. P2-5 复验（2026-10-26 17:3x，`7e5786a`，267/267）
+
+**基线**：`7e5786a` 快照 **267/267** ✔；独立探针 `.tmp/probe-021-p25.mjs` **6/6**；提交范围仅 `runtime.js` + `window-021.test.mjs`。
+
+### 两处重点
+**1. 新单测是否真跑在“抛错 getter”形态（不是 undefined）**：✔
+- `window-021.test.mjs:714` 用 `Object.defineProperty(ctx,'sessionProjections',{get(){throw}})` + `ctx.get` 返回服务 → 断言回填成功、`stateOf` 1 次；
+- `:739` 同形态覆盖 `tokenMeter`（属性抛错 + `ctx.get` 可读 → `estimatedTokens=400_000`）；
+- 我的独立探针用同一形态复核（未复用开发 mock）：**A/D 通过**；此前旧代码在该形态下 `stateOf` 0 次（§15 复现），现为 1 次。
+
+**2. “成功才缓存”是否只在两条路都失败后才不缓存**：✔
+- **B**：首次属性抛错 + `ctx.get` 不可用 → 不回填；服务就绪后**下一事件重试成功**、`stateOf` 1 次（没有“永久不可用”标记）。
+- **C**：属性抛错 + `ctx.get` 也抛错 → 不崩溃；恢复后重试成功。
+- **F**：属性正常时直取服务（不额外走 `ctx.get`），回填成功。
+- 代码：`#getSessionProjections`/`#getTokenMeter` 均为“direct try → get try → 成功才赋值 `#...` → 失败 `return null`”，不再共用 `??` 链。
+
+**3. 诊断四类（开发只测了 2 类，我补测全部）**：
+`sessionProjections-unavailable`、`stateOf-threw`、`contextWindow-absent`、`contextWindow-invalid` 各打 1 条（每会话每原因去重），实测四类齐全且不重复。
+
+### 回归
+267/267（264 + 3 条 P2-5 新测）；窗口观察/删除/退化 A/跨 episode 审计/零压缩 spy/回填五条/标注三来源均未回归（前述探针在 `4af1dc2` 版本全过，本批只改服务取法，未触及行为分支）。
+
+### 真机重启后验收（预期）
+- 既有会话（`5d1121ed`）：`window: current=1M (session 5d1121ed) observed 2026-10-25T03:30:05.263Z source=projection(backfilled) … native-current=0.6934(projection(backfilled))`；`pressure … window=1M (session 5d1121ed, backfilled)`；`policy: … native=0.6934 (projection(backfilled))`
+- 你的会话（`58a2e845`）：同上，`observed=2026-10-25T03:30:05.241Z`
+- 新建会话：`source=projection`（实时）
+
+**计数**：**P1=0 / P2=0 / P3=0**。0.2.1 代码层与真机根因均已收口；剩余为重启后的真机读数确认。
