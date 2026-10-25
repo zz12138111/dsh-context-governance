@@ -186,3 +186,32 @@ node scripts/memory-cleanup.mjs                 # DRY-RUN targets=7（不写）
 ### 7.3 结论
 
 P2-1（扫描）与 P3-2/P3-3（cleanup）修复有效；6 条降级口径未漂；新增一条 P3（`selfRegexLiteral` 行级判定，仅自述文件）。
+
+## 8. 三笔提交的正式复核（`64c6d93` / `745c930` / `c9807b6`）
+
+### 8.1 基线更正与 HEAD 实测
+
+- 开发最初报的 `41b7f22` **不存在**：`git cat-file -t 41b7f22` → `fatal: Not a valid object name`。以 `64c6d93` 为基线。
+- 实测 HEAD 为 **`ab7fcdd`**（`git rev-parse HEAD`），工作树干净（`git status --short` 空）。链：`64c6d93` → `745c930` → `c9807b6` → 我的复核提交 `b85c492`/`ab7fcdd`。
+- `64c6d93` 变更文件 5 个，与开发自述一致；全量测试 **292/292**（我实跑）。
+
+### 8.2 P2-3 回归测试是否真能复现原缺陷（关键补充）
+
+- 用**整行判定版**（`28f749e:scripts/compliance-scan.mjs`）跑回归测试的同一 fixture（`docs/review-x.md` 两行：样例行 + "格式示例 ghp_/sk-，实际 token ghp_AAA…"）：
+
+| 实现 | blocker | info |
+|---|---|---|
+| 旧（整行判定，`28f749e`） | **0** | 2 |
+| 新（按 `m[0]`，`64c6d93`） | **1** | 0 |
+
+- 结论：回归测试断言 `blocker >= 1`，**在旧实现上会失败**——它确实复现了原缺陷，不是只在新实现上绿。
+
+### 8.3 P3-3 顺序与不可写路径（current HEAD 复验）
+
+- 代码顺序（`scripts/memory-cleanup.mjs`）：`:51` dry-run 判 `writable` → `:64` apply 判 `writable`（**exit 2**）→ `:75` `cpSync` 备份 → `:78` expire → `:80` audit。即**先判可写 → 再备份 → 最后写** ✓
+- dry-run 实测（DSH 运行中）：`⚠ 当前不可写（writer-lock:10076）：--apply 会失败…`，reason 来自真实 `store.status.readOnlyReason`，不再是 `requested` ✓
+- `--apply` 锁被占实测：`无法写入记忆库：writer-lock:10076…`、**exit 2、备份目录不存在** ✓
+
+### 8.4 复核结论
+
+三笔提交可作为重启窗口前候选。**阻塞项：无。** 遗留非阻塞项：P3-1（busy 文案）、P3-2（`getEngine` 在 try 外）、P3-4（`selfRegexLiteral` 行级判定，仅自述文件）、P3-5（dry-run 非纯只读：瞬时 probe 文件 + 可能取锁）。
