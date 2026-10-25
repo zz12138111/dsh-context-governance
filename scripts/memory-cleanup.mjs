@@ -35,7 +35,7 @@ const isRuleNoise = (entry) => {
   return /^[\d\s/／.\-:年月日]+$/.test(String(entry.title ?? '').trim());
 };
 
-const store = await MemoryStore.open({ rootDir: root, project, readOnly: !apply });
+const store = await MemoryStore.open({ rootDir: root, project,  });
 const targets = store.allEntries().filter(isRuleNoise).map((entry) => ({
   id: entry.id,
   type: entry.type,
