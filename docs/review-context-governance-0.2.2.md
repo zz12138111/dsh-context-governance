@@ -200,3 +200,45 @@ node --test "test/*.test.mjs"          # 290/290 pass
 6. **无真实触发**：`armed=false` 时门禁走 disabled 分支，不调 `compactNow`。
 7. **回归**：全量测试通过；全仓无 `attempt().ok` 残留读取。
 8. **边界声明**：复核结论必须写明“**armed 未打开、不构成真实触发**；打开 armed 需用户再批一次”。
+
+## 11. 第 5 步复核结果（`c79feb0`，2026-10-26）
+
+基线：HEAD `c79feb0`，工作树 clean；独立 worktree 全量 **310/310**。
+
+| # | 判据 | 结论 |
+|---|---|---|
+| 1 | 开关未打开 | **通过**：`index.js:526 getArmed: () => false` 硬编码；全仓无 `arm()` 调用点；无配置/环境变量入口（`/cg` 只有 `compact.early` 可**关**，不能开 armed）；打开需改源码 |
+| 2 | 门禁双事实 | **通过（附注）**：只在 `session/event → turn/end` 后 50ms 调度；`decideEarly` 有 turn/idle 短路测试。**附注**：接线处 `turnEnded/agentIdle` 恒传 `true`（`early-wiring.js:114-115`），idle 是“假设”不是测量；靠宿主 busy 拒绝兜底（G2-B），失败映射 `early-aborted` |
+| 3 | 审计字段 | **通过**：`early-forced` 带 `compaction/protection/failures/reinjected/delayMs/accepted`；白名单覆盖 `accepted/action/effective/threshold/native/...`；无 `ok` |
+| 4 | 不升级 | **通过（本批）**：接线代码无重试/无 disable 路径；`shouldEscalateEarly` 本批未使用（注释说明留后续批次） |
+| 5 | `compaction='failed'` 有生产者 | **不通过**——见 11.1 |
+| 6 | 无真实触发 | **通过（行为实测）**：`armed=false` + `check()`，`ctx.get` 调用 **0 次**、audit **0 条**；`getGuard/getPolicy` 设为抛错也未触发 |
+| 7 | 回归 | **通过**：310/310；新文件无 `.ok` 残留 |
+| 8 | 边界声明 | 已写入本节末（原文） |
+
+### 11.1 P2：非 accepted 的 `early-*` 事件会抄**上一次**报告的字段
+
+**实测**（worktree 内脚本，busy 与 fail 两种引擎，guard 里保留一份旧 `lastReport={compaction:'committed',protection:'ok',reinjected:true}`）：
+
+```
+busy {"event":"early-aborted","compaction":"committed","protection":"ok","reinjected":true}
+fail {"event":"early-failed","compaction":"committed","protection":"ok","reinjected":true}
+```
+
+**问题**：`early-wiring.js:149-156` 无条件读 `getGuard()?.status?.lastReport`。本次 attempt 被拒/失败时并不会产生新报告，于是 `compaction` 仍写 `committed`、`protection` 写 `ok`、`reinjected` 写旧值——**审计说谎**，而 §9.5 已把 audit 定为权威记录；更严重的是下一批的 `shouldEscalateEarly` 正是读 `compaction/reinjected`，会被旧值毒化（永远不升级）。
+
+**修法**：attempt 前先取 `prevReport = getGuard()?.status?.lastReport`；`result.accepted === true` 时才用（新）report；否则固定写 `compaction:'failed'`（busy 同理）、`protection:null`、`failures:[]`、`reinjected:null`。补单测：断言 aborted/failed 事件里 `compaction` 不是 `committed`、`protection` 不是 `ok`。
+
+### 11.2 其他附注（不阻塞）
+
+- `armed=false` 时仍会为每个 `turn/end` 排一个 50ms 定时器（`check` 立即返回）——无服务/审计副作用，仅极少调度开销；可在订阅处先判 `armedNow()`。
+- `shouldEscalateEarly` 本批未接入，需在下一批落实“`protection=failed` 不升级”的实际判定点。
+- `early-decision` 在每次 armed 检查都写一条（含 skip），属预期。
+
+### 11.3 边界声明（原文）
+
+> 本轮范围 = `turn/end` 门禁 + `early-*` 审计，**`armed` 保持 false、不打开真实触发**；打开 `armed` 属另一项发布/启用决定，**需用户再批一次**，不在本轮结论内。
+
+### 11.4 结论
+
+第 5 步 **① ② ③ ④ ⑥ ⑦ 通过；⑤ 不通过**（P2 审计字段抄袭旧报告）。修复后按 11.1 的断言补测再复验；在此之前不推分支、不打开 armed。
