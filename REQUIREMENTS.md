@@ -457,6 +457,29 @@
 - **不采用 B**：不加 `policy.allowProjectLayer` 开关，安全口径默认生效、不依赖用户手动开启；
 - 恶意项目文件不得造成：阈值低于 0.45、自盖 `<0.30` 确认、静默降级。
 
+### 窗口 W 的选取与校验口径（G4 结论，`DEC-20261025-65`）
+
+> 事实：`contextPressure` 投影是 **per-session**，`native` 与策略是**进程级**；换模型/路由会更新窗口，`request/context` 不带 `contextWindow` 时会**删除旧值**。
+
+**① 选取**：`native` 与 `/cg status` 的窗口用 **runtime 已有的 `#lastSession`（最近观察到的本项目会话）**；`window=` 后必须带 **session 短 id**（如 `window=1M (session 58a2e845)`）。多模型/多会话不取“最小窗口”做展示，展示用当前会话，校验用保守值（见③）。
+
+**② 中途变化与消失**：
+- 允许**中途更新**：每收到一次新的窗口观察（`request/context` / 投影变化）即**立刻重算** `native`、压力四段与 `at ≤ native` 校验，**不锁到下次 apply**；
+- `request/context` 不带 `contextWindow` → **删除旧值并置 `unknown`**，`native` 不可算；状态显示 `window=unknown (removed by request/context)`，**不得沿用旧值**；
+- 重新观察到窗口后自动恢复，并记录 `windowSource + observedAt`。
+
+**③ 校验与显示同源**：
+- **校验一律用保守值**：`conservativeWindow = min(当前进程已观察到的所有窗口)`；无观察 → `unknown`；
+- 无观察时允许设置 `compact.at`，但标注“**未经校验**”；运行时一旦观察到 `at > native` → 拒绝该层 + 审计，不静默降级；
+- `/cg status` 同时显示两值：`window current=<#lastSession> (session id) | conservative=<min>`，避免出现“显示允许 0.68、apply 却拒绝”的矛盾；
+- 若 current 与 conservative 不一致，状态行必须明示“校验按 conservative”。
+
+**④ 验收（追加）**：
+- 状态行含 `current`/`conservative`/session 短 id/来源与时间；
+- 构造“一会话 1M、另一会话 128k”的用例：`compact.at=0.6` 在保守值下被拒或降级，且状态显示与校验结论一致；
+- 模拟 `request/context` 删除窗口 → 状态变 `unknown`，不沿用旧值。
+
+
 ### 验收（分段）
 
 - **0.2.0**：四层覆盖正确——**项目层经 `apply` 真实生效**（`buildPolicyState` 接线，不许内联重建），并有**经 apply 的集成测试**；非法配置与**被拒的项目层**都可在 `/cg status` 直接看到原因，不只写审计；`/cg status` 合成链与 `native` 正确；`/cg policy show` 可用；`research` 显示 `early=off`；项目层安全口径（P-A/P-C）有单测覆盖（`lowThresholdAck`/`estimateSafety`/`at<0.45` 三类拒绝）；全量测试通过、S1–S6 不回归。
