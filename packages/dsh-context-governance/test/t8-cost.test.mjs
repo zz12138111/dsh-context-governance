@@ -142,7 +142,9 @@ test('T8-2 成本记录：主键/维度/数值/口径齐全，实测与估算分
     assert.equal(cost.backendCostSource, 'measured');
     assert.equal(cost.governanceCostSource, 'estimated');
     assert.equal(cost.estimateMethod, 'chars/4');
-    assert.equal(cost.auditVersion, 'cost-v1');
+    assert.equal(cost.auditVersion, 'cost-v1.1');
+    assert.equal(cost.tokensBeforeSource, 'tokenMeter');
+    assert.equal(cost.tokensAfterSource, 'tokenMeter');
     assert.equal(typeof cost.tokensDropped, 'number');
     guard.stop();
   });
@@ -165,10 +167,13 @@ test('T8-2 成本记录：无 tokenMeter / 无 usage 时标 unknown，不伪造�
     const session = liveSession(built);
     runCycle(ctx, session, built);
     await flush();
+    guard.stop();
     const cost = (await readAudit(store)).find((entry) => entry.event === 'compaction-cost');
     assert.ok(cost);
     assert.equal(cost.tokensBefore, null);
     assert.equal(cost.tokensAfter, null);
+    assert.equal(cost.tokensBeforeSource, 'none');
+    assert.equal(cost.tokensAfterSource, 'none');
     assert.equal(cost.backendUsage, undefined, '没有 usage 时不写 backendUsage');
     assert.equal(cost.backendCostSource, 'unknown');
     assert.equal(cost.tokensSummary, null);
@@ -189,6 +194,7 @@ test('P3：usage={} 空对象时标 unknown，不写 backendUsage', async () => 
     const session = liveSession(built);
     runCycle(ctx, session, built);
     await flush();
+    guard.stop();
     const cost = (await readAudit(store)).find((entry) => entry.event === 'compaction-cost');
     assert.ok(cost);
     assert.equal(cost.backendUsage, undefined, '空 usage 不应写 backendUsage');
@@ -213,6 +219,7 @@ test('P3：late-start 周期的 trigger 按 summary.sourceCommandId 判定 manua
     session.surface.nodes = [...built.postSurface];
     handler(session, built.events.find((item) => item.type === 'compaction/end'));
     await flush();
+    guard.stop();
     const cost = (await readAudit(store)).find((entry) => entry.event === 'compaction-cost');
     assert.ok(cost);
     assert.equal(cost.trigger, 'manual');

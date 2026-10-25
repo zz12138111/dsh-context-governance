@@ -55,6 +55,10 @@ export const AUDIT_FIELD_WHITELIST = Object.freeze({
   occurredAt: 'text',
   tokensBefore: 'nullable-number',
   tokensAfter: 'nullable-number',
+  tokensBeforeSource: 'text',
+  tokensAfterSource: 'text',
+  tokensBeforeParts: 'usage',
+  tokensAfterParts: 'usage',
   tokensShadowed: 'nullable-number',
   tokensSummary: 'nullable-number',
   tokensInjected: 'nullable-number',
@@ -65,11 +69,15 @@ export const AUDIT_FIELD_WHITELIST = Object.freeze({
   governanceCostSource: 'text',
   estimateMethod: 'text',
   auditVersion: 'text',
+  // M1.2：能力探测双行只记服务名/类型，不记值。
+  probe: 'text-array',
 });
 
 /** 已知审计事件（T5 正式化清单；未知事件仍记录，但只能带白名单字段）。 */
 export const AUDIT_EVENTS = Object.freeze([
   'apply',
+  'capability@apply',
+  'capability@ready',
   'protection-write',
   'protection-write-failed',
   'protection-write-skipped',

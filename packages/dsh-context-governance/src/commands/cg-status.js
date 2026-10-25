@@ -58,6 +58,16 @@ function statusText({ store, guard, audit, now }) {
     const reinjectionState = status.protection.reinjectionSuspended
       ? `suspended(${status.protection.reinjectionFailureStreak ?? 0}/${status.protection.maxReinjectionFailures ?? '-'})`
       : `enabled(streak=${status.protection.reinjectionFailureStreak ?? 0},maxFailures=${status.protection.maxReinjectionFailures ?? '-'})`;
+    const cost = status.lastCost ?? null;
+    if (cost === null) {
+      lines.push('last-cost: none');
+    } else {
+      lines.push(
+        `last-cost: before=${cost.tokensBefore ?? '-'}(${cost.tokensBeforeSource ?? 'none'}) ` +
+        `after=${cost.tokensAfter ?? '-'}(${cost.tokensAfterSource ?? 'none'}) ` +
+        `trigger=${cost.trigger ?? '-'}`,
+      );
+    }
     lines.push(
       `protection: writes=${status.stats.protectionWrites} writeFailures=${status.stats.protectionWriteFailures} ` +
       `reinjections=${status.stats.reinjections} injectionFailures=${status.stats.reinjectionFailures} ` +

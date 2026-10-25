@@ -1,14 +1,14 @@
 # DSH 插件开发 · 当前状态
 
 > 只放"现在还活着"的：在做什么、卡在哪、待谁决策。过期项直接删。
-> 更新：2026-10-25（M1 结项；M1.1 派单且 F1 口径已修订；M1.2「探测修正与成本实测」出单）
+> 更新：2026-10-25（M1 结项；M1.1 T1 门禁通过、B2 已出；M1.2 离线完成 v0.1.11；等重启）
 
 ## 在办
 
 | 会话 | 当前任务 | 状态 |
 |---|---|---|
-| 需求 | M1.1（REQ-20261025-02）已派、F1 口径已修订；M1.2（REQ-20261025-03）已出单待派；M2 待 M1.1 完成后评估 | 已排期 |
-| 开发 | M1.1 T1 门禁进行中；M1.2 待接单（可与 T1 并行） | 进行中 |
+| 需求 | M1.1 T1 通过但 B2 显示宿主 pruner 已覆盖大部分，**T2 范围待需求拍板**；M1.2 已出单；M2 待 M1.1 完成后评估 | 待决策 |
+| 开发 | M1.1 T1（F1/F2/B1/B2）完成；M1.2 离线完成（v0.1.11）；等用户重启验收 | 等重启 |
 | 审核打包 | 待命（T6/T7 后独立复核） | idle |
 
 ## 进度
@@ -21,15 +21,17 @@
 - **T6（失败与降级）**：离线完成（v0.1.4）。审计 8 MiB 轮转（可配）、五类只读判据 + 恢复探测、事件流中断/卸载留痕、所有失败只 log/audit 不抛宿主；文档 `docs/T6-失败与降级.md`。
 - **T7（验收场景）**：离线完成（v0.1.5）。S1–S6 全部用例 + S4 A/M/I/F/AUD/R；真实**自动+手动**压缩双样本脱敏回放；只读人工脚本 `docs/T7-只读降级人工验证.md`；覆盖表 `docs/T7-验收场景-S1-S6.md`。
 - **T8（回注自愈 + 成本归属）**：离线完成。ROB-01/06 改为“每次失败留审计、连续 N 次才降级、降级仍可回注、下一周期自愈”；新增 `compaction-cost` 审计（REQUIREMENTS A 字段，token 实测/估算分列，不记金额）；三轮复核后 fixture 改结构白名单、commands 晚挂载重试、shadowedRange 兜底；四轮复核接入 `reinjection.maxFailures` 配置、成本 `backend` 维度与口径修正；文档 `docs/T8-回注自愈与成本归属.md`、`docs/T8-复核三轮修复.md`。
-- **M1.2（探测修正与成本实测，2026-10-25 出单）**：真机 `tokensBefore/After` 恒 `null`、能力行 `compaction=absent` 复查为**插件侧时序问题**——`ctx.tokenMeter` 在 apply 缓存 null（`runtime.js:189-195`）、能力探测早于服务注册；宿主 `dsh-token-meter`/`compaction-basic`/`tool-result-pruner` 均由 `dsh-base` 默认挂载。新增需求 `REQ-20261025-03`，与 M1.1 T1 并行。
-- **测试**：全量**通过**（数量见 `node --test "test/*.test.mjs"` 输出；T8 新增成本 4 + 自愈 1，三轮复核新增 commands 晚挂载 + shadowedRange 兜底，四轮复核新增 reinjection 配置/空 usage/late-start trigger）。
-- **真机**：已安装（deps 14 / bundles 17 / redirect 0.1.0-context-zip / junction 已建）。v0.1.6 已验证 `mem_write`/`mem_query` 注册、`perception=event`、能力行、`audit.jsonl`；v0.1.10 待下次重启验收（`version=<package.json>`、`events=N` 增长、`compaction-cost`、审计轮转、只读脚本；S3 默认关）。
+- **M1.2（探测修正与成本实测，v0.1.11）**：离线完成。能力探测改 `capability@apply` + 首个会话事件后 `capability@ready`（诊断 + audit，只记类型）；`tokenMeter` 不走硬 inject，改为可选注入 + 按需获取（成功才缓存）；`assistant/message.usage` 兜底，新增 `tokensBefore/AfterSource`（tokenMeter/usage/none）与可选 parts，`auditVersion=cost-v1.1`（只增字段）；`/cg status` 显示 `last-cost`；`ctx.compaction` 结论为“可获取（ready 时）”。记录 `analysis/t1/M1.2-探测修正与成本实测.md`。
+- **M1.1 T1（门禁）**：**通过**。F1 能（`tools/post-execute` 在 `tool/result` append 前替换；宿主 pruner 的 replace+shadow 也被下一请求消费）；F2 能（tokenGuard 默认只 `pwsh`；跳过 `[token-guard]`/`[cg-fold]`/spill notice/pruner 痕迹）；B1 已采（87 回合/1,819 步/2,218 调用；开发会话名单内候选 0，宿主 pruner 已折 8 条 `read`）；B2 差异表已出——T2 应「复用宿主协议 + 只做增量」，但触发/参数/是否保留早折**需需求先拍板**。记录 `analysis/t1/T1-门禁记录.md`。
+- **测试**：全量 **177/177 通过**（`node --test "test/*.test.mjs"`；M1.2 新增 7 条，T8 成本断言更新为 `cost-v1.1`）。
+- **真机**：已安装（deps 14 / bundles 17 / redirect 0.1.0-context-zip / junction 已建）。v0.1.6 已验证工具/感知/审计；**v0.1.11 待用户重启验收**（`version=0.1.11`、`capability@apply/@ready`、`cost-v1.1` 非 null、`last-cost`、审计轮转、只读脚本；S3 默认关）。
 - **T6/T7/T8**：均离线完成；真机验收项列在“下一步”。
 - **T8/T9**：T8-1 修 ROB-01/06；T8-2 实现 `compaction-cost`（A 口径）；**T9 已被 T8-2 吸收，不再排期**。
 
-## 已知风险（当前无）
+## 已知风险（当前无代码风险；有 1 个待决策）
 
 - T8-1 已修复 ROB-01/06：回注失败不再永久停写，改为“每次失败审计 + 连续 N 次降级一个周期 + 下一周期自愈”，`reinjection-recovered` 可审计。
+- M1.1 T2 收益未证：B1 开发/审核会话名单内候选 0；宿主 pruner 已在压缩点折 `read`（8 条）。T2 若对齐宿主时机则增量≈0；若早折则需需求接受“收益未证”。
 
 ## 已知偏差（已接受）
 
@@ -40,8 +42,8 @@ M1 成本“前后水位未知”原按降级接受，2026-10-25 复查为插件
 ## 等待用户/外部
 
 - **真插件安装**：已完成结构安装（junction 指向源码，改完重启即生效）；开发不重启。
-- M1.1：已推 00 派开发；**F1 口径已于 2026-10-25 修订**（判定“模型下一次看到折叠后内容”，允许宿主 replace+shadow 协议），并新增 B2「宿主 pruner 差异表」。
-- M1.2（`REQ-20261025-03`）：已出单，待 00 派开发；可与 M1.1 T1 并行。
+- M1.1：T1 门禁通过；**B2 差异表显示宿主 pruner 已覆盖大部分（8 条 `read` 在压缩点被折），T2 是否保留“早折”/如何对齐参数需需求决策**；未接到决策前不开 T2。
+- M1.2：离线完成（v0.1.11）；需用户重启后验收 `capability@ready` 与 `cost-v1.1` 非 null。
 - M2：M1.1 完成后评估。
 - 暂存：GitHub 发布用的仓库地址与账号（发布前需要）。
 
@@ -51,10 +53,9 @@ M1 成本“前后水位未知”原按降级接受，2026-10-25 复查为插件
 
 ## 下一步
 
-1. 用户一次性重启 → 校验 `version=<package.json>`、`perception=event event-api=on`、`events=N` 随真实压缩增长、`audit: … rotations=…`。
+1. 用户一次性重启 → 校验 `version=0.1.11`、`perception=event event-api=on`、`capability@apply/@ready`、`events=N` 随真实压缩增长、`compaction-cost` 的 `auditVersion=cost-v1.1` 且 `tokensBefore/After` 非 null、`/cg status` 的 `last-cost`、审计轮转。
 2. 用户按 `docs/T7-只读降级人工验证.md` 跑一次只读演练（制造不可写根 → read-only → 恢复）。
 3. S3 header 默认关闭；要启用需用户拍板改 `memoryHeader.enabled`。
-4. 00 转用户验收 → 审核打包独立复核（版本三处已收敛为一处）。
-5. M1 已结项；开发做 M1.1 T1（F1/F2/B1/B2 门禁）；F1 判定“模型下一次看到折叠后内容”，仅“仍看全文、只留审计”才停项。
-6. 00 派 M1.2（`REQ-20261025-03`）：能力探测延时修正 + tokenMeter 延迟获取 + usage 兜底 + `cost-v1.1` 来源字段；同时给出 `ctx.compaction` 可用性结论。
-7. M1.2 结论回来后：若 `ctx.compaction` 可得 → 评估修回注时点（P1）；M2 待 M1.1 完成后评估（优先 A 成本聚合、B S3 开关）。
+4. 00 转用户验收 → 审核打包独立复核。
+5. M1.1 T1 已过；**需求先决定 T2 范围**（宿主 pruner 已覆盖大部分：停项 / 复用协议+增量 / 是否保留早折）；未决策前开发不开 T2。
+6. M1.2 重启验收后：若 `ctx.compaction` 可得 → 评估修回注时点（P1）；M2 待 M1.1 完成后评估。

@@ -88,7 +88,7 @@ test('describeValue：不加内容、不深挖对象', () => {
 test('能力探测行：单行、含版本与 probe 字段', () => {
   const line = capabilityLine([['on', 'fn'], ['get.sessions', 'absent']]);
   assert.equal(line.includes('\n'), false);
-  assert.match(line, new RegExp(` governance capability version=${PLUGIN_VERSION.replace(/\./g, '\\.')} `));
+  assert.match(line, new RegExp(` governance capability@apply version=${PLUGIN_VERSION.replace(/\./g, '\\.')} `));
   assert.match(line, /probe=on=fn,get\.sessions=absent$/);
 });
 

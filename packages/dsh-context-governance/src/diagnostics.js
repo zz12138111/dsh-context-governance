@@ -37,18 +37,19 @@ export function appendDiagnosticLine(file, line) {
 }
 
 /**
- * 能力探测行（v0.1.3）：一行列清事件面相关 API 是否存在。
+ * 能力探测行（v0.1.3；M1.2 起分 `@apply` / `@ready` 两行）。
  *
  * 形如：
- * `... governance capability version=0.1.3 pid=1 probe=on=fn,events=obj(dispatch=fn),...,get.sessions=absent,root=self`
+ * `... governance capability@apply version=0.1.11 pid=1 probe=on=fn,events=obj(dispatch=fn),...,get.sessions=absent,root=self`
  *
  * @param {Array<[string, string]>} entries `name=类型标记` 列表
+ * @param {'apply'|'ready'} [phase] 探测时点；apply=装载时，ready=首个会话事件后
  */
-export function capabilityLine(entries = []) {
+export function capabilityLine(entries = [], phase = 'apply') {
   return [
     new Date().toISOString(),
     'governance',
-    'capability',
+    `capability@${phase}`,
     `version=${PLUGIN_VERSION}`,
     `pid=${process.pid}`,
     `probe=${entries.map(([name, value]) => `${name}=${value}`).join(',')}`,

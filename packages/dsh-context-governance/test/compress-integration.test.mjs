@@ -146,7 +146,7 @@ test('apply：provider 不可见也一定执行，并写 warn + 诊断行（不�
     assert.equal(ctx.handlers.length, 1);
     assert.ok(ctx.warnings.some((warning) => warning.includes('compaction service') && warning.includes('token="compaction"')));
     const text = await fs.readFile(logFile, 'utf8');
-    assert.match(text, new RegExp(`governance capability version=${versionText}`));
+    assert.match(text, new RegExp(`governance capability@apply version=${versionText}`));
     assert.match(text, /probe=on=fn/);
     assert.match(text, new RegExp(`governance apply version=${versionText}`));
     assert.match(text, /adapter=none/);

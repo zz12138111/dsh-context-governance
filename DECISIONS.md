@@ -205,3 +205,9 @@
 - 选择：`DEFAULT_CONFIG.reinjection={maxFailures:3}`，`resolveConfig` 校验整数并夹取 [1,20]，经 `cordis.patch.yml` 示例暴露并传入 guard，`/cg status` 显示 `maxFailures`；成本记录加 `backend: adapter.kind`；`tokensShadowed` 白名单改 `nullable-number`，缺失为 null；`usage` 必须至少含一个有效 token 数值才写 `backendUsage`/measured；late-start trigger 读 `summary.sourceCommandId`；删除死字段；`reinjection-recovered` 后若 reinjection 降级原因清空则直接赋 `selectMode` 结果（不写死 full）。
 - 影响：配置生效、成本维度完整、口径可区分 null/0；0.1.9 的 fixture 结构白名单/commands 重试/range 兜底未动。
 - 关联：`src/index.js`、`src/compress/runtime.js`、`src/audit.js`、`src/commands/cg-status.js`、`cordis.patch.yml`、`test/t7-p2.test.mjs`、`test/t8-cost.test.mjs`；状态：active。
+## DEC-PLUGIN-20261025-28 [tech] M1.2：能力探测双行 + tokenMeter 延迟获取 + usage 兜底 + cost-v1.1
+
+- 背景：M1 真机 `tokensBefore/After` 恒 null、能力行 `compaction=absent`；复查确认是插件侧时序（apply 一次探测/缓存），不是宿主限制；真机 `assistant/message` usage 齐全可兜底。
+- 选择：能力探测 apply 记 `capability@apply`、首个会话事件后记 `capability@ready`（诊断行 + audit，只记类型）；`tokenMeter` 不加硬 inject，`ctx.inject(['tokenMeter'], cb)` 可选注入 + 按需 `ctx.tokenMeter ?? ctx.get('tokenMeter')`（成功才缓存）；`assistant/message.usage` 按会话缓存，`tokensBefore/After` 优先 meter、退回 usage、全缺 `null`+`none`；新增 `tokensBeforeSource`/`tokensAfterSource`/`tokensBeforeParts`/`tokensAfterParts`，`auditVersion=cost-v1.1`，只增字段；`/cg status` 显示 `last-cost`。
+- 影响：真机重启后应能给出非 null 成本水位与来源；`ctx.compaction` 结论为“可获取（ready 时）”，不改压缩后端/回注；两路都缺仍不伪造。
+- 关联：`src/capabilities.js`、`src/diagnostics.js`、`src/audit.js`、`src/index.js`、`src/compress/runtime.js`、`src/commands/cg-status.js`、`test/m1.2-cost.test.mjs`、`test/t8-cost.test.mjs`、`docs/T8-回注自愈与成本归属.md`；状态：active。

@@ -22,6 +22,7 @@ const SELF_PROBES = Object.freeze([
   'compaction',
   'commands',
   'tools',
+  'tokenMeter',
   'logger',
   'sessionProjections',
 ]);
@@ -36,6 +37,7 @@ const SERVICE_PROBES = Object.freeze([
   'commands',
   'tools',
   'compaction',
+  'tokenMeter',
   'sessionProjections',
 ]);
 

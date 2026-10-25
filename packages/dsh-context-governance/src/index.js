@@ -225,11 +225,13 @@ export async function apply(ctx, rawConfig = {}) {
     : config.compression.hostVersion;
   const backendVersion = normalizeBackendVersion(config.compression.backendVersion);
   // v0.1.3：先把事件面能力 dump 出来（只记类型），再决定感知层级。
+  // M1.2：apply 记一行；首个会话事件后再记 @ready（服务可能晚注册）。
   const capability = probeCapability(ctx);
   if (config.diagnostics.logFile !== '') {
-    const ok = appendDiagnosticLine(config.diagnostics.logFile, capabilityLine(capability.entries));
+    const ok = appendDiagnosticLine(config.diagnostics.logFile, capabilityLine(capability.entries, 'apply'));
     if (!ok) ctx.logger?.warn?.(`[context-governance] diagnostics log is not writable: ${config.diagnostics.logFile}`);
   }
+  const capabilityProbeEntries = capability.entries.map(([name, value]) => `${name}=${value}`);
   let compactionProbe = null;
   try {
     compactionProbe = ctx.compaction ??
@@ -252,6 +254,22 @@ export async function apply(ctx, rawConfig = {}) {
     );
   }
   let guard = null;
+  const probeReadyCapability = () => {
+    const ready = probeCapability(ctx);
+    const entries = ready.entries.map(([name, value]) => `${name}=${value}`);
+    if (config.diagnostics.logFile !== '') {
+      appendDiagnosticLine(config.diagnostics.logFile, capabilityLine(ready.entries, 'ready'));
+    }
+    if (guard?.readOnly !== true) {
+      guard?.auditLog?.append?.('capability@ready', { probe: entries });
+    }
+    const find = (name) => ready.entries.find(([key]) => key === name)?.[1] ?? 'absent';
+    ctx.logger?.info?.(
+      `[context-governance] capability@ready compaction=${find('compaction')} ` +
+      `get.compaction=${find('get.compaction')} tokenMeter=${find('tokenMeter')} ` +
+      `get.tokenMeter=${find('get.tokenMeter')}`,
+    );
+  };
   if (config.compression.enabled) {
     try {
       guard = new CompressionGuard({
@@ -266,6 +284,7 @@ export async function apply(ctx, rawConfig = {}) {
         captureTitle: config.captureTitle,
         project: config.project,
         reinjection: { maxFailures: config.reinjection.maxFailures },
+        onFirstEvent: probeReadyCapability,
       });
       guard.start();
       const status = guard.status;
@@ -291,6 +310,7 @@ export async function apply(ctx, rawConfig = {}) {
           eventApi: status.eventApi,
           readOnly: false,
         });
+        guard.auditLog?.append?.('capability@apply', { probe: capabilityProbeEntries });
       } else {
         ctx.logger?.warn?.(`[context-governance] audit not initialized: memory read-only (${guard.readOnlyReason ?? 'unknown'})`);
       }

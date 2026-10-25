@@ -126,6 +126,12 @@ export class CompressionGuard {
   #protectionSuspended = false;
   #skipProtectionThisCycle = false;
   #tokenMeter = null;
+  #meterDispose = null;
+  #lastUsage = new Map();
+  #pendingCosts = new Map();
+  #lastCost = null;
+  #readyFired = false;
+  #onFirstEvent = null;
   #projectName = '';
   #degradedReasons = [];
   #materializing = new Set();
@@ -186,13 +192,9 @@ export class CompressionGuard {
       maxFailures: Math.min(Math.max(options.reinjection?.maxFailures ?? 3, 1), 20),
     };
     this.#maxReinjectionFailures = this.#reinjection.maxFailures;
-    try {
-      this.#tokenMeter = this.#ctx?.tokenMeter
-        ?? (typeof this.#ctx?.get === 'function' ? this.#ctx.get('tokenMeter') : null)
-        ?? null;
-    } catch {
-      this.#tokenMeter = null;
-    }
+    this.#onFirstEvent = typeof options.onFirstEvent === 'function' ? options.onFirstEvent : null;
+    // M1.2：装载时先试一次；失败不缓存 null，之后走注入回调/按需获取。
+    this.#getTokenMeter();
     this.#audit = options.audit ?? (this.#store === null
       ? null
       : new AuditLog({
@@ -313,6 +315,7 @@ export class CompressionGuard {
   /** 开始订阅；重复调用安全。 */
   start() {
     if (this.#started) return this;
+    this.#tryInjectTokenMeter();
     if (typeof this.#ctx?.on !== 'function') {
       this.#logger?.warn?.('[context-governance] ctx.on is unavailable; compaction observation disabled');
       return this;
@@ -335,6 +338,14 @@ export class CompressionGuard {
     }
     this.#unsubscribe = null;
     this.#started = false;
+    try {
+      this.#meterDispose?.();
+    } catch {
+      /* meter 注入清理失败不阻断卸载 */
+    }
+    this.#meterDispose = null;
+    // M1.2：还没等到 after usage 的成本行，用 null + none 显式落盘，不静默丢。
+    this.#flushPendingCosts();
     // T6：卸载时还没 end 的周期显式留痕（不静默丢弃）。
     for (const [pendingId, pendingState] of this.#pending) {
       this.#stats.abandonedCycles += 1;
@@ -401,6 +412,7 @@ export class CompressionGuard {
       },
       writeLatency: calculateLatencyStats(this.#writeDurations),
       stats: { ...this.#stats, pending: this.#pending.size, reports: this.#reports.length },
+      lastCost: this.#lastCost === null ? null : { ...this.#lastCost },
       lastReport: last === null ? null : cloneJson(last),
     };
   }
@@ -442,9 +454,48 @@ export class CompressionGuard {
    * - 连续失败达到 `maxFailures` 才进入 `degraded-protection` 并跳过**下一周期**的保护写；
    * - 下一周期仍会重试回注（用已有记忆指针），成功即写 `reinjection-recovered` 并恢复写入。
    */
+  /**
+   * M1.2：按需取 tokenMeter；成功才缓存，失败不缓存 null（服务可能晚注册）。
+   * 不把 tokenMeter 加进硬 inject：缺服务时插件仍要能装载。
+   */
+  #getTokenMeter() {
+    if (this.#tokenMeter !== null) return this.#tokenMeter;
+    try {
+      const meter = this.#ctx?.tokenMeter
+        ?? (typeof this.#ctx?.get === 'function' ? this.#ctx.get('tokenMeter') : null)
+        ?? null;
+      if (meter !== null && typeof meter?.measure === 'function') {
+        this.#tokenMeter = meter;
+        return meter;
+      }
+    } catch {
+      /* 服务未就绪/代理抛错：下次再试 */
+    }
+    return null;
+  }
+
+  /** M1.2：可选注入回调；服务就绪时直接拿到 meter，作为按需获取之外的第二条路。 */
+  #tryInjectTokenMeter() {
+    if (typeof this.#ctx?.inject !== 'function') return;
+    try {
+      this.#meterDispose = this.#ctx.inject(['tokenMeter'], (scope) => {
+        try {
+          const meter = scope?.tokenMeter
+            ?? (typeof scope?.get === 'function' ? scope.get('tokenMeter') : null)
+            ?? null;
+          if (meter !== null && typeof meter?.measure === 'function') this.#tokenMeter = meter;
+        } catch {
+          /* 注入回调失败不阻断；按需获取仍会重试 */
+        }
+      });
+    } catch {
+      this.#meterDispose = null;
+    }
+  }
+
   /** T8-2：优先用宿主 tokenMeter 测整会话 token；取不到返回 null（记 unknown）。 */
   #measureTokens(session) {
-    const meter = this.#tokenMeter;
+    const meter = this.#getTokenMeter();
     if (meter === null || typeof meter?.measure !== 'function') return null;
     try {
       const measurement = meter.measure(session);
@@ -462,11 +513,98 @@ export class CompressionGuard {
     }
   }
 
+  #sessionKey(session) {
+    const id = session?.id ?? session?.header?.id;
+    return typeof id === 'string' && id !== '' ? id : null;
+  }
+
+  /** 从 assistant/message 的 usage 取上下文侧用量：input + cacheRead + cacheWrite。 */
+  #usageOf(event) {
+    const usage = event?.data?.usage ?? event?.data?.message?.usage;
+    if (usage === null || typeof usage !== 'object' || Array.isArray(usage)) return null;
+    const parts = {};
+    let seen = false;
+    for (const key of ['inputTokens', 'cacheReadTokens', 'cacheWriteTokens']) {
+      if (Number.isFinite(usage[key]) && usage[key] >= 0) {
+        parts[key] = usage[key];
+        seen = true;
+      }
+    }
+    if (!seen) return null;
+    const tokens = (parts.inputTokens ?? 0) + (parts.cacheReadTokens ?? 0) + (parts.cacheWriteTokens ?? 0);
+    return { tokens, parts };
+  }
+
+  #recordUsage(session, event) {
+    const usage = this.#usageOf(event);
+    const key = this.#sessionKey(session);
+    if (usage === null || key === null) return;
+    this.#lastUsage.set(key, { ...usage, seq: event?.seq ?? null });
+  }
+
+  /** compaction/end 后第一条 assistant/message 到达：补齐 tokensAfter 并落成本行。 */
+  #captureCostAfter(session, event) {
+    const key = this.#sessionKey(session);
+    if (key === null) return;
+    const pending = this.#pendingCosts.get(key);
+    if (pending === undefined) return;
+    this.#pendingCosts.delete(key);
+    const usage = this.#usageOf(event);
+    if (usage !== null) {
+      pending.state.cost.tokensAfter = usage.tokens;
+      pending.state.cost.tokensAfterSource = 'usage';
+      pending.state.cost.tokensAfterParts = usage.parts;
+    } else {
+      pending.state.cost.tokensAfter = null;
+      pending.state.cost.tokensAfterSource = 'none';
+      pending.state.cost.tokensAfterParts = null;
+    }
+    queueMicrotask(() => {
+      try {
+        this.#writeCost(pending.state, pending.session);
+      } catch (error) {
+        this.#logger?.warn?.(`[context-governance] cost audit failed: ${String(error?.message ?? error)}`);
+      }
+    });
+  }
+
+  /** 插件卸载/新周期前冲刷未等到 after usage 的成本行：null + none，不伪造。 */
+  #flushPendingCosts() {
+    for (const pending of this.#pendingCosts.values()) {
+      pending.state.cost.tokensAfter = null;
+      pending.state.cost.tokensAfterSource = 'none';
+      pending.state.cost.tokensAfterParts = null;
+      try {
+        this.#writeCost(pending.state, pending.session);
+      } catch (error) {
+        this.#logger?.warn?.(`[context-governance] cost audit failed: ${String(error?.message ?? error)}`);
+      }
+    }
+    this.#pendingCosts.clear();
+  }
+
   #newCost(trigger, session) {
+    const meterTokens = this.#measureTokens(session);
+    const usage = this.#lastUsage.get(this.#sessionKey(session));
+    let tokensBefore = null;
+    let tokensBeforeSource = 'none';
+    let tokensBeforeParts = null;
+    if (meterTokens !== null) {
+      tokensBefore = meterTokens;
+      tokensBeforeSource = 'tokenMeter';
+    } else if (usage !== undefined) {
+      tokensBefore = usage.tokens;
+      tokensBeforeSource = 'usage';
+      tokensBeforeParts = usage.parts;
+    }
     return {
       trigger,
-      tokensBefore: this.#measureTokens(session),
+      tokensBefore,
+      tokensBeforeSource,
+      tokensBeforeParts,
       tokensAfter: null,
+      tokensAfterSource: 'none',
+      tokensAfterParts: null,
       tokensShadowed: null,
       tokensSummary: null,
       tokensInjected: null,
@@ -482,8 +620,6 @@ export class CompressionGuard {
   #writeCost(state, session) {
     if (state === undefined || state.cost === undefined) return;
     const cost = state.cost;
-    const after = this.#measureTokens(session);
-    if (after !== null) cost.tokensAfter = after;
     if (state.reinjection?.status === 'injected' && Number.isFinite(state.reinjection.tokens)) {
       cost.tokensInjected = state.reinjection.tokens;
       cost.injectedEntries = state.reinjection.lines ?? 0;
@@ -495,6 +631,7 @@ export class CompressionGuard {
       && typeof cost.backendUsage === 'object'
       && Object.keys(cost.backendUsage).length > 0;
     const governanceEstimated = state.reinjection?.status === 'injected';
+    const occurredAt = cost.occurredAt ?? this.#now().toISOString();
     this.#auditEvent('compaction-cost', {
       sessionId: state.sessionId,
       compactionId: state.compactionId,
@@ -502,9 +639,13 @@ export class CompressionGuard {
       backend: this.#adapter.kind,
       model: cost.model,
       trigger: cost.trigger,
-      occurredAt: cost.occurredAt ?? this.#now().toISOString(),
+      occurredAt,
       tokensBefore: cost.tokensBefore,
       tokensAfter: cost.tokensAfter,
+      tokensBeforeSource: cost.tokensBeforeSource,
+      tokensAfterSource: cost.tokensAfterSource,
+      tokensBeforeParts: cost.tokensBeforeParts,
+      tokensAfterParts: cost.tokensAfterParts,
       tokensShadowed: cost.tokensShadowed,
       tokensSummary: cost.tokensSummary,
       tokensInjected: cost.tokensInjected,
@@ -514,8 +655,18 @@ export class CompressionGuard {
       backendCostSource: backendMeasured ? 'measured' : 'unknown',
       governanceCostSource: governanceEstimated ? 'estimated' : 'unknown',
       estimateMethod: governanceEstimated ? 'chars/4' : 'none',
-      auditVersion: 'cost-v1',
+      auditVersion: 'cost-v1.1',
     });
+    this.#lastCost = {
+      sessionId: state.sessionId,
+      compactionId: state.compactionId,
+      trigger: cost.trigger,
+      tokensBefore: cost.tokensBefore,
+      tokensAfter: cost.tokensAfter,
+      tokensBeforeSource: cost.tokensBeforeSource,
+      tokensAfterSource: cost.tokensAfterSource,
+      occurredAt,
+    };
   }
 
   #noteReinjectionFailure(reason) {
@@ -881,6 +1032,15 @@ export class CompressionGuard {
 
   #handle(session, event) {
     try {
+      // M1.2：首个会话事件后再探测一次能力面（服务可能晚注册）。
+      if (!this.#readyFired) {
+        this.#readyFired = true;
+        try {
+          this.#onFirstEvent?.();
+        } catch (error) {
+          this.#logger?.warn?.(`[context-governance] ready capability hook failed: ${String(error?.message ?? error)}`);
+        }
+      }
       // P2-1：别的项目/其它工作区会话的压缩不写本项目记忆、也不回注到那个会话。
       if (!this.#belongsToProject(session)) {
         this.#stats.ignoredForeignEvents += 1;
@@ -897,8 +1057,23 @@ export class CompressionGuard {
       this.#stats.events += 1;
       const id = event?.data?.compactionId ?? null;
       switch (event?.type) {
+        case 'assistant/message': {
+          this.#recordUsage(session, event);
+          this.#captureCostAfter(session, event);
+          return;
+        }
         case 'compaction/start': {
           if (id === null) return;
+          // M1.2：上一周期还没等到 after usage 就开了新周期 → 用 null + none 先落盘。
+          const sessionKey = this.#sessionKey(session);
+          const pendingCost = sessionKey === null ? undefined : this.#pendingCosts.get(sessionKey);
+          if (pendingCost !== undefined) {
+            this.#pendingCosts.delete(sessionKey);
+            pendingCost.state.cost.tokensAfter = null;
+            pendingCost.state.cost.tokensAfterSource = 'none';
+            pendingCost.state.cost.tokensAfterParts = null;
+            this.#writeCost(pendingCost.state, pendingCost.session);
+          }
           this.#stats.starts += 1;
           // T8-1：连续失败达到阈值后的“暂停一个周期”在这里生效；下一个 start 自动重试写入。
           this.#skipProtectionThisCycle = this.#protectionSuspended;
@@ -1117,10 +1292,24 @@ export class CompressionGuard {
               : this.#now().toISOString();
           }
           this.#scheduleReinjection(session, state);
-          // T8-2：回注 microtask 之后写成本记录（同一周期一条）。
+          // T8-2/M1.2：回注 microtask 之后写成本记录（同一周期一条）。
+          // tokenMeter 可用 → 立即写；不可用 → 等 compaction/end 后第一条
+          // assistant/message 的 usage 补齐 tokensAfter；等不到则由 stop/新周期冲刷为 null + none。
+          const sessionKey = this.#sessionKey(session);
           queueMicrotask(() => {
             try {
-              this.#writeCost(state, session);
+              const afterTokens = this.#measureTokens(session);
+              if (afterTokens !== null) {
+                state.cost.tokensAfter = afterTokens;
+                state.cost.tokensAfterSource = 'tokenMeter';
+                state.cost.tokensAfterParts = null;
+                this.#writeCost(state, session);
+              } else if (sessionKey === null) {
+                state.cost.tokensAfterSource = 'none';
+                this.#writeCost(state, session);
+              } else {
+                this.#pendingCosts.set(sessionKey, { state, session });
+              }
             } catch (error) {
               this.#logger?.warn?.(`[context-governance] cost audit failed: ${String(error?.message ?? error)}`);
             }
