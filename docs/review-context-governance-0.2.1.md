@@ -17,7 +17,7 @@
 
 ## 1. 结论摘要
 
-- **阻断（P1）：0**；**应修（P2）：0**（P2-4 回填闭环，见 §13）；**建议（P3）：0**（P3-12/13 于 `4af1dc2` 闭环，见 §14）。
+- **阻断（P1）：0**；**应修（P2）：1**（**P2-5**：真机回填未触发——服务取法在属性抛错时短路，见 §15；§13/§14 的回填结论仅 mock 形态成立）；**建议（P3）：0**。
 - 六条验收 **4 条完全成立、1 条部分（⑥ 的审计子项）、1 条报告证据不完整**；十项清单里 **⑩ 数字更新未做**（详见 §4）。
 - 代码检索与 spy 双证：**本版没有任何压缩调用路径**（我用自己的全量 pattern + 3 个真实 API 名 spy 复核，0 次）。
 
@@ -291,3 +291,38 @@ pressure: measured=0.563 estimated=0.393 adjusted=0.531(×1.35) effective=0.563 
 - 新建会话 → `source=projection`（实时，不带 backfilled）。
 
 **计数更新**：**P1=0 / P2=0 / P3=0**（P3-12/13 闭环）。0.2.1 代码层复核全部收口；剩余为真机重启验证。
+
+## 15. 真机回填未触发：根因与修复建议（2026-10-26 17:1x，P2-5）
+
+**真机事实**（0.2.1 + 回填，`apply` pid 18040 @ `17:10:49.606Z`；`capability@ready` @ `17:11:05.959Z`）：
+- `capability` 探针：**`sessionProjections=throws`**、`get.sessionProjections=obj`
+- `/cg status`（`time=17:11:57.698Z`）：`window: current=unknown source=config-fallback`、`native=0.6785 (config-fallback)`、`events=30`
+- 重启后**没有任何新的 `request/context`**（我逐会话解日志比对），所以这里本应走 backfill，实际没有。
+
+**三处排查（00 提的）**
+1. **回填触发条件**：`#backfillWindow(session)` 在事件处理器里、`#belongsToProject` 过滤之后、**每个事件**（含 `user/message`）都会调用；不按事件类型限制。**触发条件没问题。**
+2. **`#lastSession`**：`this.#lastSession = session` 在**每个事件**更新（`runtime.js:1408`），不等 `request/context`。`current=unknown` 不是 lastSession 没更新，而是 `#windows` 里没有该会话条目（回填失败）。**00 的假设（lastSession 只在 request/context 更新）不成立。**
+3. **`stateOf`/`ownEvents()` 是否被调用**：**没有**。根因在服务获取：
+
+```js
+// 现行 #getSessionProjections（runtime.js:611-620）
+const service = this.#ctx?.sessionProjections        // ← 真机这里抛错
+  ?? (typeof this.#ctx?.get === 'function' ? this.#ctx.get('sessionProjections') : null)
+  ?? null;
+```
+
+`??` 整条链在**同一个 try** 里：`this.#ctx?.sessionProjections` 的 getter 抛错 → 直接进 catch → 返回 null。**`ctx.get('sessionProjections')` 永远不会被执行**；又因 `projections === null` 时 `#backfillWindow` 提前 return（不加 `#windowBackfillAttempted`），每个事件都重试、每次都同样失败。
+
+**我按真机形态复现（同一快照代码）**
+- `ctx` 上 `sessionProjections` 是**抛错的 getter**、`ctx.get('sessionProjections')` 正常返回服务 → 喂 `user/message` 后：`windowState.current=null`、`source=unknown`、**`stateOf` 调用 0 次**（与真机完全一致）
+- 对照：属性为 `undefined`（单测 mock 的形态）→ 回填成功：`current=1048576`、`source=projection(backfilled)`、`stateOf` 1 次
+
+**结论（P2-5，应修）**：回填在真机**功能性未生效**；单测 264/264 通过是因为 mock 的 `ctx` 没有“属性抛错”形态。00 记的 `ART-20261025-108`（代码层通过 ≠ 真机生效）成立。
+
+**修复建议**
+1. `#getSessionProjections` 改为 **`ctx.get('sessionProjections')` 优先**，或两条取法**各自 try**（属性抛错后仍尝试 `ctx.get`）；成功才缓存。
+2. 同模式的 `#getTokenMeter` 一并审（`tokenMeter` 真机也是 `property=throws`，只是它另有 `#tryInjectTokenMeter` 路径兜底；`sessionProjections` 没有 inject 路径）。
+3. **补真机形态单测**：`ctx` 上目标服务是**抛错 getter** + `ctx.get` 返回服务，断言回填成功、`stateOf` 1 次；现有 mock（属性 undefined）不能覆盖真机。
+4. （可选）`#backfillWindow` 失败时区分“服务取不到”与“state 无窗口”，前者不消耗 attempted（现状），后者消耗——现逻辑对，但建议加日志便于真机诊断。
+
+**计数更新**：P1=0 / **P2=1（P2-5）** / P3=0。§13/§14 的回填验收结论**仅在 mock 形态下成立**；真机需在修复后重验（既有会话 `observed=历史时间`、`projection(backfilled)`、`native=0.6934`）。
