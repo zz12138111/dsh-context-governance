@@ -126,7 +126,7 @@ export function summarizeWindow(window) {
   const mismatch = window.conservativeTokens !== null && window.conservativeTokens !== window.currentTokens
     ? ' 校验按 conservative'
     : '';
-  const nativeSource = window.currentSource === 'projection' ? 'projection' : 'config-fallback';
+  const nativeSource = String(window.currentSource).startsWith('projection') ? 'projection' : 'config-fallback';
   return `${current} conservative=${conservative} native-current=${nativeCurrent}(${nativeSource}) ` +
     `native-conservative=${nativeConservative} ${validated}${mismatch}`;
 }
@@ -286,7 +286,7 @@ export function summarizePolicy(policy) {
     ? String(nativeValue)
     : window.degenerate === true
       ? 'unknown (degenerate)'
-      : `${nativeValue === null ? '-' : nativeValue} (${window.currentSource === 'projection' ? 'projection' : 'config-fallback'})`;
+      : `${nativeValue === null ? '-' : nativeValue} (${String(window.currentSource).startsWith('projection') ? window.currentSource : 'config-fallback'})`;
   return `compact.at=${at.toFixed(2)} (source=${source}) native=${nativeText} early=${policy.early ? 'on' : 'off'}`;
 }
 

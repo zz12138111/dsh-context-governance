@@ -560,3 +560,116 @@ test('0.2.1 P3-2：被拒会话覆盖在 status 标 (rejected)，恢复后消失
   const rejectedShow = await command.handler({ rawInput: 'policy show' });
   assert.match(rejectedShow.text, /session: compact\.at=0\.6\(rejected\)/);
 });
+
+test('0.2.1 backfill：首次事件从 contextPressure 回填历史窗口，observedAt=历史事件时间，stateOf 每会话一次', () => {
+  let stateOfCalls = 0;
+  const projections = {
+    stateOf: () => { stateOfCalls += 1; return { contextWindow: 1_048_576, surfaceTokens: 10 }; },
+  };
+  const handlers = [];
+  const ctx = {
+    get: (name) => (name === 'sessionProjections' ? projections : undefined),
+    on: (event, handler) => { handlers.push(handler); return () => {}; },
+    logger: { info: () => {}, warn: () => {} },
+  };
+  const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.3' });
+  guard.start();
+  try {
+    const historyTime = 1792940246973;
+    const session = {
+      id: 'session-58a2e845-1111',
+      header: { id: 'session-58a2e845-1111', cwd: process.cwd() },
+      ownEvents: () => [{ type: 'request/context', time: historyTime, data: { contextWindow: 1_048_576 } }],
+    };
+    handlers[0](session, { type: 'assistant/message', seq: 5, data: { usage: { inputTokens: 1000 } } });
+    const state = guard.windowState;
+    assert.equal(state.current.tokens, 1_048_576);
+    assert.equal(state.current.source, 'backfilled');
+    assert.equal(state.source, 'projection(backfilled)');
+    assert.equal(state.current.observedAt, new Date(historyTime).toISOString(), 'observedAt 必须是历史事件时间');
+    assert.equal(state.conservative.tokens, 1_048_576);
+    handlers[0](session, { type: 'assistant/message', seq: 6, data: { usage: { inputTokens: 1001 } } });
+    assert.equal(stateOfCalls, 1, 'stateOf 每会话至多一次');
+  } finally {
+    guard.stop();
+  }
+});
+
+test('0.2.1 backfill：无历史窗口/字段缺失/非法值都不伪造（仍 unknown + config-fallback）', () => {
+  const run = (stateValue) => {
+    let calls = 0;
+    const projections = { stateOf: () => { calls += 1; return stateValue; } };
+    const handlers = [];
+    const ctx = {
+      get: (name) => (name === 'sessionProjections' ? projections : undefined),
+      on: (event, handler) => { handlers.push(handler); return () => {}; },
+      logger: { info: () => {}, warn: () => {} },
+    };
+    const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.3' });
+    guard.start();
+    const session = { id: 'session-bbbbbbbb-2222', header: { id: 'session-bbbbbbbb-2222', cwd: process.cwd() }, ownEvents: () => [] };
+    handlers[0](session, { type: 'assistant/message', seq: 1, data: {} });
+    const state = guard.windowState;
+    const stats = guard.status.stats;
+    guard.stop();
+    return { state, stats, calls };
+  };
+  const missing = run({ surfaceTokens: 3 });
+  assert.equal(missing.state.current, null);
+  assert.equal(missing.state.source, 'unknown');
+  assert.equal(missing.calls, 1);
+  const invalid = run({ contextWindow: '1M' });
+  assert.equal(invalid.state.current, null, '非法历史值不得回填');
+  assert.equal(invalid.stats.windowInvalidObservations, 1);
+});
+
+test('0.2.1 backfill：投影服务晚到会重试；实时 request/context 优先并回到 source=projection', () => {
+  let available = false;
+  const projections = { stateOf: () => ({ contextWindow: 1_048_576 }) };
+  const handlers = [];
+  const ctx = {
+    get: (name) => (name === 'sessionProjections' && available ? projections : undefined),
+    on: (event, handler) => { handlers.push(handler); return () => {}; },
+    logger: { info: () => {}, warn: () => {} },
+  };
+  const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.3' });
+  guard.start();
+  try {
+    const session = { id: 'session-cccccccc-3333', header: { id: 'session-cccccccc-3333', cwd: process.cwd() }, ownEvents: () => [] };
+    handlers[0](session, { type: 'assistant/message', seq: 1, data: {} });
+    assert.equal(guard.windowState.current, null, '服务未就绪不得回填');
+    available = true;
+    handlers[0](session, { type: 'assistant/message', seq: 2, data: {} });
+    assert.equal(guard.windowState.current.source, 'backfilled');
+    // 实时观察优先
+    handlers[0](session, { type: 'request/context', seq: 3, data: { contextWindow: 1_048_576 } });
+    assert.equal(guard.windowState.current.source, 'live');
+    assert.equal(guard.windowState.source, 'projection');
+  } finally {
+    guard.stop();
+  }
+});
+
+test('0.2.1 backfill：/cg status 显示 source=projection(backfilled) + 历史 observed + native=0.6934', async () => {
+  const historyTime = 1792940246973;
+  const config = resolveConfig({ projectRoot: 'D:/tmp/window', policy: {} });
+  const state = buildPolicyState(config, {
+    readFile: () => { const error = new Error('missing'); error.code = 'ENOENT'; throw error; },
+  });
+  state.setWindowProvider(() => ({
+    current: { sessionId: 'session-58a2e845', tokens: 1_048_576, observedAt: new Date(historyTime).toISOString(), source: 'backfilled' },
+    conservative: { sessionId: 'session-58a2e845', tokens: 1_048_576, observedAt: new Date(historyTime).toISOString(), source: 'backfilled' },
+    observed: [], source: 'projection(backfilled)', removed: false,
+  }));
+  const command = createStatusCommand({
+    guard: { status: guardStatus({ measuredTokens: 500_000, estimatedTokens: 400_000 }) },
+    policy: state,
+    now: () => new Date('2026-10-26T00:00:00Z'),
+  });
+  const status = await command.handler({ rawInput: 'status' });
+  assert.match(status.text, /window: current=1M \(session 58a2e845\) observed 2026-10-25T/);
+  assert.match(status.text, /source=projection\(backfilled\)/);
+  assert.match(status.text, /native-current=0\.6934/);
+  assert.match(status.text, /native-conservative=0\.6934 validated/);
+  assert.match(status.text, /pressure: .*window=1M \(session 58a2e845\)/);
+});

@@ -286,7 +286,9 @@ export function buildPolicyState(config, deps = {}) {
     const configWindow = config.policy.windowTokens;
     const reservedTokens = config.policy.reservedTokens;
     const currentTokens = win?.current?.tokens ?? configWindow;
-    const currentSource = win?.current ? 'projection' : 'config-fallback';
+    const currentSource = win?.current
+      ? (win.current.source === 'backfilled' ? 'projection(backfilled)' : 'projection')
+      : 'config-fallback';
     const conservative = win?.conservative ?? null;
     const currentInfo = nativeFromWindow({ windowTokens: currentTokens, reservedTokens });
     const conservativeInfo = conservative === null

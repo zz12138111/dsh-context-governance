@@ -139,6 +139,9 @@ export class CompressionGuard {
   /** 被显式移除（request/context 不带 contextWindow）的会话，用于状态里区分 unknown 与 removed。 */
   #removedWindows = new Set();
   #windowListeners = new Set();
+  /** 0.2.1 backfill：首次事件时从 sessionProjections 回填历史 contextWindow（每会话一次）。 */
+  #sessionProjections = null;
+  #windowBackfillAttempted = new Set();
   #pendingCosts = new Map();
   #lastCost = null;
   #toolNames = new Map();
@@ -570,17 +573,18 @@ export class CompressionGuard {
   get windowState() {
     const sessionId = this.#sessionKey(this.#lastSession);
     const entry = sessionId === null ? null : this.#windows.get(sessionId) ?? null;
+    const sourceOf = (window) => (window?.source === 'backfilled' ? 'projection(backfilled)' : 'projection');
     const observed = [...this.#windows.entries()]
-      .map(([id, window]) => ({ sessionId: id, tokens: window.tokens, observedAt: window.observedAt }))
+      .map(([id, window]) => ({ sessionId: id, tokens: window.tokens, observedAt: window.observedAt, source: window.source ?? 'live' }))
       .sort((left, right) => left.tokens - right.tokens);
     const conservative = observed.length === 0 ? null : { ...observed[0] };
     return {
       current: entry === null || sessionId === null
         ? null
-        : { sessionId, tokens: entry.tokens, observedAt: entry.observedAt },
+        : { sessionId, tokens: entry.tokens, observedAt: entry.observedAt, source: entry.source ?? 'live' },
       conservative,
       observed,
-      source: entry === null ? 'unknown' : 'projection',
+      source: entry === null ? 'unknown' : sourceOf(entry),
       removed: entry === null && sessionId !== null && this.#removedWindows.has(sessionId),
     };
   }
@@ -590,6 +594,61 @@ export class CompressionGuard {
     if (typeof listener !== 'function') return () => {};
     this.#windowListeners.add(listener);
     return () => this.#windowListeners.delete(listener);
+  }
+
+  #notifyWindowChange() {
+    const snapshot = this.windowState;
+    for (const listener of this.#windowListeners) {
+      try {
+        listener(snapshot);
+      } catch (error) {
+        this.#logger?.warn?.(`[context-governance] window observer failed: ${String(error?.message ?? error)}`);
+      }
+    }
+  }
+
+  /** 按需取 sessionProjections（晚挂载；成功才缓存，失败下次再试，与 tokenMeter 同策略）。 */
+  #getSessionProjections() {
+    if (this.#sessionProjections !== null) return this.#sessionProjections;
+    try {
+      const service = this.#ctx?.sessionProjections
+        ?? (typeof this.#ctx?.get === 'function' ? this.#ctx.get('sessionProjections') : null)
+        ?? null;
+      if (service !== null && typeof service?.stateOf === 'function') this.#sessionProjections = service;
+    } catch {
+      /* 未就绪/代理抛错：下次事件再试 */
+    }
+    return this.#sessionProjections;
+  }
+
+  /**
+   * 0.2.1 backfill（ART-20261025-101）：宿主只在路由变化时发 request/context，
+   * 既有会话重启后可能永远收不到新窗口——首次会话事件时从 contextPressure 投影回填一次。
+   * 只回填“还活着且合法”的 contextWindow；拿不到保持 unknown（不造值）；每会话只尝试一次。
+   */
+  #backfillWindow(session) {
+    const key = this.#sessionKey(session);
+    if (key === null || this.#windowBackfillAttempted.has(key)) return;
+    const projections = this.#getSessionProjections();
+    if (projections === null) return; // 服务未就绪：保持未尝试，下条事件再试
+    this.#windowBackfillAttempted.add(key);
+    if (this.#windows.has(key)) return; // 已有实时观察，不覆盖
+    let state = null;
+    try {
+      state = projections.stateOf(session, 'contextPressure');
+    } catch {
+      return;
+    }
+    const tokens = state?.contextWindow;
+    if (!Number.isInteger(tokens) || tokens <= 0) {
+      // 投影里“有字段但非法”也算一次非法观测（保持 unknown，不造值）。
+      if (tokens !== undefined) this.#stats.windowInvalidObservations += 1;
+      return;
+    }
+    // observedAt 必须取历史 request/context 事件的时间戳（不是回填时刻）。
+    this.#windows.set(key, { tokens, observedAt: this.#historicalWindowObservedAt(session), source: 'backfilled' });
+    this.#removedWindows.delete(key);
+    this.#notifyWindowChange();
   }
 
   /** request/context：有有效 contextWindow 就更新；**缺失**才删除该会话旧值（P3-6：非法值不当删除）。 */
@@ -603,7 +662,7 @@ export class CompressionGuard {
     let changed = false;
     if (Number.isInteger(observed) && observed > 0) {
       if (previous === null || previous.tokens !== observed) changed = true;
-      this.#windows.set(key, { tokens: observed, observedAt: this.#now().toISOString() });
+      this.#windows.set(key, { tokens: observed, observedAt: this.#now().toISOString(), source: 'live' });
       this.#removedWindows.delete(key);
     } else if (!hasField || observed === undefined || observed === null) {
       // 真正的“不带 contextWindow”才删除（DEC-66 ②）。
@@ -621,14 +680,25 @@ export class CompressionGuard {
       return;
     }
     if (!changed) return;
-    const snapshot = this.windowState;
-    for (const listener of this.#windowListeners) {
-      try {
-        listener(snapshot);
-      } catch (error) {
-        this.#logger?.warn?.(`[context-governance] window observer failed: ${String(error?.message ?? error)}`);
+    this.#notifyWindowChange();
+  }
+
+  /** 历史 request/context 的事件时间（回填 observedAt 用；不是回填时刻）。 */
+  #historicalWindowObservedAt(session) {
+    try {
+      const events = typeof session?.ownEvents === 'function' ? session.ownEvents() : null;
+      if (!Array.isArray(events)) return null;
+      for (let index = events.length - 1; index >= 0; index -= 1) {
+        const event = events[index];
+        if (event?.type !== 'request/context') continue;
+        const window = event.data?.contextWindow;
+        if (!Number.isInteger(window) || window <= 0) continue;
+        return Number.isFinite(event.time) ? new Date(event.time).toISOString() : null;
       }
+    } catch {
+      /* 会话日志不可读 → observedAt 记 null（不造时间） */
     }
+    return null;
   }
 
   #sessionKey(session) {
@@ -1335,6 +1405,8 @@ export class CompressionGuard {
       }
       this.#stats.events += 1;
       this.#lastSession = session;
+      // 0.2.1 backfill：既有会话可能拿不到新的 request/context，首次事件时回填一次历史窗口。
+      this.#backfillWindow(session);
       // T2′：替换事件必须紧跟在 compaction/prune 之后；若下一条不是它，
       // 先把尚未完成的那条按 unknown 落盘，再处理当前事件。
       const eventSessionId = this.#sessionKey(session);
