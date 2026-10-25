@@ -232,3 +232,10 @@
 - 选择：批次语义（`批次|进度|progress|batch`）必须与比例出现在**同一条** `user/message` 或 `assistant/message` 正文，跨消息拼凑不算；无关键字但有比例 → 不算候选，记 `batchRejected` 并 `skip(no-batch-semantics)`；`YYYY/MM`（19xx/20xx + 1–12）剔除后 `skip(date-like-ratio)`；`stripStructuredPayload` 只剥“像 JSON”的 `{…}`/`[…]`（含引号或冒号），保留正文比例；判据原则“宁可 skip 不可 fail”（fail 会触发 `manual-compaction-loss`）。
 - 影响：真实快照 A/B（`0.1.12 seq=11479 ratios=[] → pass`、`0.1.13 seq=11453 ratios=["2/6"] → fail`）在 0.1.14 均 `skip(no-batch-semantics)`、不进 failures；正例必须带关键字；`auditVersion` 维持 `cost-v1.2`。离线三列对照 `analysis/req-20261025-05/`；全量 **196/196**。
 - 关联：`src/compress/protection.js`、`test/compress-protection.test.mjs`、`test/compress-integration.test.mjs`、`test/compress-helpers.mjs`、`docs/T3-压缩适配与保护.md`、`docs/T5-状态命令与审计.md`、`analysis/req-20261025-05/`；状态：active。
+
+## DEC-PLUGIN-20261025-32 [tech] `ctx.compaction` 不可得根因：agent preset `isolate`
+
+- 背景：0.1.14 真机 `get.compaction(strict=false)=undefined` 只定性到“本 scope 未提供”，根因未定位（此前怀疑挂载时机/redirect）。
+- 事实：agent preset 把 `compaction-basic` 与 `tool-result-pruner` 放进 `cordis:group` 并设 `isolate: { compaction: true, toolResultPruner: true }`（`@local/dsh-computer-use/presets/cordis.patch.yml`，三套 preset 一致）→ 两个服务被隔离在 preset 组作用域内，根级插件不可见；与 token 拼写、挂载时机无关。
+- 影响：provider 路线在现有部署下**不可行**（要动需宿主级改动，M1 不做）；插件继续走 `session/event` 事件级；prune 观测走事件流，不依赖该服务；`/cg status` 的 `get.compaction=absent`、`get.compaction(strict=false)=undefined` 是设计行为，不再当异常。
+- 关联：`docs/T3-压缩适配与保护.md` §6.4、`docs/T8-回注自愈与成本归属.md` §6.5、`logs/governance.log` capability@apply/@ready；状态：active。

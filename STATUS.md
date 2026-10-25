@@ -40,7 +40,7 @@
 
 T4 回注时点：checkpoint→end 之间不可实现，改为 end 后首个 microtask（同 tick、下一轮前）；用户已接受，`DEC-PLUGIN-20261025-09`。
 
-M1 成本“前后水位未知”原按降级接受，2026-10-25 复查为插件侧可修（tokenMeter 读取时机），已由 M1.2 修（v0.1.11，离线 183/183）。**`ctx.compaction` 已结案（2026-10-25）**：`get.compaction(strict=false)` 在 `@apply` 13:18:10Z / `@ready` 13:18:23Z **均 `undefined`** → 本部署插件 scope **未提供**该服务（有 impl 未 active 会返回 `obj`）；插件不依赖它（走 `session/event`），**「回注时点修正」在该部署下不可行**，只能走事件时序推断（现方案），不再是待查项。能力探测只看 `get.X` 列；裸属性 `throws` 不代表服务异常（反例：`tokenMeter=throws` 同时 `get.tokenMeter=obj`）。
+M1 成本“前后水位未知”原按降级接受，2026-10-25 复查为插件侧可修（tokenMeter 读取时机），已由 M1.2 修（v0.1.11，离线 183/183）。**`ctx.compaction` 已结案（2026-10-25）**：`get.compaction(strict=false)` 在 `@apply` 13:18:10Z / `@ready` 13:18:23Z **均 `undefined`** → 本部署插件 scope **未提供**该服务（有 impl 未 active 会返回 `obj`）；**根因 = agent preset 用 `cordis:group` + `isolate: { compaction: true, toolResultPruner: true }` 把服务隔离在 preset 组内**（`@local/dsh-computer-use/presets/cordis.patch.yml`，三套 preset 一致；见 DEC-32），不是挂载时机；插件不依赖它（走 `session/event`），**「回注时点修正」在该部署下不可行**，只能走事件时序推断（现方案），不再是待查项。能力探测只看 `get.X` 列；裸属性 `throws` 不代表服务异常（反例：`tokenMeter=throws` 同时 `get.tokenMeter=obj`）。
 
 ## 等待用户/外部
 
