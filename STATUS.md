@@ -65,7 +65,7 @@ M1 成本“前后水位未知”原按降级接受，2026-10-25 复查为插件
 
 ## 下一步
 
-1. **审核复核 0.2.0**（`e6d859b` + 本轮 docs）：重点核对 ① 经 apply 的集成测试（真机链路等价）、② 项目层 A+C（整层拒绝/0.45 下限/路径与 64KB 闸）、压力四段只展示不压缩、`/cg set` 为**进程内**覆盖（0.2.0 不宣称按会话隔离）、`early=ready` 残留清零、`src/` 无 `agentPresets|serviceFor|compactNow`。
+1. **审核复核 0.2.0**（`e6d859b` + 本轮 docs）：重点核对 ① 经 apply 的集成测试（真机链路等价）、② 项目层 A+C（整层拒绝/0.45 下限/路径与 64KB 闸）、压力四段只展示不压缩、`/cg set` 为**进程内**覆盖（0.2.0 不宣称按会话隔离）、`early=ready` 残留清零、本批未新增引擎引用（`src/` 仅存 M1 适配器探测 `compactNow`，`adapters.js` 未改）。
 2. **G4（窗口/native 来源）**：0.2.1 动工前必须给一句结论（当前 0.2.0 用 `policy.windowTokens/reservedTokens` 配置值算 native；需求建议在 G3 里试 `sessionProjections.contextPressure`）。
 3. **0.2.1 范围（未动工）**：`agentPresets.serviceFor(agent,'compaction')` 引擎接线、`early-channel`、冷却/增量门槛的实际判定；等 G4 + 0.2.0 复核通过。
 4. **真机安装/重启 0.2.0**：桌面实例仍 0.1.18（junction 指向源码），按红线需 00+用户批准后由用户执行；重启后验证 `/cg status` 的 `policy:`/`pressure:` 行、`/cg set compact.at=…`、项目 `.cg-policy.json` 生效与 `policy-invalid:` 可见性。
