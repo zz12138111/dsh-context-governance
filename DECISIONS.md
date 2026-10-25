@@ -267,3 +267,24 @@
 - 选择：新增 `resolveBackendFields(adapter)` 作 backend 四字段唯一来源，runtime 成本行与 `/cg status` 共用；status 显示 `backend-kind=<枚举>`（推断时另附 `backend-label=`）；控制字符闸改用 `git ls-files` 只扫 tracked 文件；文档写明 AGENTS.md 第 4 处（0x0C）修复。
 - 影响：status 与成本行枚举一致；闸计数收敛且不受本机未跟踪文件影响；`auditVersion` 维持 `cost-v1.4`。
 - 关联：`src/compress/adapters.js`、`src/compress/runtime.js`、`src/commands/cg-status.js`、`test/m1.3-inference.test.mjs`、`test/no-control-chars.test.mjs`、`docs/T5`、`README.md`、`analysis/req-20261025-06/REQ-06-M1.3-报告.md` §11；状态：active。
+
+## DEC-PLUGIN-20261025-37 [tech] 0.2.0：策略链在 apply 单点构建 + 项目层按不可信输入
+
+- 背景：审核实测 `buildPolicyState()` 只被测试调用，`apply` 内联重建两层（profile+plugin），项目 `.cg-policy.json` 真机不生效；项目文件由仓库自带，属新输入面（可逃逸路径、可压阈值、可自盖 `<0.30` 确认）。
+- 选择：`apply` 只调一次 `buildPolicyState(config)`，命令侧只读同一份（无二次计算）；项目层按 `DEC-20261025-62` A+C——禁 `lowThresholdAck`/`estimateSafety`（`project-denied`）、`compact.at` 下限 0.45（`below-min`）、任一键被拒即**整层拒绝**退回下一层；`projectFile` 只允许项目内相对路径（`resolveConfig` + containment 复核），>64KB 不读；拒绝信息写 `policy-invalid` 审计 + apply warn + `/cg status` 的 `policy-invalid:` 行。
+- 影响：真机项目层生效；恶意仓库不能把阈值压到 0.20 或自盖确认；插件层仍按逐键校验（历史行为不变）。
+- 关联：`src/index.js`、`src/policy.js`、`src/commands/cg-status.js`、`test/m2-policy-status.test.mjs`、`docs/T5` §1.1–§1.2、`README.md`、`analysis/req-20261025-09/0.2.0-交付报告.md`；状态：active。
+
+## DEC-PLUGIN-20261025-38 [tech] 0.2.0：压力四段只展示，不据此压缩
+
+- 背景：M2 要让“什么时候压可控、压了值不值能算”，但 0.2.0 明确不碰引擎（`agentPresets` 晚挂载/`serviceFor` 属 0.2.1），只能先给出可核的压力读数。
+- 选择：`guard.pressure()` 只返回原始 token（`measuredTokens` = 最近 `assistant/message.usage` 的 input+cacheRead+cacheWrite；`estimatedTokens` = `tokenMeter.measure` 求和），换算放 `policy.computePressure()`：`measured`/`estimated` 为占窗口比例，`adjusted = estimated × estimateSafety`（系数只读配置文件），`effective = max(measured, adjusted)`，`ratio = measured/estimated`；任一来源缺失保持 `null`，显示 `-`，不伪造。
+- 影响：`/cg status` 多一行 `pressure:` 与 `at` 比较；无 usage/无 tokenMeter 的会话显式 `(no usage/tokenMeter yet)`；是否据此提前压留给 0.2.1（需 G4 结论）。
+- 关联：`src/compress/runtime.js`、`src/policy.js`、`src/commands/cg-status.js`、`test/m2-policy-status.test.mjs`、`test/policy.test.mjs`、`docs/T5` §1、`analysis/req-20261025-09/samples-0.2.0.txt`；状态：active。
+
+## DEC-PLUGIN-20261025-39 [tech] 0.2.0：/cg set 会话层为进程内覆盖
+
+- 背景：需求要求“会话覆盖优先级最高”，但 0.2.0 未拿到宿主会话标识（命令 `handler(invocation)` 只有 `rawInput`），无法按会话隔离；`estimateSafety`/`lowThresholdAck` 是安全参数，不能随会话改。
+- 选择：`/cg set <key>=<value>` 写合成链最高层（`source=session`），只允许 `compact.at`/`compact.early`/`compact.cooldownMin`/`compact.minDeltaTokens`/`cost.remainingTurns`；config-only 键明确拒绝；`<0.30` 未确认先写后验、失败整条回滚并报错；`reset` 清空；成功写 `policy-set` 审计。覆盖是**进程内**的，重启即失效——命令输出与文档都写明“不宣称按会话隔离”。
+- 影响：0.2.0 的“会话层”是人工覆盖通道，真按会话隔离要等宿主给出会话 id（0.2.1 再评估）；不会出现“设了但被静默回退”的半截状态。
+- 关联：`src/commands/cg-status.js`、`src/audit.js`、`test/m2-policy-status.test.mjs`、`docs/T5` §1.3、`README.md`；状态：active。
