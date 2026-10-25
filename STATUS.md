@@ -3,6 +3,11 @@
 > 只放"现在还活着"的：在做什么、卡在哪、待谁决策。过期项直接删。
 > 更新：2026-10-26 01:2x（**0.2.1 已收口**：窗口/校验层 + 历史回填，真机加载验证 `source=projection(backfilled)`/`native=0.6934`；全量 267/267；tag `v0.2.1` 本地+远端一致，Release 未发）
 
+## 已定（2026-10-26）
+
+- **P3-1 = 并入 0.2.2 接线批，现在不解冻**（2026-10-26 · 00 定）。0.2.2 显式前置验收项：fixture = `manual compaction requires an idle agent with no waking queued work`；判据 = 该文案命中 `isBusyCompactionError` → 映射 `busy` 而非 `failed`。
+- **T3 三会话归档**（`cs_zgPDSqjsDI` / `cs_wmu59tAofx` / `cs_luHlCpRZGO`，2026-10-26 · 开发执行）：已归档，工作区列表只剩 3 个（需求 / 开发 / 审核打包）。
+
 ## 在办
 
 | 会话 | 当前任务 | 状态 |
