@@ -17,7 +17,7 @@
 
 ## 1. 结论摘要
 
-- **阻断（P1）：0**；**应修（P2）：1**（新 P2-3：P3-11 修复引入的陈旧 invalid/审计跨 episode 丢失；P2-1/P2-2 仍闭环）；**建议（P3）：7**（原 11 条中 P3-5/9/10/11 已闭环）。
+- **阻断（P1）：0**；**应修（P2）：0**；**建议（P3）：0**——`1b6d054` 终验后 11 条全闭环（P3-4 的 TTL 明确留 0.2.2，属文档约定）。
 - 六条验收 **4 条完全成立、1 条部分（⑥ 的审计子项）、1 条报告证据不完整**；十项清单里 **⑩ 数字更新未做**（详见 §4）。
 - 代码检索与 spy 双证：**本版没有任何压缩调用路径**（我用自己的全量 pattern + 3 个真实 API 名 spy 复核，0 次）。
 
@@ -162,3 +162,37 @@ node .tmp/probe-021.mjs           # 审核侧探针 8/8（.tmp 已 gitignore）
 ### 对“剩余 P3 随 0.2.1 还是 0.2.2”的建议
 - **随 0.2.1 收（6 条）**：P3-1（压力行 fallback 标注）、P3-2（`policy-session` 显示被拒覆盖）、P3-3（生效 at 超 conservative 的提示）、P3-6（非法 window 值不显示 removed）、P3-7（审计去重 Set 清理，**与 P2-3 一起做最省**）、P3-8（无观察 vs 配置退化的文档口径）——均为显示/审计/文档级，不碰引擎，回归面小。
 - **拆到 0.2.2（1 条）**：P3-4（`conservative` 全历史 min 的过期语义）——需要先定口径（TTL / `session/end` 清理 / 仅按“活跃会话”），且 0.2.2 才有执行面；0.2.1 先在文档写明“当前为全历史 min”即可。
+
+## 11. 终验（2026-10-26 01:4x，`1b6d054`，9 files 单提交）
+
+**基线**：HEAD `1b6d054` 快照；**258/258** ✔；独立探针 `.tmp/probe-021-final.mjs` **7/7**；工作树干净、ahead 1。
+
+### 四条联动（P2-3 + P3-2 + P3-7）
+| 项 | 实测 | 结论 |
+|---|---|---|
+| ① 退化 `set compact.at` 被拒 | error + audit **恰 1 条**（`source=session`/`code=compact.at`/`reason=native-uncomputable`）+ warn；随后 `set compact.early=off` success 只写 `policy-set`、`policy-invalid` 仍 1 | ✔ |
+| ② 恢复 1M 四路干净 | `/cg status` 无 `policy-invalid:`；`resolve().invalid.length===0`；`policy show` 为 `invalid: none`；`session:` 行从 `compact.at=0.6(rejected)` 变回裸 `compact.at=0.6`（`policy-session:` 同） | ✔ |
+| ③ 跨 episode 再审计 | 退化拒绝（1 条）→ 恢复 → 再退化 `set` → **再写 1 条（总 2）**；`transientRejections` 在 `!degenerate` 时清空 | ✔ |
+| ④ P3-7 第二条去重路径 | **真实 apply + 真实 audit.jsonl**：`1M→128k→1M→128k`（O=16k）→ `over-native-runtime` **恰 2 条** | ✔ |
+
+### 同批 P3（我的独立实测/抽查）
+- **P3-1**：无观察时压力行 `window=1M (config-fallback)` ✔
+- **P3-2**：退化时 `policy show session:` 与 `policy-session:` 均标 `(rejected)`，恢复后标记消失且值回裸值 ✔
+- **P3-3**：plugin 层被拒回落到 builtin `at=0.6 > conservative 0.375` → 新增 `fallback-over-native` 条目（实测）✔
+- **P3-6**：非法 `contextWindow`（字符串）→ 保留旧值、不标 removed、`stats.windowInvalidObservations=1` ✔
+- **P3-8**：`T5` 双显示例已注 `O=16k 仅为演示，默认 reservedTokens=256000` ✔
+- **P3-4**：`T5` 明写“`conservative` 是全历史 min，TTL/session-end/活跃会话口径留 0.2.2”✔（文档约定，非 0.2.1 缺陷）
+- **P3-5**：先前 `2f7e528` 已闭环（10 行证据 + 报告行 6）✔
+
+### 计数
+**P1=0 / P2=0 / P3=0**（11 条全闭环；P3-4 的 TTL 明确留 0.2.2，属已记录约定）。
+
+### 未验证/边界
+1. 真机仍 **0.2.0**，0.2.1 未安装/未重启；真机投影 W=1,048,576、`window:` 双显与退化路径均未上机。
+2. 0.2.2 执行面（提前压/`/cg compact now`/G2/G3）未做。
+3. `conservative` 全历史 min 的生产影响（多会话/已结束会话）按 P3-4 约定留 0.2.2 处理。
+
+### 发布口径（建议，不代决）
+- 分支：本报告随 `feat/context-governance-m1` fast-forward 推送；**不打 tag、不发 Release**（归用户）。
+- 0.2.1 复核结论：**P1/P2/P3 全清**；是否上机由用户决定（上机即首次引入窗口层，建议先备份/留回滚点 `b0d6a3e^`）。
+- 若发 tag：建议 `v0.2.1` → 本报告提交后的 HEAD；zip 用 `git archive`。
