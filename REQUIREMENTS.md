@@ -81,7 +81,7 @@
 
 - **依据**：`docs/上下文治理插件-架构说明-v1.0.md` §16.3；M1 `REQ-20261025-01`；`docs/M1-可行性复查-20261025.md`；账本 `DEC-20261025-37` / `ART-20261025-19`
 - **优先级**：P1
-- **状态**：**已收口**（2026-10-25 用户拍板 T2=A），T2′ 出 **0.1.12**（`0.1.11` 冻结为 M1.2，两份复核基线分开钉 hash）。原「工具输出折叠 + 批量测量」范围**取消**，只保留宿主 prune 观测。
+- **状态**：**已收口**（2026-10-25 用户拍板 T2=A），T2′ 出 **0.1.12**（`0.1.11` 冻结为 M1.2，两份复核基线分开钉 hash）；**0.1.12 = T2′ + 0.1.11 复核 6 条 P3**。原「工具输出折叠 + 批量测量」范围**取消**，只保留宿主 prune 观测。
 - **范围变更（2026-10-25）**：
   - **保留**：T1 门禁结论（F1/F2/B1/B2）、宿主 pruner 差异表、实验脚本与证据（`analysis/t1/`）。
   - **取消**：早折（自建 seam / 折叠格式 / `[cg-fold]`）、spill 落盘与原生 `read` 回读、`fold.*` 配置、批量测量与隐藏 A/B、T6 全量测量。
@@ -120,6 +120,15 @@
   - ⑤ **不伪造**：无 pruner 环境时 `pruneCount=0` 且 `tokensPruned=null`（`unknown`），不估算。
   - ⑥ **M1 不回退**：S1–S6 回归通过；S4 手动压缩仍有 `protection-write` → `reinjection` → `compaction-cost`。
   - ⑦ **测试**：prune 归因、周期归属、去重、无 pruner 环境、脱敏五类用例。
+  - ⑧ **P3 六项落地**：`stop()` 按 Fiber 正确处理（测试用真实形状）；`auditVersion` 读方兼容 `cost-v1.*`；T5/T8 文档与实现一致；延迟写行为有文档。
+- **并入 0.1.12 的复核项（6 条，来自 0.1.11 复核：0 阻断 / 0 P2 / 9 P3）**：
+  1. **P3-1 `ctx.inject` 清理失效**：`ctx.inject` 返回的是 cordis `Fiber` 类，不是 dispose 函数；`stop()` 里 `#meterDispose?.()` 会抛 TypeError 被吞（父 fiber 兜底，无实际危害）。按 Fiber 正确释放、或显式不释放并写明；测试用真实形状，不许 fake 函数掩盖。
+  2. **P3-6 `auditVersion` 前缀匹配**：读方由精确 `cost-v1` 改为前缀匹配（`cost-v1` 兼容 `cost-v1.1`/`cost-v1.2`），文档同步。
+  3. **P3-2 文档同步（T5）**：`docs/T5-状态命令与审计.md` 补 `/cg status last-cost` 与 `cost-v1.1`。
+  4. **P3-3 文档同步（T8）**：`docs/T8-回注自愈与成本归属.md` 的 `cost-v1` 改 `cost-v1.1`。
+  5. **P3-4 延迟写说明**：成本行延迟写 → `last-cost` 短暂旧值、audit 顺序变化；文档写清现象与预期。
+  6. **P3-5 延迟写说明（after usage）**：首条 after 消息无 usage 时不再继续等；文档写清 `tokensAfter` 可能为 `null` 的时机。
+  - **不进 0.1.12（留作证据局限）**：tokenGuard 源码行号不可复核、`baseline.mjs` 无时间闸、其余小项。
 - **依赖/风险**：
   - 依赖宿主 pruner 事件形状（`compaction/prune` + `sourceEventSeqs`）；形状变化时降级为“只记 range/token、工具名 `unknown`”。
   - `compaction/prune` 是日志事件，插件只能观测不能干预——与“不做折叠”一致。
