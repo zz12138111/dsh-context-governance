@@ -1,7 +1,7 @@
 # DSH 插件开发 · 当前状态
 
 > 只放"现在还活着"的：在做什么、卡在哪、待谁决策。过期项直接删。
-> 更新：2026-10-26 01:2x（**0.2.1 已收口**：窗口/校验层 + 历史回填，真机加载验证 `source=projection(backfilled)`/`native=0.6934`；全量 267/267；tag `v0.2.1` 本地+远端一致，Release 未发）
+> 更新：2026-10-26 02:3x（**0.2.2 四项已落**：P3-1 `25268bc`、accepted `2fd4f6f`、ok 三字段 `aacea07`、logger `3179ddf`、audit `629a3a0`；全量 **297/297**；`armed=false`，第 5 步接线未动）
 
 ## 已定（2026-10-26）
 
@@ -13,9 +13,9 @@
 
 | 会话 | 当前任务 | 状态 |
 |---|---|---|
-| 需求 | M2 首批 REQ-20261025-09 已收口（0.2.0 + 0.2.1 窗口层/回填全部交付并复核）；M3 REQ-20261025-10 已出单（T0 门禁 + T2 header） | 0.2.1 收口 |
-| 开发 | **0.2.1 已交付 + 复核（P1=0/P2=0/P3=0）+ 真机加载验证**（窗口层回填生效）；`origin=f585434`（ahead 0）、tag `v0.2.1` 本地+远端一致；全量 **267/267**；Release **未发** | 0.2.1 收口 |
-| 审核打包 | 0.2.1 复核已出：P1=0 / P2=0 / P3=0；tag/发布素材已就位（`D:\DS-PROJECT\_backup\dsh-plugins-v0.2.1\`），Release 待批准 | 待发布批准 |
+| 需求 | M3 REQ-20261025-10 已收口至 0.3.1；REQ-20261025-11（T3 评测）/ REQ-20261025-12（发布就绪）推进中；0.2.2 四项已完成 | M3/0.2.2 收尾 |
+| 开发 | **0.2.2 四项已落**（`25268bc` P3-1 / `2fd4f6f` accepted / `aacea07` ok 三字段 / `3179ddf` logger 落点 / `629a3a0` audit）；全量 **297/297**；`armed=false`；第 5 步接线未动 | 0.2.2 待复核 |
+| 审核打包 | 0.2.2 复核清单已改四步对照（`ec2e072`/`1ba0be3`：契约变更硬验证/logger 定性/textHash 可公开性/armed 边界），待复核结论 | 复核中/待结论 |
 
 ## 进度
 
@@ -38,6 +38,7 @@
 - **M1.3 原生后端验证（REQ-20261025-06，2026-10-25）**：隔离 profile `native-test`（web 模板、无 context-zip/redirect，端口 18765，已停）实跑——**D1-1 不通过**（原生下 `adapter=none`，根因 preset `isolate`；功能不受影响）；**D1-2/D1-4 通过**；**D1-3 手动链路通过、自动压力未触发**（≈678K tokens，记 backlog 等自然触发）；D1-5 隔离证据齐全。**0.1.15 已修**（`inferBackendFromStyles`：free-form→`host-basic (inferred)`、five-section→`context-zip (inferred)`、混合→`mixed (unverified)`；只进 `/cg status`/`adapter-inferred` 审计/`compaction-cost.backend`，新增 `backendInferred`，`auditVersion=cost-v1.3`；功能路径不读推断）；隔离实例复验 `/cg status` 显示 `adapter=none inferred=host-basic (inferred)`，全量 **202/202**。报告 `analysis/req-20261025-06/`；未安装/未重启桌面、未 push。
 - **M2 首批（REQ-20261025-09）**：**G1 通过**（agent 级 `agentPresets.serviceFor(agent,'compaction')=object`；`agentPresets` 约 2s 晚挂载；根级 `ctx.get('compaction')` absent 不阻塞；G2/G3 部分待 0.2.1）。**0.2.0 已交付**（`8275fb4`→`c6563d1`→`9a380ea`→`87134cd`→`e6d859b`）：四层合成、`/cg policy show`、`/cg set`、`/cg status` 的 policy/policy-invalid/policy-session/pressure 行、压力四段（只展示）、项目文件 A+C 加固；审核六项全修。**0.2.0 复核已出**（`docs/review-context-governance-0.2.0.md`：0 阻断/0 P2/9 P3），**P3 九条已闭环**（`analysis/req-20261025-09/P3-闭环记录.md`；全量 **240/240**）。**G4 已定并落档**（`e12d08a`：`DEC-PLUGIN-20261025-40`，窗口来源 = 宿主 `contextPressure.contextWindow`，真机 1,048,576 → native≈0.6934；配置仅回退；`DEC-20261025-66` 细化 `#lastSession`/中途重算/删除置 unknown/conservative=min/双显）。未安装/未重启/未 push。报告 `0.2.0-交付报告.md`、样例 `samples-0.2.0.txt`、G4 `G4-窗口来源结论.md`。
 - **0.2.1 窗口/校验层（REQ-20261025-09，`DEC-20261025-66/67/68`）**：**已交付 + 复核 P2 修复**（`package.json` 0.2.1；全量 **258/258**）。`windowState={current(#lastSession), conservative(min 已观察), observed[]}`；`request/context` 无 `contextWindow` → 删除置 unknown 不沿用；`resolve()` 每次现算 native（`nativeFromWindow`），与压力分母共用同一 W；`/cg set` 与运行时校验用 conservative，`at>native` → 拒绝该层 + `policy-invalid` 审计；**退化口径 A**：`W≤O+65536` → `native=unknown (degenerate)`（禁造常数），设置 at 的层一律拒绝（`native-uncomputable`）且**落审计**（P2-1 已修：filter 含 `native-uncomputable`），继承值 `unverified-degenerate`，W 恢复自动恢复；`/cg status` 出 `window:` 双显行（session 短 id/来源/时间/`校验按 conservative`/退化标记）。**数字**：默认 native **0.6934**（观测 1,048,576），0.6785 仅 config-fallback（P2-2 已修：T5/README/样例/报告）。**本版不触发任何压缩**：`src/` 无压缩调用（全量 pattern 10 行均为只读探测/注释），单测「验收#6」锁 0 次调用。报告 `analysis/req-20261025-09/0.2.1-交付报告.md`、证据 `zero-compaction-grep.txt`。未安装/未重启/未 push。
+- **0.2.2 四项（REQ-20261025-09，2026-10-26）**：P3-1 busy 文案（`25268bc`）、`attempt` 返回 `accepted` + `shouldEscalateEarly`（`2fd4f6f`）、`compaction`/`protection`/`reinjected` 三字段与 stats 拆分 + `/cg status` 改 `compaction=/protection=`（`aacea07`）、保护失败写 `diagnostics.logFile`（`3179ddf`）、`header-injected` 增记 `messagesLength/textHash`（`629a3a0`）。全量 **297/297**；`armed=false`；接线（`turn/end` 门禁 + `early-*` 审计）未动。
 - **0.1.18（发布前收口）**：`/cg status` 改用 `backend-kind=`（实测 none 显示 none，与成本行同一 `resolveBackendFields`；推断时附 `backend-label=`）；控制字符闸改用 `git ls-files`（tracked **163 files / 0 violations**）；文档补 AGENTS.md 第 4 处（0x0C 吃 `feat/` 的 f）；全量测试见下；未安装/未重启/未 push。
 - **0.1.17（REQ-20261025-07 P3 收口）**：`backend`/`backendKind` 枚举补 `none`（实测 none 不折叠；unknown 才 unknown；mixed 仍 unknown+label），`auditVersion` 仍 `cost-v1.4`；控制字符闸扩到仓库根（排除 `.tmp`/`node_modules`/`.git`，`AGENTS.md` 0x0C 已清，扫描 **174 files / 0 violations**）；全量 **205/205**；未安装/未重启/未 push。
 - **0.1.16（REQ-20261025-07）**：README 控制字符（0x08/0x07）已清 + 防复发测试（包内文本禁 C0/DEL，自证注入→fail）；`compaction-cost` 拆 `backend`(枚举)/`backendKind`/`backendLabel`/`backendInferred`，`auditVersion=cost-v1.4`；`/cg status` 用 `backend-label=`；全量 **204/204**；未安装/未重启/未 push。
@@ -68,11 +69,11 @@ M1 成本“前后水位未知”原按降级接受，2026-10-25 复查为插件
 
 ## 阻塞
 
-- 无（v0.1.14 已加载；0.1.14 待审；只读演练需人工制造不可写根，开发不自行改动安装态）
+- 无（0.2.2 四项待复核；第 5 步接线未动；0.1.14 已加载）
 
 ## 下一步
 
-1. **0.2.1 已收口**：复核 P1=0/P2=0/P3=0，真机加载验证回填生效；Release 待用户批准（tag `v0.2.1` 已在本地+远端）。
-2. **M3（REQ-20261025-10）**：先做 T0 门禁——G-M3-1（`tools/pre-execute` + `ctx.tools.guard()` 真拦截）、G-M3-2（规则文件判定）、G-M3-3（header 注入顺序）；隔离实例用**方案 1**（临时工作区 + 正常 DSH_HOME，凭据不复制），跑完归档临时工作区会话。T2（header 默认开）待 T0 后做，`next()→undefined` 隐患已修。
-3. **0.2.2（提前压 + `/cg compact now`）**：等 M3 T0/T1 排期，不动。
-4. **0.2.3（成本账本，`cost-v1.4` 基线）**：随后。
+1. **0.2.2 四项已落**（`25268bc`/`2fd4f6f`/`aacea07`/`3179ddf`/`629a3a0`；全量 297/297；`armed=false`），第 5 步接线（`turn/end` 门禁 + `early-*` 审计）待复核结论，不得先行。
+2. **M3（REQ-20261025-10）**：T2 header 已上机（默认开）；T3 评测（REQ-11）与发布就绪（REQ-12）按各自单推进；动作校验不做（`DEC-20261025-76`）。
+3. **0.2.2 收尾**：四项复核通过后 → 接线（第 5 步）→ 真机窗口验证 `early-forced`；`armed` 打开须单独批准。
+4. **0.2.3（成本账本，`cost-v1.4` 基线）**：暂缓至 1.1（`DEC-20261025-79`）。
