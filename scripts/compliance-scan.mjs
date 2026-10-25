@@ -113,8 +113,10 @@ function scanText(file, text) {
       const m = re.exec(line);
       if (!m) continue;
       const hard = kind !== 'credential-assignment';
-      const historicalFp = HISTORICAL_REVIEW_FILE.test(file) && HISTORICAL_REVIEW_FALSE_POSITIVE.test(line);
-      const severity = isTest || isSelf || historicalFp ? 'info' : hard ? 'blocker' : 'review';
+      // 只按**匹配串本身**判误报（整行里恰好出现白名单串不能把同行的真 key 降级）。
+      const historicalFp = HISTORICAL_REVIEW_FILE.test(file) && HISTORICAL_REVIEW_FALSE_POSITIVE.test(m[0]);
+      const selfRegexLiteral = isSelf && /RegExp|\\b|\\w|\[\^/.test(line);
+      const severity = isTest || selfRegexLiteral || historicalFp ? 'info' : hard ? 'blocker' : 'review';
       add(`credential:${kind}`, severity, file, i + 1, m[0].slice(0, 4) + '***');
     }
     for (const [kind, re] of ABS_PATH) {

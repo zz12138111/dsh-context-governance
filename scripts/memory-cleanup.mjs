@@ -30,8 +30,9 @@ const outFile = path.resolve(opt('--out', `.tmp/memory-cleanup-${stamp}.json`));
 
 const isRuleNoise = (entry) => {
   if (entry.status !== 'active') return false;
+  if (String(entry.writer ?? '') !== 'rule') return false; // P3：只看自动写入的 rule 条目
   if (entry.type === 'progress') return true;
-  return String(entry.writer ?? '') === 'rule' && /^[\d\s/／.\-:年月日]+$/.test(String(entry.title ?? '').trim());
+  return /^[\d\s/／.\-:年月日]+$/.test(String(entry.title ?? '').trim());
 };
 
 const store = await MemoryStore.open({ rootDir: root, project, readOnly: !apply });
@@ -49,6 +50,16 @@ if (!apply) {
   console.log('[memory-cleanup] 加 --apply 才会写；写前会先整目录备份到仓库外。');
   await store.close();
   process.exit(0);
+}
+
+// P3-3：--apply 前先判可写；被写者锁持有 → 友好退出、exit 2、**不生成备份**。
+if (store.status.writable !== true) {
+  console.error(
+    `[memory-cleanup] 无法写入记忆库：${store.status.readOnlyReason ?? 'unknown'}。` +
+    'DSH 运行中会持有写者锁；请先退出/重启 DSH（释放锁）再 --apply。',
+  );
+  await store.close();
+  process.exit(2);
 }
 
 const backup = path.resolve(backupBase, `governance-bak-${stamp}`);

@@ -50,14 +50,16 @@ export class EarlyCompactor {
   disarm() { this.#armed = false; }
 
   /**
-   * 尝试一次提前压。
+   * 尝试一次提前压（**异步**：宿主 compactNow 返回 Promise，异步阶段的 busy/失败必须进 catch）。
    * @param {object} input
-   * @param {object} [input.session]
+   * @param {object} [input.agent] 宿主 compactNow 第一参是 agent（不是 session）
+   * @param {AbortSignal|null} [input.signal] 宿主第二参；由调用方持有/传入
+   * @param {string|null} [input.sourceCommandId] 第三参（来源命令 id）
    * @param {boolean} input.turnEnded turn 是否已结束（事实，不是猜测）
    * @param {boolean} input.agentIdle agent 是否 idle（事实）
-   * @returns {{ok:boolean, reason?:string, error?:Error}}
+   * @returns {Promise<{ok:boolean, reason?:string, error?:Error}>}
    */
-  attempt({ session = null, turnEnded = false, agentIdle = false } = {}) {
+  async attempt({ agent = null, signal = null, sourceCommandId = null, turnEnded = false, agentIdle = false } = {}) {
     if (!this.#armed) return { ok: false, reason: EARLY_SKIP_REASONS.DISABLED };
     if (turnEnded !== true || agentIdle !== true) return { ok: false, reason: EARLY_SKIP_REASONS.NOT_IDLE };
     const engine = this.#getEngine();
@@ -65,7 +67,9 @@ export class EarlyCompactor {
       return { ok: false, reason: EARLY_SKIP_REASONS.NO_ENGINE };
     }
     try {
-      engine.compactNow(session);
+      // G2：宿主 compactNow(agent, signal, sourceCommandId) → runMaintenance(...) 返回 Promise；
+      // 必须 await，否则异步 rejected 逃出 catch（假 ok + unhandled rejection）。
+      await engine.compactNow(agent, signal, sourceCommandId);
       return { ok: true };
     } catch (error) {
       if (isBusyCompactionError(error)) return { ok: false, reason: EARLY_SKIP_REASONS.BUSY };

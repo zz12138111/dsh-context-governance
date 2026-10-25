@@ -1,79 +1,80 @@
 /**
- * 0.2.2 骨架单测：safe timing / busy 映射 / 默认不执行 / ask-deny 语义。
- * 不开真调压缩：所有成功路径都用 fake engine。
+ * 0.2.2 骨架单测（复核后）：async 契约 / safe timing / busy 映射 / 三参对齐 / ask-deny。
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { EARLY_SKIP_REASONS, EarlyCompactor, isBusyCompactionError, preExecuteAsk, preExecuteDeny } from '../src/compress/early.js';
 
-function engine() {
+function asyncEngine(mode = 'resolve') {
   const calls = [];
   return {
     calls,
-    compactNow(session) { calls.push(session ?? null); },
+    async compactNow(agent, signal, sourceCommandId) {
+      calls.push({ agent, signal, sourceCommandId });
+      if (mode === 'busy') {
+        const error = new Error('compaction engine is busy: current turn not idle');
+        error.name = 'ManualCompactionError';
+        throw error;
+      }
+      if (mode === 'reject') throw new Error('provider exploded');
+      return undefined;
+    },
   };
 }
 
-function busyError() {
-  const error = new Error('compaction engine is busy: current turn not idle');
-  error.name = 'ManualCompactionError';
-  return error;
-}
-
-test('0.2.2 默认不执行：armed=false 时连引擎都不取', () => {
+test('0.2.2 默认不执行：armed=false 时连引擎都不取', async () => {
   let engineTaken = 0;
-  const compactor = new EarlyCompactor({ getEngine: () => { engineTaken += 1; return engine(); } });
-  const result = compactor.attempt({ turnEnded: true, agentIdle: true });
+  const compactor = new EarlyCompactor({ getEngine: () => { engineTaken += 1; return asyncEngine(); } });
+  const result = await compactor.attempt({ turnEnded: true, agentIdle: true });
   assert.deepEqual(result, { ok: false, reason: EARLY_SKIP_REASONS.DISABLED });
   assert.equal(engineTaken, 0);
 });
 
-test('0.2.2 safe timing：turn 未结束 / agent 非 idle 都不调用 compactNow', () => {
-  const fake = engine();
+test('0.2.2 safe timing：turn 未结束 / agent 非 idle 都不调用 compactNow', async () => {
+  const fake = asyncEngine();
   const compactor = new EarlyCompactor({ getEngine: () => fake, armed: true });
-  assert.equal(compactor.attempt({ turnEnded: false, agentIdle: true }).reason, EARLY_SKIP_REASONS.NOT_IDLE);
-  assert.equal(compactor.attempt({ turnEnded: true, agentIdle: false }).reason, EARLY_SKIP_REASONS.NOT_IDLE);
-  assert.equal(compactor.attempt({}).reason, EARLY_SKIP_REASONS.NOT_IDLE);
+  assert.equal((await compactor.attempt({ turnEnded: false, agentIdle: true })).reason, EARLY_SKIP_REASONS.NOT_IDLE);
+  assert.equal((await compactor.attempt({ turnEnded: true, agentIdle: false })).reason, EARLY_SKIP_REASONS.NOT_IDLE);
+  assert.equal((await compactor.attempt({})).reason, EARLY_SKIP_REASONS.NOT_IDLE);
   assert.equal(fake.calls.length, 0, 'turn 中绝不试探引擎');
 });
 
-test('0.2.2 成功路径：turn 结束 + idle → 调用一次 compactNow', () => {
-  const fake = engine();
+test('0.2.2 三参对齐：compactNow(agent, signal, sourceCommandId)，成功 await 后 ok', async () => {
+  const fake = asyncEngine();
   const compactor = new EarlyCompactor({ getEngine: () => fake, armed: true });
-  const result = compactor.attempt({ session: { id: 's1' }, turnEnded: true, agentIdle: true });
+  const agent = { id: 'agent-1' };
+  const signal = new AbortController().signal;
+  const result = await compactor.attempt({ agent, signal, sourceCommandId: 'cmd-9', turnEnded: true, agentIdle: true });
   assert.deepEqual(result, { ok: true });
   assert.equal(fake.calls.length, 1);
-  assert.equal(fake.calls[0].id, 's1');
+  assert.equal(fake.calls[0].agent, agent);
+  assert.equal(fake.calls[0].signal, signal);
+  assert.equal(fake.calls[0].sourceCommandId, 'cmd-9');
 });
 
-test('0.2.2 G2 busy：ManualCompactionError(busy) → reason=busy，不抛宿主', () => {
-  const compactor = new EarlyCompactor({
-    getEngine: () => ({ compactNow() { throw busyError(); } }),
-    armed: true,
-  });
-  const result = compactor.attempt({ turnEnded: true, agentIdle: true });
+test('0.2.2 G2 busy（async reject）：reason=busy，不抛宿主、不 unhandled', async () => {
+  const compactor = new EarlyCompactor({ getEngine: () => asyncEngine('busy'), armed: true });
+  const result = await compactor.attempt({ turnEnded: true, agentIdle: true });
   assert.equal(result.ok, false);
   assert.equal(result.reason, EARLY_SKIP_REASONS.BUSY);
-  assert.equal(isBusyCompactionError(busyError()), true);
+  const error = new Error('compaction engine is busy');
+  error.name = 'ManualCompactionError';
+  assert.equal(isBusyCompactionError(error), true);
   assert.equal(isBusyCompactionError(new Error('boom')), false);
 });
 
-test('0.2.2 其他失败：捕获后 reason=failed、留给 logger，不抛', () => {
+test('0.2.2 其他 async 失败：reason=failed + logger，不抛', async () => {
   const logs = [];
-  const compactor = new EarlyCompactor({
-    getEngine: () => ({ compactNow() { throw new Error('provider exploded'); } }),
-    armed: true,
-    logger: { warn: (line) => logs.push(line) },
-  });
-  const result = compactor.attempt({ turnEnded: true, agentIdle: true });
+  const compactor = new EarlyCompactor({ getEngine: () => asyncEngine('reject'), armed: true, logger: { warn: (line) => logs.push(line) } });
+  const result = await compactor.attempt({ turnEnded: true, agentIdle: true });
   assert.equal(result.reason, EARLY_SKIP_REASONS.FAILED);
   assert.ok(logs.some((line) => line.includes('provider exploded')));
 });
 
-test('0.2.2 引擎缺失 → no-engine（不猜、不降级）', () => {
+test('0.2.2 引擎缺失 → no-engine（不猜、不降级）', async () => {
   const compactor = new EarlyCompactor({ getEngine: () => null, armed: true });
-  assert.equal(compactor.attempt({ turnEnded: true, agentIdle: true }).reason, EARLY_SKIP_REASONS.NO_ENGINE);
+  assert.equal((await compactor.attempt({ turnEnded: true, agentIdle: true })).reason, EARLY_SKIP_REASONS.NO_ENGINE);
 });
 
 test('0.2.2 ask/deny 语义：pre-execute 决策形状正确', () => {
