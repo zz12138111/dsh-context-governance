@@ -163,7 +163,11 @@ node --test "test/*.test.mjs"          # 290/290 pass
 ### 9.1 对第 4 步的两条决定
 
 1. **`messagesLength` 不可接受，改为真实差值**：`onInjected` 目前只收到 `header`，拿不到决策消息数组。建议把 `onInjected` 扩为 `(header, { messagesBefore, messagesAfter })`（`header.js` 里两值现成），审计写 `injected = messagesAfter - messagesBefore`（0/1），或直接记 `messagesBefore`/`messagesAfter` 两个字段。无候选时不会触发 `onInjected`，`injected=0` 由“无该事件”表达，与 T3 口径一致。
-2. **`textHash` 保留，但限定内部用途**：sha256 前 8 位不可反推，但对低熵文本可作“确认攻击”；**audit 不进发布物**，将来若要公开 audit 必须改 HMAC/加盐。当前实现不写正文（白名单仅 `textHash`/`messagesLength`，测试断言无 `title`），可接受。
+2. **`textHash` 改为不做（00 定，2026-10-26）**：sha256 前 8 位 = 32 bit，对低熵文本（header 来自少量记忆标题）持有候选者可验证猜测；只够会话内去重、不适合作标识。而 `injected=0|1` + `messagesBefore/After` + `count=N` 已能回答“注没注、注了几条”，内容一致性当前无真实需求。**结论：第 4 步不做 header hash**——需移除 `header.js` 的 `createHash`/`textHash`、`audit.js` 白名单的 `textHash`、`index.js` 的 `textHash` 写入及对应测试断言；保留 `injected`/`messagesLength` 的真实差值。若将来确有需要，用 HMAC/加盐并明确仅内部使用。
+
+### 9.1.1 文档补句（00 要求）
+
+写入 T5/README：「**audit 是权威记录，warn 只是提示**；保护失败的持久证据是 `manual-compaction-loss`（带 `failures`），日志不是唯一观测点。」
 
 ### 9.2 两条跟踪项（不阻塞 0.2.2 本批）
 
