@@ -53,7 +53,7 @@ test('apply：注册工具 + 挂上压缩观察器 + dispose 释放记忆锁', a
       compression: { enabled: true, hostVersion: '0.2.1-rc.2', backendVersion: '' },
     });
     assert.deepEqual(ctx.registered, ['mem_write', 'mem_query']);
-    assert.equal(ctx.handlers.filter((item) => item.event === 'session/event').length, 1);
+    assert.equal(ctx.handlers.filter((item) => item.event === 'session/event').length, 2, 'guard + early wiring 各一个');
 
     const built = buildCompaction({ before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 11 });
     ctx.handlers[0].handler(built.session, built.events.find((item) => item.type === 'compaction/start'));
@@ -218,7 +218,7 @@ test('apply：provider 不可见也一定执行，并写 warn + 诊断行（不�
       diagnostics: { logFile },
     });
     assert.deepEqual(ctx.registered, ['mem_write', 'mem_query']);
-    assert.equal(ctx.handlers.filter((item) => item.event === 'session/event').length, 1);
+    assert.equal(ctx.handlers.filter((item) => item.event === 'session/event').length, 2, 'guard + early wiring 各一个');
     assert.ok(ctx.warnings.some((warning) => warning.includes('compaction service') && warning.includes('token="compaction"')));
     const text = await fs.readFile(logFile, 'utf8');
     assert.match(text, new RegExp(`governance capability@apply version=${versionText}`));

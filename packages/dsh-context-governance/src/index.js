@@ -16,6 +16,7 @@ import { registerStatusCommand } from './commands/cg-status.js';
 import { POLICY_FILE_MAX_BYTES, nativeFromWindow, nativeRatio, profileLayer, resolvePolicy, validateLayer } from './policy.js';
 import { detectHostVersion, normalizeBackendVersion } from './compress/adapters.js';
 import { CompressionGuard } from './compress/runtime.js';
+import { wireEarlyCompaction } from './compress/early-wiring.js';
 import { formatCapability, probeCapability } from './capabilities.js';
 import { DEFAULT_AUDIT_MAX_BYTES, MAX_AUDIT_MAX_BYTES, MIN_AUDIT_MAX_BYTES } from './audit.js';
 import { appendDiagnosticLine, capabilityLine, PLUGIN_VERSION, startupLine } from './diagnostics.js';
@@ -475,6 +476,7 @@ export async function apply(ctx, rawConfig = {}) {
     );
   }
   let guard = null;
+  let earlyWiring = null;
   const probeReadyCapability = () => {
     const ready = probeCapability(ctx);
     const entries = ready.entries.map(([name, value]) => `${name}=${value}`);
@@ -509,6 +511,23 @@ export async function apply(ctx, rawConfig = {}) {
         onFirstEvent: probeReadyCapability,
       });
       guard.start();
+      // 0.2.2 第 5 步：turn/end 门禁接线（armed=false：不审计、不取服务、不调用）。
+      if (earlyWiring === null) {
+        earlyWiring = wireEarlyCompaction({
+          ctx,
+          getGuard: () => guard,
+          getPolicy: () => {
+            try {
+              return policyState.resolve();
+            } catch {
+              return null;
+            }
+          },
+          getArmed: () => false,
+          audit: guard.auditLog ?? null,
+          logger: ctx.logger,
+        });
+      }
       const status = guard.status;
       ctx.logger?.info?.(
         `[context-governance] compression observer: adapter=${status.adapter.kind} ` +
@@ -687,6 +706,7 @@ export async function apply(ctx, rawConfig = {}) {
   if (typeof ctx.effect === 'function') {
     ctx.effect(() => async () => {
       commandRef.current.dispose?.();
+      earlyWiring?.stop();
       guard?.stop();
       await store.close();
     }, 'context-governance cleanup');

@@ -46,6 +46,16 @@ export const AUDIT_FIELD_WHITELIST = Object.freeze({
   injected: 'number',
   messagesBefore: 'number',
   messagesAfter: 'number',
+  /** 0.2.2 第 5 步：early-* 审计（接线路由，不记正文）。 */
+  action: 'text',
+  effective: 'number',
+  threshold: 'number',
+  native: 'number',
+  compaction: 'text',
+  protection: 'text',
+  reinjected: 'boolean',
+  accepted: 'boolean',
+  delayMs: 'number',
   mode: 'text',
   adapter: 'text',
   backend: 'text',
@@ -123,6 +133,11 @@ export const AUDIT_EVENTS = Object.freeze([
   'duplicate-cycle-start',
   'cycle-interrupted',
   'cycle-abandoned',
+  'early-decision',
+  'early-skipped',
+  'early-forced',
+  'early-aborted',
+  'early-failed',
 ]);
 
 function redactText(value) {
