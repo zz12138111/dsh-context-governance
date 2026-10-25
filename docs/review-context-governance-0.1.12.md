@@ -119,3 +119,22 @@
 - 两列语义不同：`ctx.X` 是未 inject 的属性读取（服务不在 fiber store 链上即抛 `cannot get property "X" without inject`，cordis `reflect.ts:144-170`）；`ctx.get('X')` 才是可用性信号（未提供返回 `undefined`，`reflect.ts:9-19`）。`tokenMeter=throws` 但 `get.tokenMeter=obj` 就是反例。
 - 本报告的 T2′/成本/零折叠结论**不受影响**：prune 观测走 `session/event` 事件面，不依赖 compaction 服务。
 - 建议（不阻断）：能力探测把 `get.X` 与 `get.X(strict=false)` 分列并写清语义，避免把 `throws` 误读成“服务异常”。
+
+## 11. 真机首压验证（2026-10-25 20:46，开发会话 `58a2e845`，manual）
+
+读数（`memory/governance/audit.jsonl`，`12:46:42–58Z`，8 条）：`protection-write`(4) → `protection-materialized`(4) → `manual-compaction-loss` failures=`latest-user-message, rule-injection, rollback-point` → `reinjection` seq=11512(4) → `compaction-cost`：`tokensBefore=407146`/`tokensAfter=3525`（均 `tokenMeter`）、`tokensShadowed=404975`、`backendUsage.totalTokens=380627`、`tokensPruned=null`/`pruneCount=0`/`pruneTools=[]`、`auditVersion=cost-v1.2`。
+
+1. **成本链 ✅ 但有两处口径要记**
+   - 走的是“meter 可用 → end 后 microtask 立即 measure”路径（`tokensAfterSource=tokenMeter`）；**usage 兜底 / 延迟写路径真机仍未验到**。
+   - 宿主 `tokenMeter` 是 **chars/4 估算**（asar `dsh-token-meter/lib/types/estimate.js:9`，`CHARS_PER_TOKEN=4`），不是分词器。本例 `tokensBefore=407146`，而压缩前最后一条 `assistant/message` 的真实 prompt 是 **564179**（input 211 + cacheRead 563968）→ **低估约 28%**（中文密集）。故 `tokenMeter` 只表示“来源”，不能当“实测 token”，也**不可与 `backendUsage` 直接比**。
+   - 内部自洽：407146 − 404975 = **2171**（保留节点），加摘要/checkpoint/回注 80 → after 3525；`tokensAfter` 是 end 时的 surface 估算，不是下一次请求 prompt（下一条真实 prompt 26808，含 system/tools 与压缩后新消息）。
+2. **batch-list 未失败 ≠ 假阳性已修**
+   - 0.1.12 未改 `protection.js`（`git diff d5e6d54..1c5f729 -- .../protection.js` 为空），日期比例正则仍在。
+   - 本次 `snapshot.batch` 命中的是 **seq 11479 的审计 JSON dump**（`"kinds":[...,"batch",...]` 命中 `/批次|batch/i`），该文本没有 `x/y` 数字 → `ratios=[]` → `ratiosCovered([])` 对任何可读摘要恒 true（`protection.js:396`）→ **空泛通过**；记忆里新增「批次进度：有批次标记」正是此形态。
+   - 结论：需带 `x/y` 的样本才能判假阳性是否消失；本次属“无数字可比的 pass”。**新 P3（建议 0.1.13）**：batch 检测只看用户/助手消息的进度数字（排除 tool 结果/JSON 字段名 `batch`）；`ratios=[]` 应判 `skip` 而非 `pass`。
+3. **prune 无数据 ✅ 符合“无 prune”分支**
+   - 会话内只有 8 条 `compaction/prune`（seq 4177–4191），时间是 **10:41Z（18:41）**，早于 0.1.10 加载 → 本来就不会有 `prune-observed`；20:34 之后无新 prune（`seq>11500` 计数 0）。
+   - 更关键：**手动压缩根本不会调宿主 pruner** —— `dsh-compaction-basic/lib/index.js:985 compactNow` 不调 `pruneSession`；只有自动路径 `:929`（context-overflow）/`:943`（pressure）会调。→ **再手动压一次仍会是 0 prune**。
+4. **“有 prune”分支的真机验证条件**
+   - 必须是**自动压缩**（pressure/overflow）触发，且当时 surface 上存在 ≥ `thresholdChars=8192` 字符、未被 tokenGuard/spill/上次 prune 折掉的 `tool/result`（`read` 最稳，tokenGuard 只折 `pwsh`）。
+   - 或先用真实 prune 事件回放（`.tmp/check-t2prime*.mjs`）作离线证据：8 条真实 prune → 8 行 `prune-observed`、`tool=read`、`tokensPruned=23645`、`pruneTools=["read:8"]`。
