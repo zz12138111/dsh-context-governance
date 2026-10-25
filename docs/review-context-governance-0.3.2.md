@@ -176,6 +176,13 @@ node scripts/memory-cleanup.mjs                 # DRY-RUN targets=7（不写）
 - **writable 预检**：副本保留 `.writer.json`（模拟 DSH 运行中）→ `无法写入记忆库：writer-lock:10076…请先退出/重启 DSH`、**exit 2、未生成备份目录** ✔
 - **无锁副本 --apply**：`applied=7`、`active 16 -> 9`（16 = 15 + 注入的 model 条目）✔，备份仍先于写。
 
+### 7.2.1 复核后新增两个提交（`745c930`、`c9807b6`）
+
+- `745c930`：dry-run 也提示“当前不可写”；`c9807b6`：把 dry-run 的不可写原因显示成真实 `writer-lock:<pid>`（而不是 `requested`）。
+- **实测（DSH 运行中）**：`targets=8` + `⚠ 当前不可写（writer-lock:10076）：--apply 会失败；请先退出/重启 DSH 释放写者锁` —— 提示准确、可直接指导重启窗口 ✔
+- **但引入一个副作用（新 P3-5）**：dry-run 不再以 `readOnly` 打开（`open({rootDir, project})`），因此会 ① `probeWritable()` 写一个 `.write-probe-<pid>-<ts>` 再删；② 锁空闲时还会取 `.writer.json`（用完释放）。脚本头注释“默认 `--dry-run`：只列出…不写任何文件”已经不准确。建议：dry-run 仍用 `readOnly:true` 打开，锁状态改用 `readWriterLock()` + `isPidAlive()` 只读判断；或改注释明确“dry-run 会瞬时探测写权限/取锁”。
+- **数据漂移（正常，但重启窗口前要知道）**：live 目标已从 7 变 **8**（新增 `MEM-20261026-1006 批次进度：3/5`，是这次压缩写入的 rule 噪音）。`--apply` 前按 `writer=rule` 复核，不要按“7 条”核对。
+
 ### 7.3 结论
 
 P2-1（扫描）与 P3-2/P3-3（cleanup）修复有效；6 条降级口径未漂；新增一条 P3（`selfRegexLiteral` 行级判定，仅自述文件）。
