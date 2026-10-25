@@ -97,3 +97,42 @@
 - R-2：**通过**（host-basic 隔离实例，真实提前压 1 次）；证据环境为 host-basic，生产 context-zip 未覆盖（见 `docs/兼容矩阵-1.0.md`）。
 - T4：① ② 真机通过；③ 补一次 `at=0.35` 的 research 运行后，可整体写“三层真机演练可证”。
 - trigger=manual 语义已确认，发布物按“宿主 manual API，不代表用户操作”表述。
+
+## 8. A 补验复核（`bc12050` / `79a4b6d`，2026-10-26）
+
+### 8.1 context-zip 生产后端 R-2（`bc12050`）—— **自动触发成立**
+
+按 §7 前钉的五条判据逐项核（原始审计 `.tmp/ctxzip-ws/memory/governance/audit.jsonl`）：
+
+| # | 判据 | 实测 | 结论 |
+|---|---|---|---|
+| 1 | 环境可证 | profile `desktop-test-contextzip`；`redirect=0.1.0-context-zip`；bundles 含 `dsh-context-zip`（14 项，未改）；插件仅临时 junction + `--patch`；宿主 0.2.1-rc.3 | ✅ |
+| 2 | 真实触发 | `early-forced`（`19:06:52.044Z`）：`accepted=true, compaction=committed, delayMs=50, effective=0.437, threshold=0.35, native=0.6934`；`early-decision action=force` | ✅ |
+| 3 | 压缩确实发生 | `compaction-cost` `161580→2981`（tokenMeter，cost-v1.4）；`last-compaction id=cc144603`；事件流本 cycle 由 guard 记录（status `events=66`）；`backend=host-basic (inferred)` 按口径允许 | ✅ |
+| 4 | 保护/回注 | `protection-write count=3` → `materialized moved=3` → `manual-compaction-loss 3 项` → `reinjection seq=95` | ✅ |
+| 5 | 收尾 | 18767/18768 均无监听；junction 已删；redirect 保留；profile package.json/bundles 未改 | ✅ |
+
+**判点**：`protection=failed + reinjected=true + committed` 组合与 host-basic 轮一致——不升级、不重试、不算压缩失败。`adapter=none / self-check-failed` 仍属该 profile 未暴露 compaction token 的观测面，**不得当后端能力证据**。
+**结论**：矩阵第 1 格写实为「事件级兼容 + context-zip 自动触发已验」；第 2 格（adapter 识别/摘要形态）**仍写未验**。
+
+### 8.2 T4 第③层补验（`79a4b6d`）—— **通过**
+
+- research profile，**`at=0.35`**（会话层）且 **`effective=0.428`**（两值同时给出，排除“阈值未到”）；
+- `early=off (policy:research)`、`last-early: none`；
+- 原始审计：19:07:24/19:07:32 `apply`（重启加载 research），19:07:53 `policy-set compact.at=0.35`，此后 **0 条 `early-*`**；`compaction-cost` 总数仍 **4**（未新增）。
+- **结论**：`compact.early=false`（policy/profile）优先于 `armed` 默认开成立。**T4 三层真机演练可证**（①会话、②配置重启、③policy 重启 + 压力高于 at）。
+
+### 8.3 T1/T2/T6 快核（补齐 0.2.4 收口）
+
+- **T1**（`5f83d10`）：`armed` 三通道（default/config/session）、项目层 `project-excluded` 不生效、命令/审计/状态均有测试；
+- **T2**（`7d432be`）：`early-*` 增 `compactionId`；首触 `logger.info` 一行（仅数值/compactionId/protection，无正文/失败项），测试断言；
+- **T6**（`8854035`）：README/使用说明/T5 文档补默认开、三层关闭与风险提示——属文档，按发布口径 §4.5 验收时再逐句对。
+- 全量测试在 HEAD `79a4b6d` 复跑 **323/323**。
+
+## 9. 最终结论（0.2.4）
+
+- T1–T5 **全部通过**；T6 文档已交、待发布材料复核时逐句验（不阻塞 0.2.4 代码收口）。
+- **R-2 门禁完全满足**：host-basic 与 context-zip 生产后端各一次真实自动触发，五件套齐全。
+- T4 **三层真机演练可证**（① 会话 disarm 立即、② 配置重启后、③ research 重启后 at=0.35 < effective=0.428 仍 0 触发）。
+- 保留未验（不阻塞）：context-zip 的 adapter 识别/摘要形态；`/cg status` 的 `adapter=` 不得当后端已识别证据。
+- 发布物口径：`trigger=manual` = 宿主 manual API，不代表用户手动压缩。
