@@ -17,7 +17,7 @@
 
 ## 1. 结论摘要
 
-- **阻断（P1）：0**；**应修（P2）：0**；**建议（P3）：7**（3 条文档/报告面、1 条可用性边界、1 条残余安全风险、2 条小一致性）。
+- **阻断（P1）：0**；**应修（P2）：0**；**建议（P3）：9**（4 条文档/报告面、1 条可用性边界、1 条残余安全风险、1 条存量审计语义、2 条小一致性）。其中 P3-8/P3-9 为 4a 真机核对时追加（§8）。
 - 00 的七条复核重点**全部成立**（§2 逐条给实测证据）。
 - 我上一轮报的 **P2×2 + P3×6 全部闭环**，并有经 `apply` 的集成测试兜底（§4）。
 - 代码可推分支；**是否上机/发布仍归用户**（§6）。
@@ -120,8 +120,10 @@ measured=0.583 estimated=0.412 adjusted=0.556(×1.35) effective=0.583 ratio=1.42
 | **P3-5** | `analysis/req-20261025-09/0.2.0-交付报告.md:33` | 写“`/cg set <key>=<value>` / `list` / `reset`”，但实现**没有** `list`（实测 `set list` → `list 缺少值`；列表是空参或 `set show`） | 改成“空参 / `set show` 列出”；`/cg set list` 可以顺手支持为别名 |
 | **P3-6** | `cg-status.js:220-258` | 一条命令里重复键（`compact.at=0.5 compact.at=0.4`）成功返回 `applied: compact.at=0.5, compact.at=0.4`，审计写 2 条，实际后写胜 | 拒绝重复键（报错），或去重后只报最终值 |
 | **P3-7** | `docs/T5` §1.1 / `README.md` 策略层 | 项目文件只在 `apply` 读一次，改了 `.cg-policy.json` **必须重启/重载插件**才生效；`analysis/.../重启后核对清单.md:4-5` 已写明，但 T5/README 只说“apply 算一次”，没直说改文件要重启（`/cg set` 反而写明重启失效） | 在 T5 §1.2 / README 加一句“改项目文件后需重启插件生效” |
+| **P3-8** | `src/audit.js:257`（`#ensureFile()`） | `audit size=` 显示的不是文件字节数，而是**本进程写入量**：构造时把 `#sizeBytes` 置 0，getter 却声称“当前审计文件字节数”。真机实测：文件 42 行/14990 字节，`size=1379`＝重启后 3 条启动事件字节和（219+580+580）。轮转同按此计数（T6 §3.3 写的是“当前大小”），单文件可超出上限至“既有大小 + 8 MiB”；`(this-process)` 只修饰 `recentFailures`。**存量缺陷**（0.1.6 `3cb6177` 引入，0.2.0 未触碰） | `#ensureFile` 末尾改 `#sizeBytes = null`（或建文件后 stat 一次），让 getter 取真实大小；补“历史文件已存在时 sizeBytes/轮转”单测 |
+| **P3-9** | `analysis/req-20261025-09/samples-0.2.0.txt:6,10,61,65` | 样例写 `adapter=none … summary=readable/free-form` 且 `conflicts: none`，与代码和真机矛盾：`kind='none'` 时 summary 固定 `unknown/unknown`，conflicts 至少 3 条（`no-compaction-service` / `self-check-failed` / `backend-version-unverified`），真机也是 `summary=unknown/unknown` + `self-check-failed(error)` | 重跑样例（用真实 guard 输出）或在文件头标注“示意/裁剪，非实跑”；`summary` 只在观察到压缩摘要后才变 readable/free-form |
 
-> 说明：P3-1/P3-5 是文档/报告面，不影响代码运行；P3-2 只在“配置本身已误配”时出现；P3-4 需要仓库里带目录链接才成立。**均不阻断 0.2.0 策略层交付**。
+> 说明：P3-1/P3-5/P3-9 是文档/报告面，不影响代码运行；P3-2 只在“配置本身已误配”时出现；P3-4 需要仓库里带目录链接才成立；P3-8 是 0.1.6 起存量语义 bug（无数据丢失）。**均不阻断 0.2.0 策略层交付**。
 
 ## 4. 上一轮（0.2.0 中途）问题闭环
 
@@ -156,6 +158,16 @@ git archive --format=tar --output=.tmp/h.tar 591f106
 tar -xf .tmp/h.tar -C .tmp/snapshot-020-final
 cd .tmp/snapshot-020-final/packages/dsh-context-governance
 node --test "test/*.test.mjs"        # 234/234
-node --test test/no-control-chars.test.mjs   # 1/1（tracked 163 files, 0 violations）
+node --test test/no-control-chars.test.mjs   # 1/1（当前 tracked 176 files, 0 violations）
 node .tmp/probe-020.mjs              # 审核侧独立探针 27/27（.tmp 已 gitignore）
 ```
+
+## 8. 补记（2026-10-26 00:2x）：4a 真机确认 + 三处疑点核查
+
+**4a 真机通过**（用户手打真机 GUI，非等价进程）：`compact.at=0.52 (source=project) native=0.6785 early=on`、`layers: plugin (empty) -> project -> session (empty)`、`invalid: none`，与我的等价进程输出逐字对齐。`/cg status` 另有 `events=344`、压力四段 `measured=0.197 estimated=0.135 adjusted=0.182(×1.35) effective=0.197 ratio=1.46 at=0.52 effective<at`；删掉 `.cg-policy.json` 后仍显示 `source=project`，证明 apply 只读一次（不是每条命令现读）。
+
+**Q1 `audit size=1379` vs 文件 14990 字节**：**是语义 bug（存量，非 0.2.0 引入）**，落 P3-8。构造 `AuditLog` 时 `#ensureFile()` 把 `#sizeBytes` 置 0，而 getter 本意是“当前文件字节数”。真机 `size=1379` 恰好等于重启后 3 条启动事件字节和（`apply` 219 + `capability@apply` 580 + `capability@ready` 580），文件实际 42 行/14990 字节。后果：显示误导；轮转按“本进程写入量”判断（T6 §3.3 写的是“当前大小”），单文件可超出上限至“既有大小 + 8 MiB”；`(this-process)` 只修饰 `recentFailures`。修法一行：`#ensureFile` 末尾改 `#sizeBytes = null`。
+
+**Q2 `self-check-failed(error)`**：适配器自检的 `compaction-service` 检查失败（detail `no usable ctx.compaction provider`）——宿主没挂 `ctx.compaction`（audit `get.compaction=absent`、日志 `compaction-service=absent(token=compaction)`、`warning=provider-unavailable`）。**M1 起既有**：0.1.18 的 `cg-status.js` 同样有 conflicts 行、同样的自检，同样会打印这条；`selectMode` 对 `kind='none'` 显式特判为 `event-level`（`selection.js:97-105`），因此不是降级、也不是 0.2.0 回归。另：代码里 conflict code 是连字符（`self-check-failed`、`backend-version-unverified`），真机粘贴里是点号，属转写差异。
+
+**Q3 `summary=unknown/unknown`**：取自适配器字段——`kind='none'` 时固定 `unknown`，与“是否压过”无关；0.1.18 真机同样是 `unknown/unknown`（见 0.1.18 复核报告 §2.2），不是 0.2.0 新逻辑。只有真正观察到压缩摘要后才会变 `readable|partial|unreadable` + `five-section|free-form`（`runtime.js:1445 applySummaryObservation`）。**但** dev 的 `samples-0.2.0.txt` 写 `adapter=none … summary=readable/free-form` 且 `conflicts: none`，与代码/真机矛盾，落 P3-9。
