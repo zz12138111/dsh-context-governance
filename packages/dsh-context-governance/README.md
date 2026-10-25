@@ -93,7 +93,7 @@ packages/dsh-context-governance/
 - 压力四段（只展示，不据此压缩）：`measured`（最近 `assistant/message.usage` 的 input+cacheRead+cacheWrite 占窗口）、`estimated`（`tokenMeter` 估算）、`adjusted = estimated × estimateSafety`、`effective = max(measured, adjusted)`；`ratio = measured/estimated` 用来判断估算是否偏低；行内带 `window=1M (session 58a2e845)`（分母 + 会话可见）。任一来源缺失写 `-`，不伪造。
 - `/cg set <key>=<value>` / `/cg set reset`：写会话层（最高优先级）。只允许 `compact.at`/`compact.early`/`compact.cooldownMin`/`compact.minDeltaTokens`/`cost.remainingTurns`；`estimateSafety`/`lowThresholdAck` 明确拒绝（只能改配置文件）。覆盖是**进程内**的，重启即失效。
 
-样例输出（带 fixture 头）见 `../../analysis/req-20261025-09/samples-0.2.0.txt`（**示意/裁剪，非实跑**）；完整口径见 `../../docs/T5-状态命令与审计.md` §1.1–§1.5。
+样例输出（带 fixture 头）见 `../../analysis/req-20261025-09/samples-0.2.1.txt`（**示意/裁剪，非实跑**）；完整口径见 `../../docs/T5-状态命令与审计.md` §1.1–§1.5。
 
 **命令可用性（与使用说明 v0.3 一致）**：0.2.x 目前只有 `/cg status` / `/cg policy show` / `/cg set`；`/cg compact now` 计划 0.2.2（提前压执行）、`/cg cost` 计划 0.2.3——当前对未知参数只返回 usage，不假装执行。
 
