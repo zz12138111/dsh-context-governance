@@ -12,6 +12,7 @@
 import path from 'node:path';
 
 import { registerStatusCommand } from './commands/cg-status.js';
+import { nativeRatio, profileLayer, resolvePolicy, validateLayer } from './policy.js';
 import { detectHostVersion, normalizeBackendVersion } from './compress/adapters.js';
 import { CompressionGuard } from './compress/runtime.js';
 import { formatCapability, probeCapability } from './capabilities.js';
@@ -61,6 +62,12 @@ export const DEFAULT_CONFIG = Object.freeze({
   diagnostics: Object.freeze({
     logFile: '',
   }),
+  policy: Object.freeze({
+    profile: '',
+    windowTokens: 1_000_000,
+    reservedTokens: 256_000,
+    values: Object.freeze({}),
+  }),
 });
 
 /**
@@ -100,6 +107,21 @@ export function resolveConfig(raw = {}) {
   if (typeof config.diagnostics.logFile !== 'string') {
     throw new MemoryStoreError('CONFIG', 'diagnostics.logFile must be a string');
   }
+  if (config.policy === null || typeof config.policy !== 'object' || Array.isArray(config.policy)) {
+    throw new MemoryStoreError('CONFIG', 'policy must be an object');
+  }
+  const policy = { ...DEFAULT_CONFIG.policy, ...config.policy };
+  if (typeof policy.profile !== 'string') throw new MemoryStoreError('CONFIG', 'policy.profile must be a string');
+  if (!Number.isFinite(policy.windowTokens) || policy.windowTokens <= 0) {
+    throw new MemoryStoreError('CONFIG', 'policy.windowTokens must be a positive number');
+  }
+  if (!Number.isFinite(policy.reservedTokens) || policy.reservedTokens < 0) {
+    throw new MemoryStoreError('CONFIG', 'policy.reservedTokens must be a non-negative number');
+  }
+  if (policy.values === null || typeof policy.values !== 'object' || Array.isArray(policy.values)) {
+    throw new MemoryStoreError('CONFIG', 'policy.values must be an object');
+  }
+  // policyBlockValidated
   if (config.audit === null || typeof config.audit !== 'object' || Array.isArray(config.audit)) {
     throw new MemoryStoreError('CONFIG', 'audit must be an object');
   }
@@ -162,6 +184,12 @@ export function resolveConfig(raw = {}) {
     diagnostics: {
       logFile: config.diagnostics.logFile.trim(),
     },
+    policy: {
+      profile: policy.profile,
+      windowTokens: policy.windowTokens,
+      reservedTokens: policy.reservedTokens,
+      values: policy.values,
+    },
   };
 }
 
@@ -188,6 +216,18 @@ export async function openStore(config, options = {}) {
  */
 export async function apply(ctx, rawConfig = {}) {
   const config = resolveConfig(rawConfig);
+  const policyNative = nativeRatio({ windowTokens: config.policy.windowTokens, reservedTokens: config.policy.reservedTokens });
+  const policyLayers = [];
+  const profilePreset = profileLayer(config.policy.profile);
+  if (profilePreset !== null) policyLayers.push({ source: profilePreset.source, values: profilePreset.values });
+  const pluginPolicy = validateLayer(config.policy.values, { source: 'plugin', native: policyNative });
+  policyLayers.push({ source: 'plugin', values: pluginPolicy.values });
+  const policyState = {
+    native: policyNative,
+    layers: policyLayers,
+    invalid: [...pluginPolicy.invalid],
+    resolve: () => resolvePolicy(policyLayers, { native: policyNative }),
+  };
   if (!config.enabled) {
     ctx.logger?.info?.('[context-governance] disabled by config');
     return;
@@ -339,10 +379,18 @@ export async function apply(ctx, rawConfig = {}) {
 
   // T5：/cg status（只读；不依赖压缩服务是否可用）。
   // P3-1（三轮复核）：commands 可能在治理插件之后挂载——首次失败不静默，`ctx.inject` 或下个 tick 重试一次。
+  for (const invalid of policyState.invalid) {
+    guard?.auditLog?.append?.('policy-invalid', {
+      source: invalid.source,
+      reason: invalid.reason,
+      code: invalid.key,
+    });
+  }
   const commandOptions = {
     store,
     getGuard: () => guard,
     audit: guard?.auditLog ?? null,
+    policy: policyState,
   };
   const commandRef = { current: registerStatusCommand(ctx, commandOptions) };
   const retryStatusCommand = () => {

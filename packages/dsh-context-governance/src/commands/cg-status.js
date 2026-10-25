@@ -6,6 +6,7 @@
  */
 
 import { resolveBackendFields } from '../compress/adapters.js';
+import { policyTable, summarizePolicy } from '../policy.js';
 
 export const CG_COMMAND_NAME = 'cg';
 export const CG_COMMAND_DEFINITION_ID = 'dsh-context-governance/cg';
@@ -24,7 +25,7 @@ function costLine(status) {
     `trigger=${cost.trigger ?? '-'} pruned=${pruned} tools=${tools}`;
 }
 
-function statusText({ store, guard, audit, now }) {
+function statusText({ store, guard, audit, now, policy = null }) {
   const lines = [];
   const status = guard?.status ?? null;
   lines.push('context-governance status');
@@ -48,6 +49,9 @@ function statusText({ store, guard, audit, now }) {
       `capabilities: control=${adapter.control} hooks=${adapter.hooks.before}/${adapter.hooks.after} ` +
       `protectionRole=${adapter.protectionRole ?? 'validator'}`,
     );
+    if (policy !== null && typeof policy.resolve === 'function') {
+      lines.push(`policy: ${summarizePolicy(policy.resolve())}`);
+    }
     if (status.degradedReasons.length > 0) lines.push(`degraded: ${status.degradedReasons.join(', ')}`);
     else lines.push('degraded: none');
     if (status.conflicts.length > 0) {
@@ -133,15 +137,32 @@ function statusText({ store, guard, audit, now }) {
  *
  * @param {{store?:object|null, guard?:object|null, getGuard?:() => object|null, audit?:object|null, now?:() => Date}} options
  */
-export function createStatusCommand({ store = null, guard = null, getGuard = null, audit = null, now = () => new Date() } = {}) {
+export function createStatusCommand({ store = null, guard = null, getGuard = null, audit = null, policy = null, now = () => new Date() } = {}) {
   const currentGuard = () => (typeof getGuard === 'function' ? getGuard() : guard);
   return {
     definitionId: CG_COMMAND_DEFINITION_ID,
     name: CG_COMMAND_NAME,
-    description: '上下文治理状态：后端/能力、记忆、上次压缩与回注、prune 成本、写盘 p50/p95、审计',
-    input: { hint: 'status | last-cost' },
+    description: '上下文治理状态：后端/能力、策略链、记忆、上次压缩与回注、prune 成本、写盘 p50/p95、审计',
+    input: { hint: 'status | status last-cost | policy show' },
     handler: async (invocation = {}) => {
       const raw = String(invocation.rawInput ?? '').trim();
+      if (raw === 'policy show' || raw === 'policy') {
+        if (policy === null || typeof policy.resolve !== 'function') {
+          return { kind: 'error', text: '[context-governance] policy is unavailable' };
+        }
+        const resolved = policy.resolve();
+        const layers = Array.isArray(policy.layers) ? policy.layers.map((layer) => layer.source) : [];
+        const lines = [
+          'context-governance policy',
+          summarizePolicy(resolved),
+          `layers: ${layers.join(' -> ') || 'builtin'}`,
+          ...policyTable(resolved),
+          ...(resolved.invalid.length > 0
+            ? ['invalid:', ...resolved.invalid.map((item) => `${item.key} (source=${item.source}): ${item.reason}`)]
+            : ['invalid: none']),
+        ];
+        return { kind: 'success', text: lines.join('\n') };
+      }
       if (raw === 'last-cost') {
         try {
           return {
@@ -158,13 +179,13 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
       if (raw !== '' && raw !== 'status') {
         return {
           kind: 'error',
-          text: 'Usage: /cg status [last-cost]   (未指定参数时等价于 /cg status)',
+          text: 'Usage: /cg status [last-cost] | /cg policy show   (未指定参数时等价于 /cg status)',
         };
       }
       try {
         return {
           kind: 'success',
-          text: statusText({ store, guard: currentGuard(), audit, now }),
+          text: statusText({ store, guard: currentGuard(), audit, now, policy }),
         };
       } catch (error) {
         return {
