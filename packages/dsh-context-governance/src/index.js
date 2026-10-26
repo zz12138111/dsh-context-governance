@@ -22,6 +22,7 @@ import { detectHostVersion, normalizeBackendVersion } from './compress/adapters.
 import { CompressionGuard } from './compress/runtime.js';
 import { RootGuardPool } from './compress/root-guards.js';
 import { wireEarlyCompaction } from './compress/early-wiring.js';
+import { reconcileStoreFile } from './compress/reconcile-store.js';
 import { formatCapability, probeCapability } from './capabilities.js';
 import { DEFAULT_AUDIT_MAX_BYTES, MAX_AUDIT_MAX_BYTES, MIN_AUDIT_MAX_BYTES, AuditLog, createRootAudit } from './audit.js';
 import { appendDiagnosticLine, capabilityLine, PLUGIN_VERSION, registerDiagnosticPath, startupLine } from './diagnostics.js';
@@ -946,6 +947,8 @@ export async function apply(ctx, rawConfig = {}) {
         ctx,
         subscribe: false,
         getGuard: () => rootGuard,
+        // S1.3（1.0.1）：待回填登记落盘到持久化身份目录（与 root-state 同目录，不新造路径规则）；按根分文件。
+        reconcileFile: identity.ok === true ? reconcileStoreFile(identity, entry.rootId) : null,
         getPolicy: (session) => {
           try {
             return rootPolicy.resolve(session?.id ?? null);

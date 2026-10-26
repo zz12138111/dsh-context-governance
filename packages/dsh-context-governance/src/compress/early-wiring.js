@@ -11,6 +11,7 @@ import { computePressure, shortSessionId } from '../policy.js';
 import { SCOPE_SKIP } from '../scope.js';
 import { EarlyCompactor } from './early.js';
 import { EARLY_DECISION, decideEarly } from './early-gate.js';
+import { readReconcileStore, writeReconcileStore } from './reconcile-store.js';
 import { EARLY_REPORT_WAIT_MS } from './runtime.js';
 
 export const EARLY_DELAY_MS = 50;
@@ -24,8 +25,9 @@ export const EARLY_COOLDOWN_MS = 10 * 60 * 1000;
 /** 增量门槛默认值（policy `compact.minDeltaTokens` 生效时按窗口换算成比例）。 */
 export const EARLY_MIN_DELTA_RATIO = 0.01;
 /**
- * S1.3：迟到回填的待办上限——超出/过期只 warn，不写审计、不抛错。
- * 生命周期只在进程内：跨重启对不上账属已知缺口（文档已声明）。
+ * S1.3（1.0.1）：迟到回填的待办上限——超出/过期只 warn，不写审计、不抛错。
+ * 1.0.1 起登记落盘（`reconcileFile`，见 `reconcile-store.js`）：进程重启后仍能补 `reconciled`；
+ * TTL 仍按 15 分钟裁——跨重启但超 TTL 的登记按未闭合处理，不猜。
  */
 export const EARLY_RECONCILE_TTL_MS = 15 * 60 * 1000;
 export const EARLY_RECONCILE_MAX = 16;
@@ -74,6 +76,7 @@ function engineFor(ctx, agent) {
  * @param {number} [options.cooldownMs]
  * @param {number} [options.minDeltaRatio]
  * @param {number} [options.reportWaitMs] S1.1：等本 cycle 报告的上限（默认/最大均为 `EARLY_REPORT_WAIT_MS`）
+ * @param {string|null} [options.reconcileFile] S1.3（1.0.1）：待回填登记落盘文件；null = 仅内存（1.0 行为）
  * @returns {{stop: () => void, check: (session: object) => Promise<void>}}
  */
 export function wireEarlyCompaction(options = {}) {
@@ -93,10 +96,14 @@ export function wireEarlyCompaction(options = {}) {
     cooldownMs: cooldownMsOption,
     minDeltaRatio: minDeltaRatioOption,
     reportWaitMs: reportWaitMsOption,
+    reconcileFile: reconcileFileOption,
   } = options;
   const reportWaitMs = Number.isFinite(reportWaitMsOption)
     ? Math.min(EARLY_REPORT_WAIT_MS, Math.max(0, reportWaitMsOption))
     : EARLY_REPORT_WAIT_MS;
+  const reconcileFile = typeof reconcileFileOption === 'string' && reconcileFileOption !== ''
+    ? reconcileFileOption
+    : null;
 
   const state = new Map();
   const timers = new Set();
@@ -134,11 +141,48 @@ export function wireEarlyCompaction(options = {}) {
   const pendingReconcile = new Map();
   const guardSubscriptions = new Map();
   const shortCompactionId = (id) => String(id ?? '').slice(0, 8);
+  // S1.3（1.0.1）：登记落盘。读/写失败只 warn 一次，之后按内存表继续（不抛错、不阻塞 turn）。
+  let reconcileWarned = false;
+  const reconcileLogger = {
+    warn: (message) => {
+      if (reconcileWarned) return;
+      reconcileWarned = true;
+      logger?.warn?.(message);
+    },
+  };
+  const persistPendingReconcile = () => {
+    if (reconcileFile === null) return false;
+    const entries = [];
+    for (const [cycle, entry] of pendingReconcile) {
+      entries.push({ cycle, sessionId: entry.sessionId ?? null, writtenAt: entry.writtenAt });
+    }
+    return writeReconcileStore(reconcileFile, entries, { logger: reconcileLogger });
+  };
+  if (reconcileFile !== null) {
+    // 启动读回：TTL/上限在 read 内裁；audit 写入器用本根的 audit（重启后没有 session 对象可查 per-session audit）。
+    const restored = readReconcileStore(reconcileFile, {
+      now,
+      ttlMs: EARLY_RECONCILE_TTL_MS,
+      max: EARLY_RECONCILE_MAX,
+      logger: reconcileLogger,
+    });
+    for (const item of restored) {
+      pendingReconcile.set(item.cycle, { sessionId: item.sessionId ?? null, audit, writtenAt: item.writtenAt });
+    }
+    if (restored.length > 0) {
+      logger?.info?.(`[context-governance] restored ${restored.length} pending early reconcile entr${restored.length === 1 ? 'y' : 'ies'}`);
+    }
+  }
 
   function prunePendingReconcile(nowMs) {
+    let changed = false;
     for (const [cycle, entry] of pendingReconcile) {
-      if (nowMs - entry.writtenAt > EARLY_RECONCILE_TTL_MS) pendingReconcile.delete(cycle);
+      if (nowMs - entry.writtenAt > EARLY_RECONCILE_TTL_MS) {
+        pendingReconcile.delete(cycle);
+        changed = true;
+      }
     }
+    return changed;
   }
 
   /** 报告就绪 → 只匹配本会话本 cycle，追加一条 `early-forced-reconciled`；主记录不动。 */
@@ -150,6 +194,12 @@ export function wireEarlyCompaction(options = {}) {
     if (entry.sessionId !== null && report?.sessionId !== entry.sessionId) return;
     const compactionId = report?.compactionId;
     if (compactionId === null || compactionId === undefined || String(compactionId) === '') return;
+    // 过期登记不再回填：删条目 + 落盘，按未闭合处理（不猜、不补写）。
+    if (now() - entry.writtenAt > EARLY_RECONCILE_TTL_MS) {
+      pendingReconcile.delete(cycle);
+      persistPendingReconcile();
+      return;
+    }
     pendingReconcile.delete(cycle);
     const failures = Array.isArray(report?.failures)
       ? report.failures.map((failure) => (typeof failure === 'string' ? failure : failure?.name)).filter(Boolean)
@@ -166,7 +216,10 @@ export function wireEarlyCompaction(options = {}) {
       // 需求 2026-10-27 收紧③：字段名用 reconcileDelayMs，与 early-report-wait.waitedMs 区分。
       reconcileDelayMs: Math.max(0, Math.round(now() - entry.writtenAt)),
       source: 'late-report',
-    });  }
+    });
+    // 回填成功即从落盘表里删掉本 cycle（跨重启语义：要么已闭合，要么还在表里）。
+    persistPendingReconcile();
+  }
 
   function subscribeGuard(guard) {
     if (guardSubscriptions.has(guard)) return true;
@@ -201,6 +254,8 @@ export function wireEarlyCompaction(options = {}) {
       logger?.warn?.('[context-governance] early reconcile queue full; dropped the oldest pending cycle');
     }
     pendingReconcile.set(cycleKey, { sessionId, audit: auditForSession, writtenAt: nowMs });
+    // 先落盘再返回：登记一旦写进审计 unknown，就必须能在重启后被找回。
+    persistPendingReconcile();
   }
 
   async function check(session) {
@@ -244,6 +299,8 @@ export function wireEarlyCompaction(options = {}) {
       auditScopeSkip('read-only');
       return;
     }
+    // S1.3（1.0.1）：重启后读回的回填条目还没有报告监听器；本根首次拿到 guard 时补订阅。
+    if (pendingReconcile.size > 0) subscribeGuard(guard);
     const pressureStatus = (typeof guard?.pressureFor === 'function'
       ? guard.pressureFor(session)
       : null) ?? guard?.status?.pressure ?? {};
@@ -479,7 +536,7 @@ export function wireEarlyCompaction(options = {}) {
     stop() {
       for (const timer of timers) clearTimeout(timer);
       timers.clear();
-      // S1.3：退订报告监听并清掉未回填的待办（进程内状态，随 stop 消失）。
+      // S1.3（1.0.1）：退订报告监听；剩余未回填条目先落盘再清内存（跨重启靠这里）。
       for (const unsubscribe of guardSubscriptions.values()) {
         try {
           unsubscribe();
@@ -488,6 +545,7 @@ export function wireEarlyCompaction(options = {}) {
         }
       }
       guardSubscriptions.clear();
+      persistPendingReconcile();
       pendingReconcile.clear();
       if (typeof dispose === 'function') dispose();
     },
