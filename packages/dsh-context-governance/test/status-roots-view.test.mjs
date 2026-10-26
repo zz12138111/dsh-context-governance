@@ -40,9 +40,11 @@ test('P1/T17 status：roots 计数 + 全部根列表（active/idle/fail-closed�
       },
     ],
     getRootCounts: () => ({ roots: 3, active: 1, idle: 1, failClosed: 1, warn: false }),
+    getPoolStats: () => ({ open: 2, refs: 1, idle: 1, pinned: 1, warned: true }),
   });
   const result = await command.handler({ rawInput: 'status' });
   assert.match(result.text, /^roots: 3 \(active=1, idle=1, fail-closed=1\)$/m);
+  assert.match(result.text, /^stores: open=2 refs=1 idle=1 pinned=1, warn=over-threshold$/m);
   assert.match(result.text, /^ {2}root: id=aaaaaaaaaaaaaaaa name=demo project=demo state=active memory=3 audit=2026-10-26T10:00:00\.000Z\(apply\)$/m);
   assert.match(result.text, /^ {2}root: id=bbbbbbbbbbbbbbbb name=idle project=idle state=idle memory=- audit=-$/m);
   assert.match(result.text, /^ {2}root: id=cccccccccccccccc name=bad project=bad state=fail-closed reason=memory-root-escape memory=- audit=-$/m);
