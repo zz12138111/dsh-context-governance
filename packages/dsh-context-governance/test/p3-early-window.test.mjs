@@ -27,10 +27,10 @@ function makePolicy() {
   };
 }
 
-async function makeFixture(startWaitMs = 30, { isSubagent = false } = {}) {
+async function makeFixture(startWaitMs = 30, { isSubagent = false, readOnly = false } = {}) {
   const root = await tempDir('cg-p3-window-');
   const memoryRoot = path.join(root, 'memory', 'governance');
-  const store = await MemoryStore.open({ rootDir: memoryRoot, project: 'p3-window' });
+  const store = await MemoryStore.open({ rootDir: memoryRoot, project: 'p3-window', readOnly });
   const audit = new AuditLog({ file: path.join(memoryRoot, 'audit.jsonl'), allowedBase: memoryRoot });
   const built = buildCompaction({ before: healthyMessages(), summary: FIVE_SECTION_SUMMARY });
   built.session.id = 'session-p3-window';
@@ -191,6 +191,20 @@ test('P3 G5：early 按根 armed 隔离（A 触发不读 B 策略）', async () 
   assert.equal(auditB.rows.length, 0, 'B 未 armed 时完全静默');
 });
 
+test('B1：只读根 early-skipped(read-only)，compactNow=0', async () => {
+  const f = await makeFixture(10_000, { readOnly: true });
+  try {
+    await f.wiring.check(f.built.session);
+    assert.equal(f.engine.calls, 0, '只读根不得触发 early');
+    assert.equal(f.store.protectionPending, 0);
+    const rows = await readRows(f.audit);
+    assert.ok(rows.some((row) => row.event === 'early-skipped' && row.reason === 'read-only'));
+    assert.equal(rows.some((row) => row.event === 'early-forced'), false);
+  } finally {
+    await f.cleanup();
+  }
+});
+
 test('B2f：预写失败不调用 compactNow（B-1 门禁）', async () => {
   const f = await makeFixture(10_000);
   try {
@@ -245,6 +259,9 @@ test('B2c：start 延迟超过阈值，journal 仍 pending；迟到 start 复用
     assert.equal(f.guard.status.lastReport?.protection, 'ok');
     const rows = await readRows(f.audit);
     assert.ok(rows.some((row) => row.event === 'early-start-reused' && row.late === true));
+    const writes = rows.filter((row) => row.event === 'protection-write');
+    assert.equal(writes.length, 1, 'start 复用不得重写 journal');
+    assert.equal(writes[0].phase, 'early-prewrite');
     assert.ok(rows.some((row) => row.event === 'protection-materialized'));
     assert.ok(rows.some((row) => row.event === 'compaction-cost'));
     assert.equal(rows.some((row) => row.event === 'early-start-missing'), false);
