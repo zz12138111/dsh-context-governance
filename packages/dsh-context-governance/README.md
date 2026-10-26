@@ -103,13 +103,15 @@ packages/dsh-context-governance/
   - **禁** `compact.lowThresholdAck` / `compact.estimateSafety`（`project-denied`），`compact.at` 下限 **0.45**（`below-min`），上限 `native`；
   - 任一键被拒 → **整层拒绝**（不逐键降级）→ 退回下一层；`source=project` + 键 + 原因进 `policy-invalid` 审计，并在 `/cg status` 的 `policy-invalid:` 行可见；
   - **只在 `apply` 读一次**：改文件后需重启插件才生效。
-- **窗口来源与校验（0.2.1）**：`current` = `#lastSession` 的 `request/context.contextWindow`，`conservative = min(已观察窗口)`；`native` 每次用同一个 `W` 现算（`nativeFromWindow`），无观察回退配置并标 `config-fallback`；`request/context` 不带 `contextWindow` → **删除旧值置 unknown（不沿用）**；校验按 conservative，运行时 `at > native` → 拒绝该层 + `policy-invalid` 审计。**退化口径 A**（`W ≤ O+65536`）：`native=unknown (degenerate)`，禁造常数 0.6785，设置 `at` 的层一律拒绝（`native-uncomputable`），继承值标 `unverified-degenerate`，`W` 恢复后自动恢复。**本版不触发任何压缩**（`src/` 无 `compactNow`/`compactRegion` 调用）。
+- **窗口来源与校验（0.2.1 / 1.0 #4）**：`current` = `#lastSession` 的 `request/context.contextWindow`，`conservative = min(已观察窗口)`；`native` 每次用同一个 `W` 现算（`nativeFromWindow`），无观察回退配置并标 `config-fallback`；`request/context` 不带 `contextWindow` → **删除旧值置 unknown（不沿用）**；校验按 conservative，`at ≥ native−0.02`（含边界）→ 拒绝该层 + `policy-invalid(above-effective-window)`。**退化口径 A**（`W ≤ O+65536`）：`native=unknown (degenerate)`，禁造常数 0.6785，设置 `at` 的层一律拒绝（`native-uncomputable`），继承值标 `unverified-degenerate`，`W` 恢复后自动恢复。运行时窗口收缩使生效层落入 `(native−0.02, native]` → 该层自动失效（`policy-invalid(window-shrunk)`），`/cg status` 的 `early=` 不得显示 on；回落层也不可用时记 `fallback-over-native`。**本版不触发任何压缩**（`src/` 无 `compactNow`/`compactRegion` 调用）。
 - 压力四段（只展示，不据此压缩）：`measured`（最近 `assistant/message.usage` 的 input+cacheRead+cacheWrite 占窗口）、`estimated`（`tokenMeter` 估算）、`adjusted = estimated × estimateSafety`、`effective = max(measured, adjusted)`；`ratio = measured/estimated` 用来判断估算是否偏低；行内带 `window=1M (session 58a2e845)`（分母 + 会话可见）。任一来源缺失写 `-`，不伪造。
 - `/cg set <key>=<value>` / `/cg set reset`：写会话层（最高优先级）。只允许 `compact.at`/`compact.early`/`compact.cooldownMin`/`compact.minDeltaTokens`/`cost.remainingTurns`；`estimateSafety`/`lowThresholdAck` 明确拒绝（只能改配置文件）。覆盖是**进程内**的，重启即失效。
+- `/cg profile [status|reset|<batch|coding|review|research>]`：给**当前会话**打 profile 标签（只影响本会话；进程内，重启回配置/默认）。`/cg set profile=...` 会被当作未知键拒绝——profile 的唯一入口是本命令。
+- `/cg header [status|on|off]`、`/cg compact [status|arm|disarm]`：会话级 header 开关与提前压可退开关。
 
 样例输出（带 fixture 头）见 `../../analysis/req-20261025-09/samples-0.2.1.txt`（**示意/裁剪，非实跑**）；完整口径见 `../../docs/T5-状态命令与审计.md` §1.1–§1.5。
 
-**命令可用性（与使用说明 v0.3 一致）**：0.2.x 目前只有 `/cg status` / `/cg policy show` / `/cg set`；`/cg compact now` 计划 0.2.2（提前压执行）、`/cg cost` 计划 0.2.3——当前对未知参数只返回 usage，不假装执行。
+**命令可用性（1.0）**：`/cg status` / `/cg policy show` / `/cg set` / `/cg profile` / `/cg header` / `/cg compact`。`/cg compact now`、`/cg cost` 仍未实现——当前对未知参数只返回 usage，不假装执行。
 
 ## 配置（bundle patch）
 
