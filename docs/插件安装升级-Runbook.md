@@ -24,10 +24,12 @@
 
 ### 0.1 1.0 安装契约（D9=A / logFile / project / profile）
 
-- **根来源 D9=A**：发布包默认 `projectRoot: ""`（不预填本机路径）。插件在**首个带 cwd 的会话事件**上按
-  `session.header.cwd` 上溯最近的含 `.git` 祖先，`realpath` + 盘符归一后**原子持久化**到
-  `<pc.home>/context-governance/root-state-<profile>.json`（取不到绝对 `home` 时落 `<pc.dir>/context-governance/root-state.json`）。
-  **重启沿用、不重新推断**；推断失败 = 该会话 `no-project-root` skip，不换根、不落盘。
+- **根来源（1.0 多根）**：发布包默认 `projectRoot: ""`（不预填本机路径）。`projectRoot` 为空时，每个会话按
+  `session.header.cwd` 上溯最近含 `.git` 的祖先独立成根；`projectRoot` 非空时，其下会话**强制合并**到该根
+  （`source=config`，嵌套 `.git` 不另立根），其外会话按自身 cwd 独立成根。根集合持久化为 **state v2**
+  `<pc.home>/context-governance/root-state-<profile>.json`（`roots[rootId]`）；v1 自动迁移并留 `.v1.bak`。
+  **重启沿用、不重新推断**；无法判定 = 该会话 `no-project-root` fail-closed，不猜主根、不落盘。
+  `primaryRoot` 只作 v1 迁移锚点/展示；**config 不改写持久化主根**（移除配置后回落到它）。
 - **logFile**：发布包默认 `logFile: ""`（关闭，不建文件、不报错、不写进程 cwd）。要采集安装/升级诊断时，
   在**用户 profile patch** 里配**绝对路径**；非空相对路径会被 `resolveConfig` 以 `CONFIG` 拒绝
   （避免 `path.resolve` 落到应用安装目录）。
@@ -76,19 +78,15 @@
 **安装成功后应变为**：dependencies **N+1**、bundles **B+1**、redirect **不变**、`logs/governance.log` 出现
 `capability@apply`/`apply` 行（若启用诊断）。
 
-### 2.1 隔离安装演练结论（2026-10-26，`cg-install-test`）
+### 2.1 隔离安装演练结论（P4，2026-10-26）
 
-- 预检：空 profile 独立进程/端口/profile 目录；desktop 三快照（package/patch hash、junction、node_modules 数、bundles）完全一致。
-- 安装：deps 0→1、bundles 2→3、junction 解析正常；`apply version=1.0.0`；D9=A 首次推断出
-  `<repo>`，状态文件落 `<home>/context-governance/root-state-cg-install-test.json`；
-  `/cg status` 显示 `project-root: … (source=inferred, inferred-fresh)`、`memory: project=DSH插件开发`、
-  `memory root=…\.tmp\cg-install-ws\memory\governance`。
-- 卸载：profile 回装前（deps 1→0、bundles 3→2、junction 删除）；`--dump-config` 无插件；`/cg` 命令不存在；
-  源目录/隔离记忆保留；**用户级状态文件不删**。
-- 回滚：`v0.2.1`（tag `f585434`）worktree 安装 → `apply version=0.2.1`、`/cg` 命令正常；收尾回 clean。
-- 收尾：隔离 profile 删除、18769/18770 无监听、worktree 删除；desktop 最终快照与预检前 hash 一致。
-- **未验证**：真实 `/compact` 四件套（未触发，不声称）；外部会话 skip 引用 2b 已签真机证据，未重复采样。
-- 证据：`analysis/req-20261025-12/1.0-10条-复验/08-install/`（README、状态文件、status 原文、审计/日志、包面扫描）。
+- fresh `p4-fresh`：deps 0→1、bundles 2→3、junction 正常；`apply version=1.0.0`；`/cg status` 显示 `project-root=…\ws-fresh (source=inferred)`、`roots: 1`；卸载回 deps 0 / bundles 2 / junction 无。
+- migrate `p4-migrate`：v1 seed → v2（`migratedFrom=1`、`primaryRoot=ws-a`、`.v1.bak` 字节一致）；重启不重推；A/B 两真实根，`roots: 2 (active=2)`；卸载后 A/B artifacts 14→14、项目文件 4 files/106 bytes 不变。
+- configRoot `p4-configroot`：outer/outside 两根、nested 不立根；只读根真实 `/compact` 后 `protection=unavailable` + `b1-host-native-unprotected`；卸载 6→6 artifacts、3 files/108 bytes 不变。
+- 兼容回滚：`v0.2.1`（tag `f585434`）单根 ws-a 启动，只读 v1；**不是完整/多根回滚**。
+- 收尾：三个 profile 删除、18769/18770/18771 无监听、无 `p4-*` 进程、worktree 移除；desktop 配置字段不变（进程 ID 有宿主子进程抖动，未改配置）。
+- **未验/不声称**：orphaned 无真机样本（引用 B2d）；EBUSY 三连前有两次瞬时失败；`/compact` 有 `compaction-loss`，不写“保护全过”；configRoot `primaryRoot=null`（计划原写 outer 与 P1 冲突）。
+- 证据：`analysis/req-20261025-12/P4-drill-20261026-200123/`；报告 `docs/发布演练-安装卸载回滚.md`。
 
 ---
 
@@ -227,13 +225,14 @@ Get-Content '<repo>\logs\governance.log' -Tail 3
 - `audit=…`：`audit.jsonl` 在 apply 时即创建，首行是 `{"event":"apply",…}`。
 - 没有这两行：按 §7 排查，不要反复重启。
 
-**1.0（D9=A）装后必须能看出根/记忆/来源**：
+**1.0（多根）装后必须能看出根/记忆/来源**：
 - 首个带 cwd 的会话事件后，`/cg status` 应出现
-  `project-root: <repo> (source=inferred, inferred-fresh)`（重启后为 `source=persisted`）、
+  `project-root: <root> (source=inferred|persisted|config)`、
   `persistence-identity: source=profileContext name=<profile> … path=<home>/context-governance/root-state-<profile>.json`、
-  `memory: project=<推断根 basename> root=<repo>/<memoryRoot>`；
-- 状态文件 `root-state-<profile>.json` 内容为 `{version:1, root, source:"inferred", inferredAt, inferredFromCwd, instance:{profile}}`；
-- **重启不得出现**新的 `inferred-fresh`/`project-root-changed`，状态文件 hash/mtime 不变（沿用不重推）；
+  `memory: project=<root basename> root=<root>/<memoryRoot>`；
+- 状态文件 `root-state-<profile>.json` 为 **v2**：`{version:2, roots:{rootId:{…}}, primaryRootId, configRoot}`；v1 迁移后留 `.v1.bak`；
+- **重启不得出现**新的 `inferred-fresh`/`project-root-changed`，v2 状态 hash/mtime 不变（沿用不重推）；
+- 多根时应看到 `roots: N`，每根独立 `memory`/`audit`；`configRoot` 下嵌套 `.git` 不新增根；
 - 根未知时 `/cg status` 显示 `project-root: unknown (no-project-root)`，记忆工具/header/提前压不挂载（fail-closed）。
 
 3. 工具面（可选人工确认）：新开一个会话，让模型调用 `mem_query`/`mem_write` 或查看工具列表；能调用即注册成功。
@@ -387,8 +386,9 @@ DSH 启动失败诊断：CLI 路径会写 `%USERPROFILE%\.dsh\logs\startup-*.log
 - [ ] 装后 `check-env.ps1` 全绿、BOM 扫描无输出
 - [ ] 重启后 `logs\governance.log` 有 `capability@apply` 与 `apply version=<package.json 版本>` 两行
 - [ ] apply 行含 `perception=event`、`event-api=on`、`audit=…audit.jsonl`；`audit.jsonl` 首行为 `event=apply`
-- [ ] 首个项目会话后 `/cg status` 显示 `project-root`（`source=inferred|persisted`）、`persistence-identity`、`memory: project=<basename> root=…`
-- [ ] 状态文件 `root-state-<profile>.json` 落在该 profile 身份路径；重启后 hash/mtime 不变、无新 `inferred-fresh`
+- [ ] 首个项目会话后 `/cg status` 显示 `project-root`（`source=inferred|persisted|config`）、`persistence-identity`、`memory: project=<basename> root=…`；多根时 `roots: N`
+- [ ] 状态文件 `root-state-<profile>.json` 为 v2（`roots`/`primaryRootId`/`configRoot`）；v1 迁移留 `.v1.bak`；重启后 hash/mtime 不变、无新 `inferred-fresh`
+- [ ] `configRoot` 下嵌套 `.git` 不新增根；只读根 `/compact` 后为 `protection=unavailable`（不是 `ok`）
 - [ ] `/cg profile status` 可用；`/cg set profile=...` 被按未知键拒绝（1.0 新入口）
 - [ ] 包内 `diagnostics.logFile` 为空（默认关闭）；如需诊断在 profile patch 配**绝对路径**
 - [ ] 任意会话能看到 `mem_write` / `mem_query`

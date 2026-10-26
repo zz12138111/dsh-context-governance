@@ -1,94 +1,56 @@
 # DSH 插件开发 · 当前状态
 
-> 只放"现在还活着"的：在做什么、卡在哪、待谁决策。过期项直接删。
-> 更新：2026-10-26 15:1x（**P3 代码/测试面已落，待审核复核**：RootGuardPool/四件套/header/early 按根；全量 **484/484 ×3**；`1.0.0` 未发布、未 push；**未闭环**）
+> 只放“现在还活着”的：在做什么、卡在哪、待谁决策。过期项直接删。
+> 更新：2026-10-26 20:30（**P4 隔离演练已执行；门禁 E 未签收**；全量 **486/486 ×3**；`1.0.0` 未发布、未 push、**未闭环**）
 
-## P3（B 方案）· 当前口径
+## 当前（B 方案 · P4）
 
-- **代码**：`61fbfa3`（RootGuardPool）、`70657cf`（四件套/header/early 接线）、`4bec6ff`+`8f69114`（专项测试）、`97a4214`（实现说明）；详见 `docs/P3-实现说明.md`。
-- **订阅口径（验收用）**：生产有两份 `session/event`，职责不同且不并存——`firstInferenceRootWatcher` 仅 no-root 首推期间（只推断根/写 root-state，不建 guard/不写记忆），推断成功后立即退订；`RootGuardPool` 仅根已知路径（常规 guard 路由）；旧 `early-wiring` 订阅为 0。root 已知 apply 时为 1（pool），root 未知 apply 时为 1（watcher），推断完成后先 0 再 1（pool）。
-- **门禁**：`startWaitMs` timer unref + dispose/closeAll 清理；B2c/B2d（+B1/B2e/B2f）；orphan 只归档不 discard（TTL/GC 留 P4）。
-- **未闭环**：P4 安装/迁移/发布口径、真机验收未做；不宣称功能闭环。
+- **任务**：`dsh-context-governance` 改为全局上下文治理层（B 方案：纳管所有可判定根），P1→P4 分层交付。
+- **P1/P2/P3**：已签。P3 实现 `573b7d9`、只读披露补签 `28dd40f`；全量 486/486。
+- **P4**：方案 `57bc4e3`；隔离演练 `analysis/req-20261025-12/P4-drill-20261026-200123/`；报告 `docs/发布演练-安装卸载回滚.md`。
+- **未做/不可做**：未 push、未打 tag、未转公开仓；桌面安装/重启由用户另行批准。
 
-## 已定（2026-10-26）
+### P4 结果（数字）
 
-- **P3-1 = 并入 0.2.2 接线批，现在不解冻**（2026-10-26 · 00 定）。0.2.2 显式前置验收项：fixture = `manual compaction requires an idle agent with no waking queued work`；判据 = 该文案命中 `isBusyCompactionError` → 映射 `busy` 而非 `failed`。
-- **T3 三会话归档**（`cs_zgPDSqjsDI` / `cs_wmu59tAofx` / `cs_luHlCpRZGO`，2026-10-26 · 开发执行）：已归档，工作区列表只剩 3 个（需求 / 开发 / 审核打包）。
-- **`ok=false` 口径 = 两个正交字段**（2026-10-26 · 00 定）：`compaction=committed|skipped|failed` + `protection=ok|failed` + `failures[]` + `reinjected`；`stats` 拆 `compactionFailures` / `protectionFailures`；status 改 `protection=` 或加 legend；early 返回值改名 `accepted`。原则：`protection=failed` 不得触发重试/关开关，只有 `compaction=failed` 或 `reinjected=false` 才升级。验收：① P3-1 fixture 用 G2-B 真实文案；② 单测覆盖「保护失败 + 回注成功 → 仍算可用、不重试」；③ 文案不得把 protection 失败渲染成「压缩失败」。
-
-## P1（B 纳管）· v3 冻结口径
-
-- **定位**：P1 =「可判定根登记 + 主根纳管骨架」，**不是全纳管**；其他根已登记但零治理/零审计（root audit 一条 `root-unmanaged` 汇总，无 sessionId/正文）；P2/P3 才补每根记忆与保护。
-- **已交付**：A `d3d1152`（rootId/state v2/registry）、B `e4d1c32`（审计双通道）、C `beae562`（去 foreign、只主根、containment）、D `88d48cf`（mem_* 拒绝、`/cg roots`、状态根视图）、E 文档（`docs/P1-交付说明.md`、README、本文件、`DEC-PLUGIN-20261026-41`）。
-- **v3 关键口径**：configRoot 强制合并（嵌套 `.git` 不另立根）；`root-unmanaged` 无 sessionId；授权两处白名单 + 实际写入 realpath containment；`logFile` 仅用户级/根 memory，旧 `<root>/logs/` CONFIG 拒载（本机已迁移到 `C:/Users/19091/.dsh/context-governance/logs/governance.log`，旧文件保留）；多进程同根不合并（第二进程只读/锁提示）。
-- **已知限制（P4 必须写）**：显式配置根内多根隔离不完整；P1 其他根零治理；`logFile` 严格白名单是破坏性变更（旧路径已迁移）；E4 两个默认值变更（memoryRoot、diagnostics.logFile）。
-- **验证**：`node --test "test/*.test.mjs"` → **461/461**；`npm pack --dry-run` → 34 文件/0 test/0 本机路径。
-
-## 在办
-
-| 会话 | 当前任务 | 状态 |
+| Phase | 结果 | 关键数字 |
 |---|---|---|
-| 需求 | v3 冻结口径已落 `8eed1f8`；P1 分层条款/迁移/破坏性变更跟进 | 待与 P1 文档对账 |
-| 开发 | **P1 代码 A–D + E 文档已落**；461/461；`1.0.0` 未发布/未 push；`logFile` 已按 v3 严格校验并与 desktop 迁移路径一致 | 等审核验收 |
-| 审核打包 | P1 评审/验收签字（含 v3 logFile/containment/root-unmanaged 口径） | 待签字 |
+| 预检/包面 | 过 | 36 文件 / 0 test / 0 本机路径 |
+| A fresh | 过 | deps 0→1→0；bundles 2→3→2；项目文件 2 files/53 bytes |
+| B 迁移 | 过 | v1→v2；`.v1.bak` 字节一致；重启不重推 |
+| B 多根 | 过 | A/B 两真实根；`roots: 2 (active=2)`；A 仍 primary |
+| B `/compact` | 真触发 | A/B 各 protection/materialized/reinjection/cost；同时有 `compaction-loss` |
+| B 兼容回滚 | 过（仅兼容） | v0.2.1 单根；artifacts 14→14；4 files/106 bytes |
+| B 卸载 | 过 | 14→14；4 files/106 bytes |
+| C configRoot | 主体过 | outer/outside 2 根；nested 不立根；`primaryRoot=null`（计划原写 outer） |
+| C 只读 | 过 | 精确 `protection=unavailable` + `b1-host-native-unprotected` |
+| C 卸载 | 过 | artifacts 6→6；3 files/108 bytes |
+| 观察项 | 留证 | orphan 无真机样本（B2d）；EBUSY 3 次 486；只读精确披露 |
+| teardown | 过 | 三端口无监听、无 p4-* 进程、worktree/profile 已删 |
 
-## 进度
+### P4 门禁 E：未签收
 
-- **T1（E1/E2）**：通过。事件级感知、摘要可读、无拦截型前钩子。
-- **T2（记忆）**：完成。`packages/dsh-context-governance/`；`mem_write`/`mem_query`。
-- **T3（压缩适配与保护）**：离线完成。适配器/自检/保护校验/降级/观测循环；文档 `docs/T3-压缩适配与保护.md`；审计 `analysis/t3/`。
-- **T4（压缩前固化与回注）**：离线完成（S4=B）。5 类保护项同步 journal、end 后 microtask 回注、失败降级、audit；文档 `docs/T4-压缩前固化与回注.md`。
-- **T5（状态命令与审计）**：离线完成。`/cg status`（后端/能力/记忆/上次压缩与回注/p50p95/审计）；审计字段白名单 + 脱敏；文档 `docs/T5-状态命令与审计.md`。
-- **T6（失败与降级）**：离线完成（v0.1.4）。审计 8 MiB 轮转（可配）、五类只读判据 + 恢复探测、事件流中断/卸载留痕、所有失败只 log/audit 不抛宿主；文档 `docs/T6-失败与降级.md`。
-- **T7（验收场景）**：离线完成（v0.1.5）。S1–S6 全部用例 + S4 A/M/I/F/AUD/R；真实**自动+手动**压缩双样本脱敏回放；只读人工脚本 `docs/T7-只读降级人工验证.md`；覆盖表 `docs/T7-验收场景-S1-S6.md`。
-- **T8（回注自愈 + 成本归属）**：离线完成。ROB-01/06 改为“每次失败留审计、连续 N 次才降级、降级仍可回注、下一周期自愈”；新增 `compaction-cost` 审计（REQUIREMENTS A 字段，token 实测/估算分列，不记金额）；三轮复核后 fixture 改结构白名单、commands 晚挂载重试、shadowedRange 兜底；四轮复核接入 `reinjection.maxFailures` 配置、成本 `backend` 维度与口径修正；文档 `docs/T8-回注自愈与成本归属.md`、`docs/T8-复核三轮修复.md`。
-- **M1.2（探测修正与成本实测，v0.1.11）**：离线完成。能力探测改 `capability@apply` + 首个会话事件后 `capability@ready`（诊断 + audit，只记类型）；`tokenMeter` 不走硬 inject，改为可选注入 + 按需获取（成功才缓存）；`assistant/message.usage` 兜底，新增 `tokensBefore/AfterSource`（tokenMeter/usage/none）与可选 parts，`auditVersion=cost-v1.1`（只增字段）；`/cg status` 显示 `last-cost`；`ctx.compaction` 真机更正为“**本部署插件 scope 不可见**”（`@apply`/`@ready` 均 `get.compaction=absent`），插件不依赖它。记录 `analysis/t1/M1.2-探测修正与成本实测.md`。
-- **M1.1 T1（门禁）**：**通过**。F1 能（`tools/post-execute` 在 `tool/result` append 前替换；宿主 pruner 的 replace+shadow 也被下一请求消费）；F2 能（tokenGuard 默认只 `pwsh`；跳过 `[token-guard]`/`[cg-fold]`/spill notice/pruner 痕迹）；B1 已采（87 回合/1,819 步/2,218 调用；开发会话名单内候选 0，宿主 pruner 已折 8 条 `read`）；B2 差异表已出——T2 应「复用宿主协议 + 只做增量」。记录 `analysis/t1/T1-门禁记录.md`。
-- **M1.1 收口（2026-10-25，T2=A）**：B2 显示宿主 pruner 在压缩点已覆盖全部 >8k；49 会话统计白名单可折上限仅 15.3%，红线 `pwsh`+`read` 占 71.0% → **不做早折、不做 spill、不做批量测量**；M1.1 改为只做 **T2′ prune 观测与成本接入**（`compaction-cost` 增 `tokensPruned`/`pruneCount`/`pruneTools`，`auditVersion=cost-v1.2`）；**0.1.12 = T2′ + 0.1.11 复核 6 条 P3**。范围变更已改单：`REQUIREMENTS.md` REQ-20261025-02、`TASKS/REQ-20261025-02-M1.1-拆解.md`；账本 `DEC-20261025-37`/`ART-20261025-19`、`DEC-20261025-38`/`ART-20261025-20`。
-- **M1.1 T2′（v0.1.12）**：离线完成，只读观测宿主 `compaction/prune`：`prune-observed`（工具名按替换 `callId` 反查 `tool/call`，未知记 `unknown`；同 `shadowedRange` 去重；`cycle=current/outside`）；`compaction-cost` 增 `tokensPruned`(measured/null)/`pruneCount`/`pruneTools`(top5)，`auditVersion=cost-v1.2`；`/cg status [last-cost]` 显示 `pruned=<tokens> tools=<top5>`。生产代码零折叠/spill，T1 实验只在 `analysis/t1/`。记录 `analysis/t2prime/T2prime-交付记录.md`。
-- **0.1.12 P3 收口（6 条）**：P3-1 `ctx.inject` 返回 Fiber → `stop()` 调 `fiber.dispose()`（修实现）；P3-2 T5 文档同步 `last-cost`；P3-3 T8 文档 `cost-v1.2`；P3-4/5 文档写明成本行延迟；P3-6 读方按 `cost-v1` 前缀匹配 + 测试。另 3 条（tokenGuard 源码不可复核、baseline 时间闸、其余小项）不改。
-- **测试**：全量 **267/267 通过**（`node --test "test/*.test.mjs"`；0.2.1 收口 267；0.2.0 收口 234；0.1.18 218）。
-- **真机**：已安装（junction 指向源码）。**v0.2.1 已加载并验证**：窗口层回填生效，`/cg status` 出 `window: current=1M (session 58a2e845) observed=2026-10-25T03:30:05.241Z source=projection(backfilled)`、`native-current=0.6934(projection(backfilled))`（经 13,543 帧逐字核对）；`origin=f585434`（ahead 0），tag `v0.2.1` 本地+远端一致，素材在 `D:\DS-PROJECT\_backup\dsh-plugins-v0.2.1\`；**Release 未发**。
-- **T6/T7/T8**：均离线完成；真机验收项列在“下一步”。
-- **M1.3 原生后端验证（REQ-20261025-06，2026-10-25）**：隔离 profile `native-test`（web 模板、无 context-zip/redirect，端口 18765，已停）实跑——**D1-1 不通过**（原生下 `adapter=none`，根因 preset `isolate`；功能不受影响）；**D1-2/D1-4 通过**；**D1-3 手动链路通过、自动压力未触发**（≈678K tokens，记 backlog 等自然触发）；D1-5 隔离证据齐全。**0.1.15 已修**（`inferBackendFromStyles`：free-form→`host-basic (inferred)`、five-section→`context-zip (inferred)`、混合→`mixed (unverified)`；只进 `/cg status`/`adapter-inferred` 审计/`compaction-cost.backend`，新增 `backendInferred`，`auditVersion=cost-v1.3`；功能路径不读推断）；隔离实例复验 `/cg status` 显示 `adapter=none inferred=host-basic (inferred)`，全量 **202/202**。报告 `analysis/req-20261025-06/`；未安装/未重启桌面、未 push。
-- **M2 首批（REQ-20261025-09）**：**G1 通过**（agent 级 `agentPresets.serviceFor(agent,'compaction')=object`；`agentPresets` 约 2s 晚挂载；根级 `ctx.get('compaction')` absent 不阻塞；G2/G3 部分待 0.2.1）。**0.2.0 已交付**（`8275fb4`→`c6563d1`→`9a380ea`→`87134cd`→`e6d859b`）：四层合成、`/cg policy show`、`/cg set`、`/cg status` 的 policy/policy-invalid/policy-session/pressure 行、压力四段（只展示）、项目文件 A+C 加固；审核六项全修。**0.2.0 复核已出**（`docs/review-context-governance-0.2.0.md`：0 阻断/0 P2/9 P3），**P3 九条已闭环**（`analysis/req-20261025-09/P3-闭环记录.md`；全量 **240/240**）。**G4 已定并落档**（`e12d08a`：`DEC-PLUGIN-20261025-40`，窗口来源 = 宿主 `contextPressure.contextWindow`，真机 1,048,576 → native≈0.6934；配置仅回退；`DEC-20261025-66` 细化 `#lastSession`/中途重算/删除置 unknown/conservative=min/双显）。未安装/未重启/未 push。报告 `0.2.0-交付报告.md`、样例 `samples-0.2.0.txt`、G4 `G4-窗口来源结论.md`。
-- **0.2.1 窗口/校验层（REQ-20261025-09，`DEC-20261025-66/67/68`）**：**已交付 + 复核 P2 修复**（`package.json` 0.2.1；全量 **258/258**）。`windowState={current(#lastSession), conservative(min 已观察), observed[]}`；`request/context` 无 `contextWindow` → 删除置 unknown 不沿用；`resolve()` 每次现算 native（`nativeFromWindow`），与压力分母共用同一 W；`/cg set` 与运行时校验用 conservative，`at>native` → 拒绝该层 + `policy-invalid` 审计；**退化口径 A**：`W≤O+65536` → `native=unknown (degenerate)`（禁造常数），设置 at 的层一律拒绝（`native-uncomputable`）且**落审计**（P2-1 已修：filter 含 `native-uncomputable`），继承值 `unverified-degenerate`，W 恢复自动恢复；`/cg status` 出 `window:` 双显行（session 短 id/来源/时间/`校验按 conservative`/退化标记）。**数字**：默认 native **0.6934**（观测 1,048,576），0.6785 仅 config-fallback（P2-2 已修：T5/README/样例/报告）。**本版不触发任何压缩**：`src/` 无压缩调用（全量 pattern 10 行均为只读探测/注释），单测「验收#6」锁 0 次调用。报告 `analysis/req-20261025-09/0.2.1-交付报告.md`、证据 `zero-compaction-grep.txt`。未安装/未重启/未 push。
-- **0.2.2 四项（REQ-20261025-09，2026-10-26）**：P3-1 busy 文案（`25268bc`）、`attempt` 返回 `accepted` + `shouldEscalateEarly`（`2fd4f6f`）、`compaction`/`protection`/`reinjected` 三字段与 stats 拆分 + `/cg status` 改 `compaction=/protection=`（`aacea07`）、保护失败写 `diagnostics.logFile`（`3179ddf`）、`header-injected` 增记 `injected`（=messagesAfter−messagesBefore）/`messagesBefore`/`messagesAfter`（`629a3a0` 起；已按审核定论去掉硬编码、裸 length 与 header hash）。全量 **300/300**；`armed=false`；接线（`turn/end` 门禁 + `early-*` 审计）未动。
-- **0.1.18（发布前收口）**：`/cg status` 改用 `backend-kind=`（实测 none 显示 none，与成本行同一 `resolveBackendFields`；推断时附 `backend-label=`）；控制字符闸改用 `git ls-files`（tracked **163 files / 0 violations**）；文档补 AGENTS.md 第 4 处（0x0C 吃 `feat/` 的 f）；全量测试见下；未安装/未重启/未 push。
-- **0.1.17（REQ-20261025-07 P3 收口）**：`backend`/`backendKind` 枚举补 `none`（实测 none 不折叠；unknown 才 unknown；mixed 仍 unknown+label），`auditVersion` 仍 `cost-v1.4`；控制字符闸扩到仓库根（排除 `.tmp`/`node_modules`/`.git`，`AGENTS.md` 0x0C 已清，扫描 **174 files / 0 violations**）；全量 **205/205**；未安装/未重启/未 push。
-- **0.1.16（REQ-20261025-07）**：README 控制字符（0x08/0x07）已清 + 防复发测试（包内文本禁 C0/DEL，自证注入→fail）；`compaction-cost` 拆 `backend`(枚举)/`backendKind`/`backendLabel`/`backendInferred`，`auditVersion=cost-v1.4`；`/cg status` 用 `backend-label=`；全量 **204/204**；未安装/未重启/未 push。
-- **T8/T9**：T8-1 修 ROB-01/06；T8-2 实现 `compaction-cost`（A 口径）；**T9 已被 T8-2 吸收，不再排期**。
+1. **desktop 进程 ID 不一致**：package/patch/deps/bundles/junction 全一致；`14924` 被宿主子进程替换（后为 `15784`），进程数仍 7。未重启 desktop、未改配置；不写成“全部字段一致”。
+2. **configRoot `primaryRoot`**：实测 `null`，计划 §5.2 原写 outer；P1 设计/测试明确 config 不得改写持久化主根。**计划判据与 P1 冻结口径冲突**，需用户/审核决定改哪一边，不能把 null 写成 outer。
+3. **migrate profile-after**：收尾补采，非卸载当时；关键字段与 before 一致，已标 `recoveredAt`。
+4. **测试抖动**：正式三连前有两次瞬时失败（P3 时序、P2 清理 ENOTEMPTY），重跑通过；未改测试，不宣称零抖动。
+5. **`/compact` 保护校验**：四件套已触发，但 `compaction-loss` 失败项（latest-user-message/rule-injection/rollback-point）存在；不写“保护全过”。
 
-## 已知风险（当前无代码风险）
+## 分层状态
 
-- T8-1 已修复 ROB-01/06：回注失败不再永久停写，改为“每次失败审计 + 连续 N 次降级一个周期 + 下一周期自愈”，`reinjection-recovered` 可审计。
-- M1.1 早折已取消；若日后重启，须先有 spill + 权限 + TTL，再谈折叠。
+- **P1**：已签（`73849f3`）；可判定根 registry、state v2、根 audit、configRoot 强制合并、containment。
+- **P2**：已签（`3e30f22` + 签收 `1d23552`）；每根 store/锁/审计、`mem_*` 按根。
+- **P3**：已签（`573b7d9`；补签 `28dd40f`）；RootGuardPool、每根保护/回注/header/early/只读披露/orphan 归档。
+- **P4**：执行完成、未签收；发布文档已改写，等审核 + 用户验收。
 
-## 已知偏差（已接受）
+## 待决策 / 下一步
 
-T4 回注时点：checkpoint→end 之间不可实现，改为 end 后首个 microtask（同 tick、下一轮前）；用户已接受，`DEC-PLUGIN-20261025-09`。
+1. **门禁 E 偏差处置**：configRoot `primaryRoot` 改计划判据还是改设计；desktop 进程 ID 是否要求在停用窗口复采；migrate after 补采是否接受。
+2. 审核打包独立复跑 486/486 + 包面 36/0，复核发布文档。
+3. 用户验收；通过后才谈发布/打 tag/推送。
+4. 不把 P4 结果写成功能闭环；不宣称 orphan GC、EBUSY 零抖动、完整回滚。
 
-M1 成本“前后水位未知”原按降级接受，2026-10-25 复查为插件侧可修（tokenMeter 读取时机），已由 M1.2 修（v0.1.11，离线 183/183）。**`ctx.compaction` 已结案（2026-10-25）**：`get.compaction(strict=false)` 在 `@apply` 13:18:10Z / `@ready` 13:18:23Z **均 `undefined`** → 本部署插件 scope **未提供**该服务（有 impl 未 active 会返回 `obj`）；**根因 = agent preset 用 `cordis:group` + `isolate: { compaction: true, toolResultPruner: true }` 把服务隔离在 preset 组内**（本机可见的 `@local/dsh-computer-use/presets/cordis.patch.yml` 三套 custom preset 均带；`standard` 的 `@deepseek-ai/dsh-web-app/presets/standard.patch.yml` 同口径，见 DEC-32），不是挂载时机；插件不依赖它（走 `session/event`），**「回注时点修正」在该部署下不可行**，只能走事件时序推断（现方案），不再是待查项。**定案（`DEC-20261025-48`）：不改隔离**——宿主压缩/阈值/审计时序不变；`cordis provide` 同 scope 重复注册会抛错（`@local/dsh-computer-use` 有两处 compaction 组）；mode 会由 `event-level` 变 `full` 且保护失败进 `degraded-protection`；收益≈0。M2 不依赖 provider。能力探测只看 `get.X` 列；裸属性 `throws` 不代表服务异常（反例：`tokenMeter=throws` 同时 `get.tokenMeter=obj`）。
+## 历史（归档）
 
-## 等待用户/外部
-
-- **真插件安装**：已完成结构安装（junction 指向源码，改完重启即生效）；开发不重启。
-- M1.1：T2′ 已离线完成（v0.1.12）；**审核复核已出（0 阻断/0 P2/6 P3）**；真机已于 20:34:54 加载、20:46 首次真实手动压缩验证 `cost-v1.2`。
-- 0.1.13（REQ-20261025-04）：开发已交付（189/189，报告 `analysis/req-20261025-04/`）；0.1.14 已覆盖其 batch 判据（不改 `get.compaction` 归因）。
-- 0.1.14（REQ-20261025-05）：开发已交付（196/196，报告 `analysis/req-20261025-05/`，含真实快照 A/B 三列对照）；**已于 21:18 重启加载**，待审核复核。
-- **M1.3 原生后端验证（REQ-20261025-06）**：报告 `analysis/req-20261025-06/`；**D1-1 不通过、D1-2/D1-4 通过、D1-3 自动分支未触发**；隔离实例 `native-test` 已停（profile 保留可复验）。**0.1.15 已交付**（事件形态推断 inferred + `cost-v1.3`，202/202；隔离实例复验通过），待审核复核。
-- M1.2：离线完成（0.1.11 冻结）；已并入 0.1.12（已重启加载）。
-- **M1 收尾（2026-10-25）**：架构升至 **v1.1**（事实回写：preset 阈值≈67.85%/patch 无效、`tokenMeter`=chars/4 估算、`ctx.compaction` 本 scope 不可得、工具输出折叠取消）；`REQ-20261025-01` 改结项口径（双后端=事件级、成本 source 写明、rc.3、结项说明+四条边界）；v1.0 标历史。
-- **M2 需求草案 v0.6**：`docs/M2-需求草案-v0.6.md`（`research` 默认 `compact.early=false`；`estimateSafety` 改注释式警告；`/cg cost` 假设行置顶；新增“可关闭”验收）；**使用说明草案 v0.3** `docs/M2-使用说明-草案-v0.3.md`（新增“压完还是觉得贵”FAQ、长 turn 表述、research 说明）；v0.1–v0.5 保留作对照；**待评审复核**。
-- 暂存：GitHub 发布用的仓库地址与账号（发布前需要）。
-
-## 阻塞
-
-- 无（0.2.2 四项待复核；第 5 步接线未动；0.1.14 已加载）
-
-## 下一步
-
-1. **0.2.2 四项已落**（`25268bc`/`2fd4f6f`/`aacea07`/`3179ddf`/`629a3a0`；全量 297/297；`armed=false`），第 5 步接线（`turn/end` 门禁 + `early-*` 审计）待复核结论，不得先行。
-2. **M3（REQ-20261025-10）**：T2 header 已上机（默认开）；T3 评测（REQ-11）与发布就绪（REQ-12）按各自单推进；动作校验不做（`DEC-20261025-76`）。
-3. **0.2.2 收尾**：四项复核通过后 → 接线（第 5 步）→ 真机窗口验证 `early-forced`；`armed` 打开须单独批准。
-4. **0.2.3（成本账本，`cost-v1.4` 基线）**：暂缓至 1.1（`DEC-20261025-79`）。
+- P3 细节：`docs/P3-实现说明.md`（含 P4 结果 §7）。
+- P2/P1 细节：`docs/P2-交付说明.md`、`docs/P1-交付说明.md`。
+- 0.2.x 版本说明：`docs/0.2.4-发布说明草稿.md`（已标历史，单根语义不得用于 1.0）。

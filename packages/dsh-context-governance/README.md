@@ -3,7 +3,7 @@
 上下文治理插件（DSH / DeepSeek Harness）。M1 目标：**压缩前后不断线**——任务态记忆落项目文件，压缩后只回注 ID/状态/指针，详情按需取。
 
 > 版本：**以 `package.json` 为唯一来源**（本文与代码都不再重复版本号；启动行/审计里的 version 由运行时读取）。
-> 当前进度：**T2–T8 + M1.2 + T2′ 离线完成**——记忆文件与契约、`mem_write`/`mem_query`、压缩适配与保护校验、压缩前固化与回注、`/cg status` 与审计正式化、故障注入/轮转/只读降级、S1–S6 验收场景 + 真实自动/手动压缩双样本回放 + 回注自愈 + 成本归属审计（T8）；M1.2 增加 `capability@apply/@ready`、`tokenMeter` 延迟获取、usage 兜底与 `cost-v1.1` 来源字段；T2′ 增加宿主 `compaction/prune` 观测与 `cost-v1.2` 成本视图（不折叠、不落盘）；**M2 0.2.0 策略层**——四层配置合成（内置/profile/插件/项目 `.cg-policy.json`/会话）、`/cg policy show`、`/cg set` 会话覆盖、`/cg status` 的 `policy`/`policy-invalid`/`pressure` 行、项目文件按不可信输入加固（A+C 口径）；**M2 0.2.1 窗口/校验层**——宿主 `contextPressure.contextWindow` 观察、dynamic native 同源、conservative 校验、`/cg status` 的 `window:` 双显，**本版不触发任何压缩**；**全部测试通过（数量见 `node --test` 输出）**。
+> 当前进度：**B 方案 1.0 收口（P1–P4 代码/测试面已交付，发布待验收）**——可判定根登记与 state v2、每根记忆/审计/写者锁、`RootGuardPool` 每根保护/回注/header/提前压、`configRoot` 强制合并、v1→v2 迁移、只读根披露、隔离安装/卸载/兼容回滚。**全量 486/486 ×3**；**未发布、未 push**；P4 门禁 E 未签收（详见 `../../docs/发布演练-安装卸载回滚.md`）。
 > 真机：已安装（junction 指向源码目录）；最近一次真机验证记录见 `memory/ARTIFACTS.md`，待验收项见 `STATUS.md`（本文不写具体版本/数字）。**M3 T2（0.3.1）起新会话 header 默认开启**（`/cg header off` 或配置 `memoryHeader.enabled=false` 可关）。
 > 安装方式：`docs/插件安装升级-Runbook.md`（`file:` 声明 + junction + bundle；不用 pnpm）。本机已按该方式安装（junction 指向源码），其它机器按 Runbook 操作。
 > **宿主兼容边界**：`engines.dsh = ">=0.2.1-rc.2 <0.2.2-0"`；实测只到 **0.2.1-rc.3**（在范围内）。**宿主升级到 0.2.2 会被拒载**——升级 DSH 前先看兼容矩阵/发布说明。
@@ -27,7 +27,7 @@
 - 记忆是**文件**：人可读、可 git、可人工修；无数据库、无向量检索、无第三方依赖。
 - 回注遵守一条硬规则：**详情永不回注**；摘要不可读时只放 ID+状态。
 - 压缩沿用宿主或 context-zip，不写第二个压缩引擎，也**不替换** `ctx.compaction`。
-- **P1（当前开发中）**：只做「可判定根登记 + 主根纳管骨架」——可判定根按会话 cwd 登记，但只有主根跑记忆/保护/回注/审计；其他根登记后 `P2` 起才纳管。**P1 不宣称“全纳管”**；其余根在 P1 零治理/零审计（仅 root audit 一条 `root-unmanaged` 汇总）。兼容旧 `onlyProject` 配置但已弃用（不再参与判定）。
+- **1.0 多根治理**：可判定根按会话 cwd 登记并各自纳管；每根独立 `MemoryStore`、`memory/governance/audit.jsonl`、writer lock、guard/header/提前压；`configRoot` 非空时其下会话强制归该根，嵌套 `.git` 不另立根。**已知限制**：显式配置根内多根隔离不完整（v3 冻结口径，不是 bug）。
 
 ### 隐私边界（准确口径）
 
@@ -148,18 +148,20 @@ config:
 
 配置非法 → 插件不加载（DSH 继续默认行为）。`compression.enabled=false` 时只注册记忆工具，不订阅压缩事件。
 
-### P1 多根登记与主根纳管骨架（v3，当前开发中）
+### 多根治理与状态（v2，1.0）
 
-- **定位**：P1 =「可判定根登记 + 主根纳管骨架」；**不是全纳管**。P2 起每根 store/`mem_*` 路由/保护/回注/header/提前压；P1 只有主根跑完整治理，其他根已登记但零治理/零审计（root audit 仅一条 `root-unmanaged` 汇总）。
+- **定位**：每个可判定根都纳管；不是 P1 阶段的主根骨架。`/cg roots` 列出全部根，各根独立 memory/audit/guard/header/提前压。
 - **根判定**：`configRoot` 非空 → cwd 在其下即归该根、`source=config`，**嵌套 `.git` 不另立根**（**显式配置根内多根隔离不完整**，已知限制）；configRoot 外/默认空根 → 最近 `.git` 多根。
-- **状态文件 v2**：`<home>/context-governance/root-state-<profile>.json`，`roots` 以 `rootId`（路径 hash）为键；`primaryRootId` 为 P1 挂载锚点（P2 起只展示/移除）。v1 自动迁移并留 `.v1.bak`。
+- **状态文件 v2**：`<home>/context-governance/root-state-<profile>.json`，`roots` 以 `rootId`（路径 hash）为键；`primaryRootId` 只作 v1 迁移锚点/展示，**config 不改写持久化主根**；v1 自动迁移并留 `.v1.bak`。
 - **`/cg roots`**：只读列出全部已登记根（`id`/`name`/`project`/`state`/`memory`/`audit` 末行）；`/cg status` 也含同一段。
 - **写入边界**：只有两处——`<home>/context-governance/`（状态/root audit/默认诊断）与 `<root>/memory/governance/`（记忆/每根 audit）；每次实际写入前做 realpath/`..`/符号链接/盘符归一 containment，白名单外 fail-closed。
-- **`logFile`**：只允许用户级或该根 `memory/governance/`；旧 `<root>/logs/` 路径会 CONFIG 拒绝、插件不加载该 profile（本机已迁移到用户级 `<home>/context-governance/logs/governance.log`，旧文件保留）。多根下只有用户级路径安全；根内路径只能作 per-root sink。
-- **`mem_*`**：只读写本会话根；`unmanaged/no-root/fail-closed/子会话写` 均拒绝并审计 `memory-tool-rejected`；跨根查询 1.0 不做。
+- **`logFile`**：只允许用户级或该根 `memory/governance/`；旧 `<root>/logs/` 路径会 CONFIG 拒绝、插件不加载该 profile。
+- **`mem_*`**：只读写本会话根；`no-root/fail-closed/子会话写` 均拒绝并审计 `memory-tool-rejected`；1.0 不做跨根查询。
 - 身份不可得 → fail-closed：不猜路径、不落盘、根保持 unknown。
 - 根未知时 `/cg status` 显示 `project-root: unknown (no-project-root)`；根变化可见（`source=config|persisted|inferred`、`inferred-fresh` / `changed-from=`），根生命周期事件写用户级 root audit。
 - 状态文件损坏/版本不符按未持久化处理（重推 + `inferred-fresh`），旧记忆不迁移、不删除；多进程同根不合并（第二进程只读/锁提示）。
+- **只读根**：真实压缩后精确 `protection=unavailable` + root audit `b1-host-native-unprotected`；不得显示 `protection=ok`。
+- **回滚**：v0.2.1 只作兼容回滚（单根语义、v1 可读）；不迁移 B、不读 v2 多根。
 
 ## 存储布局
 
@@ -181,7 +183,15 @@ cd packages/dsh-context-governance
 node --test "test/*.test.mjs"
 ```
 
-运行 `node --test "test/*.test.mjs"`；**全部通过**（数量以输出为准）。覆盖字段/状态/并发/外部修改/锁/损坏/敏感信息/工具/宿主 schema 子集/适配器/保护/运行时/项目归属/隐私开关/固化/回注/审计/轮转/只读/能力探测/S1–S6/真实自动+手动序列回放/版本单一来源，以及 0.2.0 策略链（四层来源、项目层整层拒绝、路径/大小闸、压力四段、`/cg set` 覆盖与回滚、经 apply 的集成）。
+运行 `node --test "test/*.test.mjs"`；1.0 全量 **486/486**（连续 3 次）。覆盖字段/状态/并发/外部修改/锁/损坏/敏感信息/工具/宿主 schema 子集/适配器/保护/运行时/项目归属/隐私开关/固化/回注/审计/轮转/只读/能力探测/S1–S6/真实自动+手动序列回放/版本单一来源，以及多根 registry/store pool/RootGuardPool、v1→v2 迁移、configRoot 合并、只读披露。
+
+## 1.0 P4 观察项（发布口径）
+
+- **orphaned journal**：只归档、不删除，**无 TTL/GC**；P4 隔离演练未在真机创建样本，引用 B2d 单测；不得写成“自动清理”。
+- **EBUSY**：三次全量 486/486 + teardown 已做；正式三连前有两次瞬时失败，未改测试；不宣称零抖动。
+- **只读根**：真实 `/compact` 后精确 `protection=unavailable` + root audit `b1-host-native-unprotected`；不得写成 `protection=ok`。
+- **兼容回滚**：v0.2.1 只验证单根启动/v1 可读，不是完整/多根回滚。
+- 详细证据：`../../docs/发布演练-安装卸载回滚.md`；`analysis/req-20261025-12/P4-drill-20261026-200123/`。
 
 ## 设计约束（与架构一致）
 
