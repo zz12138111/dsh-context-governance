@@ -23,6 +23,7 @@ import { DEFAULT_AUDIT_MAX_BYTES, MAX_AUDIT_MAX_BYTES, MIN_AUDIT_MAX_BYTES } fro
 import { appendDiagnosticLine, capabilityLine, PLUGIN_VERSION, startupLine } from './diagnostics.js';
 import { DEFAULT_MEMORY_DIR, MemoryStore, MemoryStoreError } from './memory/store.js';
 import { registerMemoryHeader } from './memory/header.js';
+import { resolveScope } from './scope.js';
 import { MEM_QUERY_NAME, MEM_WRITE_NAME, registerMemoryTools } from './tools/mem-tools.js';
 
 export const name = 'dsh-context-governance';
@@ -499,6 +500,12 @@ export async function apply(ctx, rawConfig = {}) {
     if (config.project === '') config.project = path.basename(root);
     // 策略链只在 attach 时算：profile 标签 → 插件配置 → 项目 .cg-policy.json（命令侧只读它）。
     const policyState = buildPolicyState(config);
+    // 1.0 #1：单根模型的唯一归域入口；提前压/观测/保护/header/mem_* 都读它。
+    const scopeOf = (session) => resolveScope({
+      root: rootInfo.root,
+      cwd: sessionCwd(session),
+      earlyEnabled: true,
+    });
 
     const store = await openStore(config);
     const registration = registerMemoryTools(ctx, store);
@@ -587,6 +594,8 @@ export async function apply(ctx, rawConfig = {}) {
           auditMaxBytes: config.audit.maxBytes,
           projectRoot: config.projectRoot,
           onlyProject: config.onlyProject,
+          // 1.0 #1：观测/保护/回注与早压触发共用同一归域判定。
+          resolveScope: scopeOf,
           captureTitle: config.captureTitle,
           project: config.project,
           reinjection: { maxFailures: config.reinjection.maxFailures },
@@ -612,6 +621,8 @@ export async function apply(ctx, rawConfig = {}) {
                 return false;
               }
             },
+            // 1.0 #1：外部/无根会话在取 pressure 前跳过并审计。
+            getScope: scopeOf,
             audit: guard.auditLog ?? null,
             logger: ctx.logger,
           });
@@ -699,7 +710,9 @@ export async function apply(ctx, rawConfig = {}) {
     const header = registerMemoryHeader(ctx, store, {
       enabled: config.memoryHeader.enabled,
       isEnabled: (session) => config.memoryHeader.enabled &&
-        policyState.resolve(session?.id ?? null).values['header.enabled'] !== false,
+        policyState.resolve(session?.id ?? null).values['header.enabled'] !== false &&
+        // 1.0 #1：外部会话不注入本项目记忆 header。
+        scopeOf(session).governed,
       hasRuleFile: ruleFilePresent,
       maxLines: config.memoryHeader.maxLines,
       maxChars: config.memoryHeader.maxChars,

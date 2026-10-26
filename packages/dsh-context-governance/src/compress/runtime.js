@@ -22,6 +22,7 @@ import { randomUUID } from 'node:crypto';
 
 import { AuditLog } from '../audit.js';
 import { appendDiagnosticLine } from '../diagnostics.js';
+import { SCOPE_SKIP, resolveScope } from '../scope.js';
 import { calculateLatencyStats } from '../metrics.js';
 import {
   DEFAULT_MATRIX,
@@ -164,6 +165,8 @@ export class CompressionGuard {
   #readOnlyWarnedFor = new Set();
   #projectRoot = '';
   #onlyProject = false;
+  /** 1.0 #1：会话归域判定（由 index 注入 resolveScope；缺省用根边界兜底）。 */
+  #scopeResolver = null;
   #captureTitle = true;
   #foreignSessions = new Set();
   #lastInjection = new Map();
@@ -191,6 +194,9 @@ export class CompressionGuard {
     abandonedCycles: 0,
     readOnlyRecoveries: 0,
     ignoredForeignEvents: 0,
+    foreignStarts: 0,
+    foreignSummaries: 0,
+    foreignCosts: 0,
     unattributedEvents: 0,
     reinjectionShadowed: 0,
     /** 0.2.1 P3-6：收到但非法的 contextWindow 观测（不当作删除）。 */
@@ -211,6 +217,7 @@ export class CompressionGuard {
     // P2-1：只处理本项目会话。projectRoot 为空时无法判定，保持旧行为（不过滤）。
     this.#projectRoot = typeof options.projectRoot === 'string' ? options.projectRoot.trim() : '';
     this.#onlyProject = options.onlyProject !== false && this.#projectRoot !== '';
+    this.#scopeResolver = typeof options.resolveScope === 'function' ? options.resolveScope : null;
     this.#captureTitle = options.captureTitle !== false;
     this.#readOnly = this.#store?.status?.readOnlyReason !== null && this.#store?.status?.readOnlyReason !== undefined;
     this.#readOnlyReason = this.#readOnly ? this.#store.status.readOnlyReason : null;
@@ -285,18 +292,37 @@ export class CompressionGuard {
   }
 
   /**
-   * P2-1 项目归属：只处理本项目会话的压缩事件。
-   * - cwd 与本项目根不同 → 忽略（fail-closed）；
-   * - cwd 缺失（老会话/测试夹具）→ 无法判定，放行但计入 `unattributedEvents`。
+   * 1.0 #1：会话归域判定（单根模型）。
+   * - 生产由 index 注入 resolveScope（根来自配置/持久化/推断）；
+   * - 直接 new CompressionGuard 且未给根时保留旧行为（不过滤，cwd 空计入 unattributed）；
+   * - 根已给时以根边界为准：根内 governed，根外 foreign-session（`onlyProject` 只作展示）。
    */
-  #belongsToProject(session) {
-    if (!this.#onlyProject) return true;
-    const cwd = this.#sessionCwd(session);
-    if (cwd === '') {
-      this.#stats.unattributedEvents += 1;
-      return true;
+  #scopeOf(session) {
+    if (this.#scopeResolver !== null) {
+      try {
+        const scope = this.#scopeResolver(session);
+        if (scope !== null && typeof scope === 'object' && typeof scope.governed === 'boolean') return scope;
+      } catch {
+        /* 归域判定失败走兜底 */
+      }
     }
-    return sameDirectory(cwd, this.#projectRoot);
+    const cwd = this.#sessionCwd(session);
+    if (this.#projectRoot === '') {
+      return {
+        mode: 'unresolved',
+        root: null,
+        cwd,
+        governed: true,
+        skipReason: null,
+        unattributed: cwd === '',
+      };
+    }
+    // 兼容旧 opt-out：未注入 resolveScope 的直接构造（历史测试/外部调用）保留
+    // `onlyProject=false` 的旧语义；生产路径由 index 注入 resolveScope，以根为准。
+    if (this.#scopeResolver === null && this.#onlyProject === false) {
+      return { mode: 'single-root', root: this.#projectRoot, cwd, governed: true, skipReason: null, unattributed: false };
+    }
+    return resolveScope({ root: this.#projectRoot, cwd, earlyEnabled: true });
   }
 
   /** 记录只读原因；同一原因只 warn 一次，避免每周期刷屏。 */
@@ -444,11 +470,15 @@ export class CompressionGuard {
         readOnlyReason: this.#readOnlyReason,
       },
       scope: {
+        mode: this.#projectRoot === '' ? 'unresolved' : 'single-root',
         projectRoot: this.#projectRoot,
         onlyProject: this.#onlyProject,
         captureTitle: this.#captureTitle,
         ignoredForeignEvents: this.#stats.ignoredForeignEvents,
         ignoredForeignSessions: this.#foreignSessions.size,
+        foreignStarts: this.#stats.foreignStarts,
+        foreignSummaries: this.#stats.foreignSummaries,
+        foreignCosts: this.#stats.foreignCosts,
         unattributedEvents: this.#stats.unattributedEvents,
       },
       writeLatency: calculateLatencyStats(this.#writeDurations),
@@ -1028,11 +1058,14 @@ export class CompressionGuard {
     const occurredAt = cost.occurredAt ?? this.#now().toISOString();
     // 0.1.18（cost-v1.4）：backend 字段解析统一走 resolveBackendFields（与 /cg status 同一来源）。
     const backendFields = resolveBackendFields(this.#adapter);
+    const foreign = state.foreign === true;
     this.#auditEvent('compaction-cost', {
       sessionId: state.sessionId,
       compactionId: state.compactionId,
-      project: this.#projectName,
+      ...(foreign ? {} : { project: this.#projectName }),
       ...backendFields,
+      ...(foreign ? { source: 'host-native' } : {}),
+      ...(foreign && typeof state.reason === 'string' && state.reason !== '' ? { reason: state.reason } : {}),
       model: cost.model,
       trigger: cost.trigger,
       occurredAt,
@@ -1056,6 +1089,8 @@ export class CompressionGuard {
       estimateMethod: governanceEstimated ? 'chars/4' : 'none',
       auditVersion: 'cost-v1.4',
     });
+    // 外部会话的 cost 行只进审计，不覆盖本项目 `/cg status last-cost`。
+    if (foreign) return;
     this.#lastCost = {
       sessionId: state.sessionId,
       compactionId: state.compactionId,
@@ -1068,6 +1103,78 @@ export class CompressionGuard {
       tokensPruned,
       pruneCount: prunes.length,
       pruneTools,
+    };
+  }
+
+  /** 1.0 #1：外部会话只记宿主原生压缩事实与用量；不写记忆、不保护、不回注。 */
+  #observeForeign(session, event) {
+    const type = event?.type;
+    if (type === 'assistant/message') {
+      this.#recordUsage(session, event);
+      this.#captureCostAfter(session, event);
+      return;
+    }
+    const id = event?.data?.compactionId ?? null;
+    if (id === null) return;
+    if (type === 'compaction/start') {
+      if (this.#pending.has(id)) return;
+      this.#stats.foreignStarts += 1;
+      this.#pending.set(id, this.#foreignCostState(session, id, event, null));
+      return;
+    }
+    if (type === 'compaction/summary') {
+      let state = this.#pending.get(id);
+      if (state === undefined || state.foreign !== true) {
+        state = this.#foreignCostState(session, id, event, 'compaction/start was not observed');
+        this.#pending.set(id, state);
+        this.#stats.foreignStarts += 1;
+      }
+      this.#stats.foreignSummaries += 1;
+      const usage = event?.data?.usage;
+      const usageKeys = ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'totalTokens'];
+      const hasUsage = usage !== null && typeof usage === 'object' && !Array.isArray(usage)
+        && usageKeys.some((key) => Number.isFinite(usage[key]));
+      if (hasUsage) state.cost.backendUsage = usage; // 空对象/无有效数值 → 保持 null + unknown
+      state.cost.tokensSummary = Number.isFinite(usage?.outputTokens) ? usage.outputTokens : null;
+      state.cost.tokensShadowed = Number.isFinite(event?.data?.shadowedTokenCount)
+        ? event.data.shadowedTokenCount
+        : null;
+      const modelParts = [event?.data?.provider, event?.data?.model]
+        .filter((part) => typeof part === 'string' && part !== '');
+      state.cost.model = modelParts.length > 0 ? modelParts.join('/') : null;
+      return;
+    }
+    if (type === 'compaction/end') {
+      const state = this.#pending.get(id) ?? this.#foreignCostState(session, id, event, 'compaction/start was not observed');
+      this.#pending.delete(id);
+      state.cost.occurredAt = Number.isFinite(event?.time)
+        ? new Date(event.time).toISOString()
+        : this.#now().toISOString();
+      this.#stats.foreignCosts += 1;
+      // R-SCOPE-2：一条真实压缩必须落下一条成本行；外部会话不进入 pendingCosts 等待补 usage。
+      queueMicrotask(() => {
+        try {
+          const afterTokens = this.#measureTokens(session);
+          state.cost.tokensAfter = afterTokens;
+          state.cost.tokensAfterSource = afterTokens === null ? 'none' : 'tokenMeter';
+          state.cost.tokensAfterParts = null;
+          this.#writeCost(state, session);
+        } catch (error) {
+          this.#logger?.warn?.(`[context-governance] foreign cost audit failed: ${String(error?.message ?? error)}`);
+        }
+      });
+    }
+  }
+
+  #foreignCostState(session, compactionId, event, reason) {
+    return {
+      foreign: true,
+      reason: reason ?? null,
+      compactionId,
+      sessionId: session?.id ?? null,
+      manual: event?.data?.sourceCommandId != null,
+      prunes: [],
+      cost: this.#newCost(event?.data?.sourceCommandId != null ? 'manual' : 'auto', session),
     };
   }
 
@@ -1461,19 +1568,25 @@ export class CompressionGuard {
           this.#logger?.warn?.(`[context-governance] ready capability hook failed: ${String(error?.message ?? error)}`);
         }
       }
-      // P2-1：别的项目/其它工作区会话的压缩不写本项目记忆、也不回注到那个会话。
-      if (!this.#belongsToProject(session)) {
+      // 1.0 #1/B-1：根已确定但 cwd 在根外 = 外部会话 → 提前压/保护/回注/记忆全不碰，
+      // 只按 R-SCOPE-2 记宿主原生压缩的事实与用量（cost-only，source=host-native）。
+      const scope = this.#scopeOf(session);
+      if (!scope.governed) {
         this.#stats.ignoredForeignEvents += 1;
+        if (scope.unattributed === true) this.#stats.unattributedEvents += 1;
         const sessionId = session?.header?.id ?? session?.id ?? 'unknown';
         if (!this.#foreignSessions.has(sessionId)) {
           this.#foreignSessions.add(sessionId);
           this.#logger?.warn?.(
-            `[context-governance] ignoring session ${sessionId}: cwd ${this.#sessionCwd(session) || 'unknown'} ` +
-            `is outside project ${this.#projectRoot}; no memory writes or reinjection for it`,
+            `[context-governance] ignoring session ${sessionId} for protection/reinjection: ` +
+            `cwd ${this.#sessionCwd(session) || 'unknown'} is outside project ${this.#projectRoot}; ` +
+            'cost-only observation',
           );
         }
+        if (scope.skipReason === SCOPE_SKIP.FOREIGN) this.#observeForeign(session, event);
         return;
       }
+      if (scope.unattributed === true) this.#stats.unattributedEvents += 1;
       this.#stats.events += 1;
       this.#lastSession = session;
       // 0.2.1 backfill：既有会话可能拿不到新的 request/context，首次事件时回填一次历史窗口。
