@@ -23,6 +23,12 @@ export { EARLY_REPORT_WAIT_MS };
 export const EARLY_COOLDOWN_MS = 10 * 60 * 1000;
 /** 增量门槛默认值（policy `compact.minDeltaTokens` 生效时按窗口换算成比例）。 */
 export const EARLY_MIN_DELTA_RATIO = 0.01;
+/**
+ * S1.3：迟到回填的待办上限——超出/过期只 warn，不写审计、不抛错。
+ * 生命周期只在进程内：跨重启对不上账属已知缺口（文档已声明）。
+ */
+export const EARLY_RECONCILE_TTL_MS = 15 * 60 * 1000;
+export const EARLY_RECONCILE_MAX = 16;
 
 function getOrNull(ctx, name) {
   try {
@@ -123,6 +129,79 @@ export function wireEarlyCompaction(options = {}) {
       /* 观测回调失败不影响主流程 */
     }
   };
+
+  // S1.3：迟到回填状态。键 = protection cycle（`early-<uuid>`），值含该次 early-forced 的审计写入器。
+  const pendingReconcile = new Map();
+  const guardSubscriptions = new Map();
+  const shortCompactionId = (id) => String(id ?? '').slice(0, 8);
+
+  function prunePendingReconcile(nowMs) {
+    for (const [cycle, entry] of pendingReconcile) {
+      if (nowMs - entry.writtenAt > EARLY_RECONCILE_TTL_MS) pendingReconcile.delete(cycle);
+    }
+  }
+
+  /** 报告就绪 → 只匹配本会话本 cycle，追加一条 `early-forced-reconciled`；主记录不动。 */
+  function handleReportReady(report) {
+    const cycle = report?.cycle;
+    if (typeof cycle !== 'string' || cycle === '') return;
+    const entry = pendingReconcile.get(cycle);
+    if (entry === undefined) return;
+    if (entry.sessionId !== null && report?.sessionId !== entry.sessionId) return;
+    const compactionId = report?.compactionId;
+    if (compactionId === null || compactionId === undefined || String(compactionId) === '') return;
+    pendingReconcile.delete(cycle);
+    const failures = Array.isArray(report?.failures)
+      ? report.failures.map((failure) => (typeof failure === 'string' ? failure : failure?.name)).filter(Boolean)
+      : [];
+    entry.audit?.append?.('early-forced-reconciled', {
+      sessionId: entry.sessionId,
+      cycle,
+      compactionId,
+      compactionShortId: shortCompactionId(compactionId),
+      compaction: report?.compaction ?? 'unknown',
+      protection: report?.protection ?? null,
+      failures,
+      reinjected: report?.reinjected ?? null,
+      // 需求 2026-10-27 收紧③：字段名用 reconcileDelayMs，与 early-report-wait.waitedMs 区分。
+      reconcileDelayMs: Math.max(0, Math.round(now() - entry.writtenAt)),
+      source: 'late-report',
+    });  }
+
+  function subscribeGuard(guard) {
+    if (guardSubscriptions.has(guard)) return true;
+    if (typeof guard?.onReportReady !== 'function') return false;
+    let unsubscribe = null;
+    try {
+      unsubscribe = guard.onReportReady(handleReportReady);
+    } catch {
+      unsubscribe = null;
+    }
+    if (typeof unsubscribe !== 'function') return false;
+    guardSubscriptions.set(guard, unsubscribe);
+    return true;
+  }
+
+  function rememberPendingReconcile(guard, cycleKey, sessionId, auditForSession) {
+    if (typeof cycleKey !== 'string' || cycleKey === '') return;
+    // 老 guard/桩没有 onReportReady：不登记，行为与 S1.2 完全一致（仍写 unknown）。
+    if (!subscribeGuard(guard)) return;
+    const nowMs = now();
+    prunePendingReconcile(nowMs);
+    if (pendingReconcile.size >= EARLY_RECONCILE_MAX) {
+      let oldestCycle = null;
+      let oldestAt = Number.POSITIVE_INFINITY;
+      for (const [cycle, entry] of pendingReconcile) {
+        if (entry.writtenAt < oldestAt) {
+          oldestAt = entry.writtenAt;
+          oldestCycle = cycle;
+        }
+      }
+      if (oldestCycle !== null) pendingReconcile.delete(oldestCycle);
+      logger?.warn?.('[context-governance] early reconcile queue full; dropped the oldest pending cycle');
+    }
+    pendingReconcile.set(cycleKey, { sessionId, audit: auditForSession, writtenAt: nowMs });
+  }
 
   async function check(session) {
     // armed=false：完全静默（不审计、不取服务）——接线 ≠ 触发。
@@ -358,6 +437,10 @@ export function wireEarlyCompaction(options = {}) {
     };
     if (result.accepted === true) {
       auditForSession?.append?.('early-forced', fields);
+      // S1.3：超窗没拿到本 cycle 报告（unknown）才登记迟到回填；已 committed 的不登记、不重复写。
+      if (fields.compaction === 'unknown' && cycleKey !== null) {
+        rememberPendingReconcile(guard, cycleKey, sessionId, auditForSession);
+      }
       // T2 首触提示（不做弹窗）：logger 一行 info，只含数值/来源，不含正文。
       logger?.info?.(
         `[context-governance] early compaction forced effective=${Number(effective).toFixed(3)} ` +
@@ -396,6 +479,16 @@ export function wireEarlyCompaction(options = {}) {
     stop() {
       for (const timer of timers) clearTimeout(timer);
       timers.clear();
+      // S1.3：退订报告监听并清掉未回填的待办（进程内状态，随 stop 消失）。
+      for (const unsubscribe of guardSubscriptions.values()) {
+        try {
+          unsubscribe();
+        } catch {
+          /* 退订失败不影响 stop */
+        }
+      }
+      guardSubscriptions.clear();
+      pendingReconcile.clear();
       if (typeof dispose === 'function') dispose();
     },
   };

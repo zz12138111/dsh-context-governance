@@ -462,3 +462,142 @@ test('0.2.2 接线：只在 turn/end 后调度（armed=false 不排定时器）'
   assert.equal(scheduled2.length, 0, 'armed=false 不得排定时器');
   wiring2.stop();
 });
+
+// ---- S1.3：迟到报告回填（early-forced-reconciled；需求 2026-10-27 结论 A + 4 条收紧） ----
+
+const RECONCILE_CYCLE = 'early-test-cycle';
+
+function makeReconcileGuard({ waitForReportResult = null } = {}) {
+  const listeners = new Set();
+  const guard = {
+    listeners,
+    status: { pressure: { measuredTokens: 680000, estimatedTokens: 400000 }, stats: { pending: 0 }, lastReport: null },
+    async preProtect() {
+      return { ok: true, cycleKey: RECONCILE_CYCLE };
+    },
+    markEarlyAccepted() {},
+    async discardEarlyProtection() {},
+    async waitForReport() {
+      return waitForReportResult ?? { ok: false, reason: 'timeout', report: null, waitedMs: 60000 };
+    },
+    onReportReady(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    emit(report) {
+      for (const listener of [...listeners]) listener(report);
+    },
+  };
+  return guard;
+}
+
+test('S1.3 回填：超窗 unknown 登记，报告晚到追加 early-forced-reconciled（id/committed/reconcileDelayMs）', async () => {
+  const guard = makeReconcileGuard();
+  const engine = { calls: 0, async compactNow() { this.calls += 1; } };
+  const { ctx } = makeCtx({ engine });
+  const audit = makeAudit();
+  let clock = 1000;
+  const wiring = wireEarlyCompaction({ ctx, getGuard: () => guard, getPolicy: () => POLICY, audit, getArmed: () => true, now: () => clock });
+  await wiring.check({ id: 's1' });
+  assert.deepEqual(audit.entries.map((entry) => entry.event), ['early-decision', 'early-report-wait', 'early-forced']);
+  const forcedEntry = audit.entries.find((entry) => entry.event === 'early-forced');
+  assert.equal(forcedEntry.compaction, 'unknown');
+  assert.equal(forcedEntry.compactionId, null);
+  assert.equal(audit.entries.find((entry) => entry.event === 'early-report-wait').reason, 'timeout');
+
+  clock += 87573; // 真机第 4 轮：force→报告落地 87.6s
+  guard.emit({
+    sessionId: 's1',
+    cycle: RECONCILE_CYCLE,
+    compactionId: 'ccd8bdcd-9f66-42a1-8e19-147b529792f9',
+    compaction: 'committed',
+    protection: 'failed',
+    failures: [{ name: 'rollback-point', detail: 'x' }],
+    reinjected: true,
+  });
+  const reconciled = audit.entries.filter((entry) => entry.event === 'early-forced-reconciled');
+  assert.equal(reconciled.length, 1);
+  assert.equal(reconciled[0].sessionId, 's1');
+  assert.equal(reconciled[0].cycle, RECONCILE_CYCLE);
+  assert.equal(reconciled[0].compactionId, 'ccd8bdcd-9f66-42a1-8e19-147b529792f9');
+  assert.equal(reconciled[0].compactionShortId, 'ccd8bdcd');
+  assert.equal(reconciled[0].compaction, 'committed');
+  // protection=failed 仍如实回填 failures，但不作闭合条件（需求收紧④）。
+  assert.equal(reconciled[0].protection, 'failed');
+  assert.deepEqual(reconciled[0].failures, ['rollback-point']);
+  assert.equal(reconciled[0].reinjected, true);
+  assert.equal(reconciled[0].reconcileDelayMs, 87573);
+  assert.equal(reconciled[0].source, 'late-report');
+  // 主记录不重写：early-forced 仍是 unknown（守 R-AUDIT）。
+  assert.equal(audit.entries.find((entry) => entry.event === 'early-forced').compaction, 'unknown');
+
+  guard.emit({ sessionId: 's1', cycle: RECONCILE_CYCLE, compactionId: 'ccd8bdcd-9f66-42a1-8e19-147b529792f9', compaction: 'committed' });
+  assert.equal(audit.entries.filter((entry) => entry.event === 'early-forced-reconciled').length, 1, '同一 cycle 至多一条');
+  wiring.stop();
+});
+
+test('S1.3 回填：窗内已 committed 不登记、不订阅', async () => {
+  const fresh = {
+    compactionId: 'fresh-id',
+    sessionId: 's1',
+    cycle: RECONCILE_CYCLE,
+    compaction: 'committed',
+    protection: 'ok',
+    failures: [],
+    reinjected: true,
+  };
+  const guard = makeReconcileGuard({ waitForReportResult: { ok: true, reason: 'none', report: fresh, waitedMs: 12 } });
+  const engine = { calls: 0, async compactNow() { this.calls += 1; } };
+  const { ctx } = makeCtx({ engine });
+  const audit = makeAudit();
+  const wiring = wireEarlyCompaction({ ctx, getGuard: () => guard, getPolicy: () => POLICY, audit, getArmed: () => true, now: () => 0 });
+  await wiring.check({ id: 's1' });
+  assert.equal(audit.entries[1].compaction, 'committed');
+  assert.equal(guard.listeners.size, 0, '已 committed 不得登记迟到回填');
+  assert.equal(audit.entries.filter((entry) => entry.event === 'early-report-wait').length, 0);
+  wiring.stop();
+});
+
+test('S1.3 回填：会话/周期不匹配不写；匹配那条才写', async () => {
+  const guard = makeReconcileGuard();
+  const engine = { calls: 0, async compactNow() { this.calls += 1; } };
+  const { ctx } = makeCtx({ engine });
+  const audit = makeAudit();
+  const wiring = wireEarlyCompaction({ ctx, getGuard: () => guard, getPolicy: () => POLICY, audit, getArmed: () => true, now: () => 0 });
+  await wiring.check({ id: 's1' });
+  guard.emit({ sessionId: 'other', cycle: RECONCILE_CYCLE, compactionId: 'wrong-session', compaction: 'committed' });
+  guard.emit({ sessionId: 's1', cycle: 'early-other-cycle', compactionId: 'wrong-cycle', compaction: 'committed' });
+  assert.equal(audit.entries.filter((entry) => entry.event === 'early-forced-reconciled').length, 0);
+  guard.emit({ sessionId: 's1', cycle: RECONCILE_CYCLE, compactionId: 'good-id-1234', compaction: 'committed', protection: 'failed', failures: [] });
+  const reconciled = audit.entries.filter((entry) => entry.event === 'early-forced-reconciled');
+  assert.equal(reconciled.length, 1);
+  assert.equal(reconciled[0].compactionId, 'good-id-1234');
+  assert.equal(reconciled[0].compactionShortId, 'good-id-');
+  wiring.stop();
+});
+
+test('S1.3 回填：老 guard 无 onReportReady 时行为不变（不登记、不抛错）', async () => {
+  const guard = makeGuard();
+  const engine = { calls: 0, async compactNow() { this.calls += 1; } };
+  const { ctx } = makeCtx({ engine });
+  const audit = makeAudit();
+  const wiring = wireEarlyCompaction({ ctx, getGuard: () => guard, getPolicy: () => POLICY, audit, getArmed: () => true, now: () => 0 });
+  await wiring.check({ id: 's1' });
+  assert.deepEqual(audit.entries.map((entry) => entry.event), ['early-decision', 'early-forced']);
+  assert.equal(audit.entries.find((entry) => entry.event === 'early-forced').compaction, 'unknown');
+  wiring.stop();
+});
+
+test('S1.3 回填：stop() 退订，停后报告不再回填', async () => {
+  const guard = makeReconcileGuard();
+  const engine = { calls: 0, async compactNow() { this.calls += 1; } };
+  const { ctx } = makeCtx({ engine });
+  const audit = makeAudit();
+  const wiring = wireEarlyCompaction({ ctx, getGuard: () => guard, getPolicy: () => POLICY, audit, getArmed: () => true, now: () => 0 });
+  await wiring.check({ id: 's1' });
+  assert.equal(guard.listeners.size, 1);
+  wiring.stop();
+  assert.equal(guard.listeners.size, 0);
+  guard.emit({ sessionId: 's1', cycle: RECONCILE_CYCLE, compactionId: 'after-stop', compaction: 'committed' });
+  assert.equal(audit.entries.filter((entry) => entry.event === 'early-forced-reconciled').length, 0);
+});

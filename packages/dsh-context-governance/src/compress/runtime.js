@@ -151,6 +151,8 @@ export class CompressionGuard {
   #readyReports = new Set();
   /** S1.2：等待本 cycle 报告的 early 接线（最多 `EARLY_REPORT_WAIT_MS`，当前 60000ms）。 */
   #reportWaiters = new Set();
+  /** S1.3：报告就绪监听（只读；迟到回填用，不在等待窗口内也通知）。 */
+  #reportReadyListeners = new Set();
   #unsubscribe = null;
   #started = false;
   #eventApi = false;
@@ -836,6 +838,28 @@ export class CompressionGuard {
         waiter(report);
       } catch {
         /* 单个等待者失败不影响其它等待者/主流程 */
+      }
+    }
+  }
+
+  /**
+   * S1.3：订阅"报告已就绪"（回注结果已写回）。只读、不排队、不阻塞；
+   * 返回退订函数。用于 `early-forced` 超窗后由 early 接线做迟到回填。
+   */
+  onReportReady(listener) {
+    if (typeof listener !== 'function') return () => {};
+    this.#reportReadyListeners.add(listener);
+    return () => {
+      this.#reportReadyListeners.delete(listener);
+    };
+  }
+
+  #notifyReportReady(report) {
+    for (const listener of [...this.#reportReadyListeners]) {
+      try {
+        listener(report);
+      } catch {
+        /* 单个监听失败不影响主流程 */
       }
     }
   }
@@ -1770,6 +1794,8 @@ export class CompressionGuard {
         if (state.report !== null && state.report !== undefined && state.report.compactionId != null) {
           this.#readyReports.add(state.report.compactionId);
           this.#notifyReportWaiters(state.report);
+          // S1.3：同一个就绪点再通知迟到回填监听（等窗已超时的 early 靠这里补账）。
+          this.#notifyReportReady(state.report);
         }
       }
     });
