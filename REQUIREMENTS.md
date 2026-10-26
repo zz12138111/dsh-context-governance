@@ -457,7 +457,7 @@
 3. **R-MEMROOT（多根模型；用户 2026-10-26 拍板 B）**
    - **每会话按自身项目根**：cwd 上溯含 `.git` 的最近祖先；**无根 → `no-project-root`，完全不碰**（见 R-SCOPE）。
    - **记忆根按项目根隔离**：各工作区在**自己的根下**写 `memory/governance/`（授权边界见下），**不得跨根读写**。
-   - **根来源（最近 `.git` 优先）**：会话 cwd 上溯**最近的** `.git`（文件或目录）成根；显式配置的 `projectRoot` **只对其下没有更近 `.git` 的会话生效**（优先匹配 / 默认根）；**嵌套仓库各自成根，不合并**；`projectRoot` 为空时同样按最近 `.git` 多根推断；首见推断并持久化（D9=A），**重启沿用、不重推**；**不再存在「单项目模式」**。
+   - **根来源（configRoot 强制合并）**：`projectRoot` **非空**时，其下会话的根 = `projectRoot`（`source=config`），**嵌套 `.git` 不另立根**——**已知限制：显式配置根内多根隔离不完整**（P1 / P4 文档须披露）；`configRoot` 外会话按自身 cwd 独立成根；`projectRoot` **为空**时按最近 `.git`（文件或目录）多根推断；首见推断并持久化（D9=A），**重启沿用、不重推**；**不再存在「单项目模式」**。
    - 根变化（配置变更 / 持久化状态丢失 / 换机）必须在 `/cg status` 与审计可见（`project-root-changed` / `inferred-fresh`）；**重启后根不得静默改变**。
    - 已写入的记忆**不迁移、不删除**，留在原根路径；**卸载保留各根 memory、回滚不回写旧根**（见「多根通用性」第 11 条）。
 
@@ -477,22 +477,21 @@
 12. **多 profile**：每个 profile **各自安装、各自根状态**，不跨 profile 共享根状态。
 13. **验收（负向，多根后必须验）**：① A 根会话**不影响** B 根（记忆/审计/策略）；② 删除根状态文件 → 重新推断且可见（`inferred-fresh`）；③ 同根两会话并发写记忆 → 锁提示 / 串行，**不丢写**。
 14. **分层交付（用户 2026-10-26 拍板 A）**：**全纳管是 1.0 目标，分三层交付**——**P1 = 可判定根登记 + 主根纳管骨架**（其他根**已登记、未纳管**；**P1 不宣称全纳管**）；**P2 = 多根记忆与审计**（每根各自 `memory/governance/`）；**P3 = 全会话保护/回注**。**完成 P3 后才可对外宣称「全纳管」**。
-15. **P1 `unmanaged` 诊断行（可选实现，四条限定）**：允许每根**最多一次**（或根状态变化时一次）`root-unmanaged` 诊断行；字段仅 `root` / `rootId` / `reason` / `count`；**可写会话短 id（≤8 位），不写全 id、不写正文**；root audit **只按根汇总一条**；放**用户级 root audit**，**不写进任何根内 `audit.jsonl`**；该行只表示「跳过」，不代表已纳管。
+15. **P1 `unmanaged` 诊断行（可选实现，四条限定）**：允许每根**最多一次**（或根状态变化时一次）`root-unmanaged` 诊断行；字段仅 `root` / `rootId` / `reason` / `count`；**不写 `sessionId`（全 id / 短 id 都不写）、不写正文**；root audit **按根汇总一条**（同根多会话只累计 `count`）；放**用户级 root audit**，**不写进任何根内 `audit.jsonl`**；该行只表示「跳过」，不代表已纳管。
 
-**授权边界（用户 2026-10-26 拍板；固定子目录白名单 + 每类数据用途限制）**：插件只可在以下**三类固定位置**创建 / 写入自己的运行数据：
+**授权边界（用户 2026-10-26 拍板；固定子目录白名单 + 每类数据用途限制）**：插件只可在以下**两类固定位置**创建 / 写入自己的运行数据：
 
 | # | 位置 | 允许的数据 | 禁止 |
 |---|---|---|---|
-| ① | **用户级** `<profile home>/context-governance/` | 根状态、根审计、未配置时的默认诊断 | — |
-| ② | **各纳管根内** `<root>/memory/governance/` | 记忆、根内审计 | — |
-| ③ | **各纳管根内** `<root>/logs/` | **仅 `diagnostics.logFile`** | **记忆 / 审计 / 状态禁止写入** |
+| ① | **用户级** `<profile home>/context-governance/` | 根状态、根审计、诊断日志（默认 `<home>/context-governance/logs/governance.log`） | — |
+| ② | **各纳管根内** `<root>/memory/governance/` | 记忆、根内审计 | 诊断日志（见下） |
 
 **不得**在工作区根内创建其他文件；**不得修改、移动、删除**任何已有项目文件。硬性约束：
-- **写入侧 containment（每次写入都校验）**：写前对**实际目标文件路径**做 **realpath + `..` + 符号链接 / junction + UNC + 盘符大小写归一** 校验；**校验对象是实际写入路径，不只是配置解析结果**；
+- **写入侧 containment（每次写入都校验）**：写前对**实际目标文件路径**做 **realpath + `..` + 符号链接 / junction + UNC + 盘符大小写归一** 校验；**校验对象是实际写入路径**（必须落在上述两处内），不只是配置解析结果；
 - **fail-closed**：目标落在白名单外 / `memoryRoot` 为绝对或逃逸 → **拒绝并告警，不回退到别处写**（该根 fail-closed / 不纳入）；
 - **模型固定**：白名单只增不减、每类数据用途写死；未来新增缓存 / 临时数据 = **只加一项白名单**，不改模型。
 
-**`logFile` 白名单（用户 2026-10-26 拍板 A）**：`diagnostics.logFile` 只允许 ① `<profile home>/context-governance/`、② `<root>/memory/governance/`、③ `<root>/logs/`；白名单外 **fail-closed（拒绝并告警）**；未配置时默认用户级。**现有 `D:\DS-PROJECT\DSH插件开发\logs\governance.log`（= `<root>/logs/`）可保留**。
+**`logFile` 严格两处（用户 2026-10-26 拍板）**：`diagnostics.logFile` 只允许 ① `<home>/context-governance/`（含默认 `<home>/context-governance/logs/governance.log`）或 ② `<root>/memory/governance/`；**`<root>/logs/` 不允许**。**白名单外 → `CONFIG` 拒绝 + 插件不加载该 profile（显式失败，不静默禁用）**；**迁移到 `<home>/context-governance/logs/governance.log` 才可用**；**多根下只有用户级路径安全**（根内路径只能 per-root sink，每根一份）。**破坏性变更**：现有 `D:\DS-PROJECT\DSH插件开发\logs\governance.log` 会被拒，须在 P1 / P4 文档披露。
 
 **豁免（用户 2026-10-26 拍 3A，拍板 B 后扩展）**：`no-project-root`（未知 cwd，无 `.git` 祖先）会话**完全不碰**——不建立 store / guard / 审计，不观测压缩、不记账、不保护、不写记忆；仅保留**根推断 watcher**。若未来需要「孤儿账本」，**单独立项**。
 
