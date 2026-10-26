@@ -10,7 +10,6 @@
  */
 
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 
 import { registerStatusCommand } from './commands/cg-status.js';
@@ -861,83 +860,6 @@ export async function apply(ctx, rawConfig = {}) {
     }
     if (config.diagnostics.logFile !== '') appendDiagnosticLine(config.diagnostics.logFile, identityDiagnostic(identity));
   };
-
-  // --- 2a 真机取证探针（临时；默认零行为，取完即回退）---
-  // 门控：CG_2A_PROBE=1 或 %TEMP%\cg-2a-probe.flag。只读：/cg status + 读状态/审计/诊断文件；
-  // 不改配置/记忆/项目文件、不压缩、不联网；证据只落 %TEMP%\cg-2a-probe-<ts>.json。
-  const probeFlagFile = path.join(os.tmpdir(), 'cg-2a-probe.flag');
-  if (process.env.CG_2A_PROBE === '1' || fs.existsSync(probeFlagFile)) {
-    const probeOutFile = path.join(os.tmpdir(), `cg-2a-probe-${Date.now()}.json`);
-    const record = {
-      ts: new Date().toISOString(),
-      pid: process.pid,
-      attempts: 0,
-      firstStatus: null,
-      finalStatus: null,
-      stateFile: null,
-      state: null,
-      stateDir: [],
-      auditTail: [],
-      diagnosticsTail: [],
-    };
-    const readTail = (file, limit) => {
-      try {
-        return fs.readFileSync(file, 'utf8').split('\n').filter((line) => line !== '').slice(-limit);
-      } catch {
-        return [];
-      }
-    };
-    const writeRecord = () => {
-      try { fs.writeFileSync(probeOutFile, JSON.stringify(record, null, 2), 'utf8'); } catch { /* ignore */ }
-    };
-    const capture = (text) => {
-      record.finalStatus = text;
-      const stateMatch = /^persistence-identity: .*? path=(.+)$/m.exec(text);
-      const stateFile = stateMatch === null ? null : stateMatch[1].trim();
-      record.stateFile = stateFile;
-      if (stateFile !== null) {
-        try { record.state = JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch { record.state = null; }
-        try { record.stateDir = fs.readdirSync(path.dirname(stateFile)); } catch { record.stateDir = []; }
-      }
-      const auditMatch = /^audit: file=(.+?) max=/m.exec(text);
-      if (auditMatch !== null) record.auditTail = readTail(auditMatch[1].trim(), 60);
-      if (config.diagnostics.logFile !== '') record.diagnosticsTail = readTail(config.diagnostics.logFile, 80);
-    };
-    let probeDone = false;
-    const probeTick = async () => {
-      if (probeDone) return;
-      record.attempts += 1;
-      try {
-        const commands = typeof ctx.get === 'function' ? ctx.get('commands') : null;
-        if (typeof commands?.execute === 'function') {
-          let agents = [];
-          try {
-            const service = typeof ctx.get === 'function' ? ctx.get('agents') : null;
-            agents = typeof service?.list === 'function' ? (service.list() ?? []) : [];
-          } catch {
-            agents = [];
-          }
-          const agent = agents.find((item) => typeof item?.session?.id === 'string' && item.session.id !== '');
-          if (agent !== undefined) {
-            const out = await commands.execute(agent, '/cg status', [], new AbortController().signal);
-            const text = typeof out?.result?.text === 'string' ? out.result.text : '';
-            if (text !== '') {
-              if (record.firstStatus === null) record.firstStatus = text;
-              if (/^project-root: (?!unknown)/m.test(text) || record.attempts >= 120) {
-                capture(text);
-                probeDone = true;
-              }
-            }
-          }
-        }
-      } catch {
-        /* 探针失败不阻断插件 */
-      }
-      writeRecord();
-      if (!probeDone) setTimeout(probeTick, 10_000);
-    };
-    setTimeout(probeTick, 5_000);
-  }
 
   if (rootInfo.root !== null) {
     await startRuntime(rootInfo.root, rootInfo.source);
