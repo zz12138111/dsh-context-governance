@@ -30,10 +30,11 @@ function session(id, cwd, extra = {}) {
   return { header: { id, cwd, ...extra } };
 }
 
-function makeRegistry({ stateFile, clock, rootAudit = [], hashFn, pinLimit }) {
+function makeRegistry({ stateFile, clock, rootAudit = [], hashFn, pinLimit, configRoot = null }) {
   return RootRegistry.load({
     stateFile,
     profile: 'test',
+    configRoot,
     now: () => clock.value,
     rootAudit: { append: (event, details) => rootAudit.push({ event, details }) },
     hashFn,
@@ -165,6 +166,29 @@ test('P1/T15 registry：子会话继承父根、不新增根；父根未知/无 
   const orphan = reg.resolveSessionRoot({ header: { id: 'c2', parentSession: 'missing', origin: 'subagent' } });
   assert.equal(orphan.status, 'no-root');
   assert.equal(orphan.isSubagent, true);
+});
+
+test('P1/T16b registry：configRoot 优先匹配（cwd 在其下即用配置根，即使有更近 .git）', async () => {
+  const base = await tempDir();
+  const outer = makeRoot(base, 'outer', { gitFile: false });
+  const nested = makeRoot(path.join(outer, 'packages'), 'nested', { gitFile: true });
+  const outside = makeRoot(base, 'outside');
+  const clock = { value: new Date('2026-10-26T10:00:00Z') };
+  const reg = makeRegistry({ stateFile: stateFileIn(path.join(base, 'cfg')), clock, configRoot: outer });
+  reg.setAttachRoot(outer, { origin: 'config' });
+
+  const inNested = reg.resolveSessionRoot(session('s1', path.join(nested, 'src')));
+  assert.equal(inNested.entry.root, outer, 'configRoot 优先于更近的嵌套 .git');
+  assert.equal(inNested.source, 'config');
+  assert.equal(inNested.status, 'managed');
+
+  const insideNoGit = reg.resolveSessionRoot(session('s2', path.join(outer, 'docs')));
+  assert.equal(insideNoGit.entry.root, outer, 'config 根下没有 .git 也归属配置根');
+
+  const outsideRes = reg.resolveSessionRoot(session('s3', outside));
+  assert.equal(outsideRes.entry.root, outside, 'config 根外仍按自身 .git 推断');
+  assert.equal(outsideRes.status, 'unmanaged');
+  assert.equal(reg.counts().roots, 2);
 });
 
 test('P1/T19 registry：lastSeenAt 节流、pin 上限、hash 碰撞延长', async () => {

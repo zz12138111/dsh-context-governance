@@ -143,6 +143,32 @@ function toolError(error) {
   return error;
 }
 
+/** 默认子会话判定：宿主 SessionHeader.origin/parentSession。 */
+export function isSubagentExec(exec) {
+  const header = exec?.agent?.session?.header;
+  if (header === null || typeof header !== 'object') return false;
+  return header.origin === 'subagent' || header.parentSession !== undefined;
+}
+
+function execSessionId(exec) {
+  const id = exec?.agent?.session?.id;
+  return typeof id === 'string' && id !== '' ? id : null;
+}
+
+function reject(code, message) {
+  return new Error(`[${code}] ${message}`);
+}
+
+/**
+ * P2 预留：根路由 resolver 形状。
+ * `resolveStore(exec)` 返回 `{ok:true, store, entry}` 或 `{ok:false, code, message, root, rootId, reason}`。
+ * P1 不注入（默认单 store），只保证拒绝路径可测。
+ */
+function defaultResolver(store) {
+  return () => ({ ok: true, store, entry: null });
+}
+
+
 async function runWrite(store, args, exec) {
   const op = String(args?.op ?? '');
   const source = typeof args?.source === 'string' && args.source.trim() !== ''
@@ -195,9 +221,55 @@ async function runWrite(store, args, exec) {
 /**
  * 构造工具描述符与处理函数。
  *
- * @param {import('../memory/store.js').MemoryStore} store
+ * @param {import('../memory/store.js').MemoryStore|null} store 默认 store（P1 单根）
+ * @param {object} [options]
+ * @param {(exec:object)=>object} [options.resolveStore] P2 根路由（返回 {ok:true,store,entry} 或 {ok:false,code,message,...}）
+ * @param {(exec:object)=>boolean} [options.isSubagent] 子会话判定（默认看宿主 SessionHeader）
+ * @param {{append?:Function}} [options.audit] 根级拒绝审计（memory-tool-rejected）
  */
-export function createMemoryTools(store) {
+export function createMemoryTools(store, options = {}) {
+  const resolveStore = typeof options.resolveStore === 'function' ? options.resolveStore : defaultResolver(store);
+  const subagentOf = typeof options.isSubagent === 'function' ? options.isSubagent : isSubagentExec;
+  const audit = options.audit ?? null;
+
+  const rejectWith = (tool, exec, code, message, extra = {}) => {
+    try {
+      audit?.append?.('memory-tool-rejected', {
+        tool,
+        code,
+        sessionId: execSessionId(exec),
+        subagent: subagentOf(exec),
+        reason: extra.reason,
+        root: extra.root ?? null,
+        rootId: extra.rootId ?? null,
+      });
+    } catch {
+      /* 审计失败不得掩盖工具错误 */
+    }
+    return reject(code, message);
+  };
+
+  const storeFor = (tool, exec) => {
+    let resolved;
+    try {
+      resolved = resolveStore(exec);
+    } catch (error) {
+      throw rejectWith(tool, exec, 'ROOT_UNAVAILABLE', String(error?.message ?? error), { reason: 'resolver-threw' });
+    }
+    if (resolved === null || typeof resolved !== 'object' || resolved.ok !== true) {
+      const code = typeof resolved?.code === 'string' && resolved.code !== '' ? resolved.code : 'NO_ROOT';
+      const message = typeof resolved?.message === 'string' && resolved.message !== ''
+        ? resolved.message
+        : 'no project root for this session';
+      throw rejectWith(tool, exec, code, message, {
+        reason: resolved?.reason,
+        root: resolved?.root,
+        rootId: resolved?.rootId,
+      });
+    }
+    return resolved.store;
+  };
+
   return {
     [MEM_WRITE_NAME]: {
       definition: {
@@ -225,8 +297,18 @@ export function createMemoryTools(store) {
           }],
         },
         execute: async (args, exec) => {
+          if (subagentOf(exec)) {
+            throw rejectWith(
+              MEM_WRITE_NAME,
+              exec,
+              'SUBAGENT_NO_MEMORY_WRITE',
+              'subagent sessions may read memory but must not write it',
+              { reason: 'subagent' },
+            );
+          }
+          const target = storeFor(MEM_WRITE_NAME, exec);
           try {
-            return await runWrite(store, args, exec);
+            return await runWrite(target, args, exec);
           } catch (error) {
             throw toolError(error);
           }
@@ -270,19 +352,19 @@ export function createMemoryTools(store) {
             return [{ type: 'text', text: lines.join('\n') }];
           },
         },
-        execute: async (args) => {
+        execute: async (args, exec) => {
           if (Array.isArray(args?.ids) && args.ids.length > 20) {
             throw new Error('[BAD_ARGS] mem_query accepts at most 20 ids per call');
           }
+          const target = storeFor(MEM_QUERY_NAME, exec);
           const ids = Array.isArray(args?.ids) ? args.ids : undefined;
-          const result = store.query({
+          return target.query({
             ...(ids === undefined ? {} : { ids }),
             ...(args?.type === undefined ? {} : { type: args.type }),
             ...(args?.status === undefined ? {} : { status: args.status }),
             ...(args?.text === undefined ? {} : { text: args.text }),
             ...(args?.limit === undefined ? {} : { limit: args.limit }),
           });
-          return result;
         },
       },
     },
@@ -290,8 +372,8 @@ export function createMemoryTools(store) {
 }
 
 /** 注册到宿主 `ctx.tools`；返回注册结果，不因单个工具失败中断。 */
-export function registerMemoryTools(ctx, store) {
-  const tools = createMemoryTools(store);
+export function registerMemoryTools(ctx, store, options = {}) {
+  const tools = createMemoryTools(store, options);
   const registered = [];
   const failures = [];
   for (const { definition } of Object.values(tools)) {

@@ -644,7 +644,49 @@ export async function apply(ctx, rawConfig = {}) {
     };
 
     const store = await openStore(config);
-    const registration = registerMemoryTools(ctx, store);
+    // P1：mem_* 只允许本会话根 managed；unmanaged/no-root 必须拒绝（审核 ②）。
+    // P2 起这里的 store 由 per-root 池按会话根提供；接口形状不变。
+    const resolveStore = (exec) => {
+      if (registry === null) {
+        return {
+          ok: false,
+          code: 'ROOT_UNAVAILABLE',
+          message: 'persistence identity unavailable; memory routing is fail-closed',
+          reason: 'identity-unavailable',
+        };
+      }
+      const session = exec?.agent?.session ?? null;
+      const resolved = registry.resolveSessionRoot(session);
+      if (resolved.status === 'managed') return { ok: true, store, entry: resolved.entry };
+      if (resolved.status === 'no-root') {
+        return {
+          ok: false,
+          code: 'NO_ROOT',
+          message: 'no project root for this session',
+          reason: resolved.reason ?? 'no-git-ancestor',
+        };
+      }
+      const entry = resolved.entry;
+      if (entry !== null && entry.state === 'fail-closed') {
+        return {
+          ok: false,
+          code: 'ROOT_FAIL_CLOSED',
+          message: `root ${entry.root} is fail-closed: ${entry.failClosedReason ?? 'unknown'}`,
+          reason: entry.failClosedReason ?? 'fail-closed',
+          root: entry.root,
+          rootId: entry.rootId,
+        };
+      }
+      return {
+        ok: false,
+        code: 'ROOT_UNMANAGED',
+        message: `root ${entry?.root ?? 'unknown'} is registered but not managed in P1`,
+        reason: 'unmanaged-root',
+        root: entry?.root,
+        rootId: entry?.rootId,
+      };
+    };
+    const registration = registerMemoryTools(ctx, store, { resolveStore, audit: rootAudit });
     for (const failure of registration.failures) {
       ctx.logger?.warn?.(`[context-governance] tool ${failure.name} was not registered: ${failure.message}`);
     }
@@ -936,6 +978,8 @@ export async function apply(ctx, rawConfig = {}) {
       // 2a：根来源与持久化身份在 status 中可见（运行期数值，用 getter 不复制快照）。
       getRootInfo: () => rootInfo,
       getPersistenceIdentity: () => identity,
+      getRootsView: () => (registry === null ? null : registry.view()),
+      getRootCounts: () => (registry === null ? null : registry.counts()),
     };
     const commandRef = { current: registerStatusCommand(ctx, commandOptions) };
     const retryStatusCommand = () => {
@@ -1032,6 +1076,8 @@ export async function apply(ctx, rawConfig = {}) {
       getEarlyStatus: () => null,
       getRootInfo: () => rootInfo,
       getPersistenceIdentity: () => identity,
+      getRootsView: () => (registry === null ? null : registry.view()),
+      getRootCounts: () => (registry === null ? null : registry.counts()),
       logger: ctx.logger,
     });
   };

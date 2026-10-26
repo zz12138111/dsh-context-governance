@@ -191,6 +191,15 @@ export class RootRegistry {
     return entry.rootId === (this.#attachRootId ?? this.#state.primaryRootId);
   }
 
+  /**
+   * 根判定：**configRoot 优先匹配**（cwd 在其下 → 用配置根，即使更近处还有 `.git`），
+   * 否则按 cwd 上溯最近的 `.git` 祖先（需求 :460/:474）。
+   */
+  #rootForCwd(cwd) {
+    if (this.#configRoot !== null && cwdWithinRoot(cwd, this.#configRoot)) return this.#configRoot;
+    return inferRootFromCwd(cwd, { exclude: this.#home });
+  }
+
   #pin(sid, entry, source) {
     if (sid === null) return;
     this.#pins.delete(sid);
@@ -399,7 +408,7 @@ export class RootRegistry {
     if (cwd === '') {
       return { status: 'no-root', entry: null, source: null, isSubagent, cwd, reason: 'cwd-missing' };
     }
-    const root = inferRootFromCwd(cwd, { exclude: this.#home });
+    const root = this.#rootForCwd(cwd);
     if (root === null) {
       return { status: 'no-root', entry: null, source: null, isSubagent, cwd, reason: 'no-git-ancestor' };
     }

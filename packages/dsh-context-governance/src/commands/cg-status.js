@@ -90,7 +90,7 @@ function formatEarlyStatus(earlyStatus) {
   return `last-early: ${event}${reason}${effective}${at}`;
 }
 
-function statusText({ store, guard, audit, rootAudit = null, now, policy = null, earlyStatus = null, sessionId = null, rootInfo = null, identity = null }) {
+function statusText({ store, guard, audit, rootAudit = null, rootsView = null, rootCounts = null, now, policy = null, earlyStatus = null, sessionId = null, rootInfo = null, identity = null }) {
   const lines = [];
   const status = guard?.status ?? null;
   lines.push('context-governance status');
@@ -285,6 +285,26 @@ function statusText({ store, guard, audit, rootAudit = null, now, policy = null,
       `rotations=${rootAudit.rotations ?? 0} failures=${rootFailures.join(',') || 'none'} (this-process)`,
     );
   }
+  // P1：全部纳管根视图（只读；不打开 store、不建目录）。
+  if (rootCounts !== null) {
+    lines.push(
+      `roots: ${rootCounts.roots ?? 0} (active=${rootCounts.active ?? 0}, idle=${rootCounts.idle ?? 0}, ` +
+      `fail-closed=${rootCounts.failClosed ?? 0}${rootCounts.warn === true ? ', warn=over-threshold' : ''})`,
+    );
+  }
+  if (Array.isArray(rootsView)) {
+    for (const item of rootsView) {
+      const auditText = item.auditLast === null || item.auditLast === undefined
+        ? '-'
+        : `${item.auditLast.ts ?? '?'}(${item.auditLast.event ?? '?'})`;
+      const memoryText = item.memoryCount === null || item.memoryCount === undefined ? '-' : String(item.memoryCount);
+      const reason = item.state === 'fail-closed' && item.failClosedReason ? ` reason=${item.failClosedReason}` : '';
+      lines.push(
+        `  root: id=${item.rootId ?? '-'} name=${item.name ?? '-'} project=${item.project ?? '-'} ` +
+        `state=${item.state ?? '-'}${reason} memory=${memoryText} audit=${auditText}`,
+      );
+    }
+  }
   return lines.join('\n');
 }
 
@@ -293,7 +313,7 @@ function statusText({ store, guard, audit, rootAudit = null, now, policy = null,
  *
  * @param {{store?:object|null, guard?:object|null, getGuard?:() => object|null, audit?:object|null, now?:() => Date}} options
  */
-export function createStatusCommand({ store = null, guard = null, getGuard = null, audit = null, rootAudit = null, policy = null, now = () => new Date(), logger = null, getEarlyStatus = null, sessionIdOf = defaultSessionIdOf, getRootInfo = null, getPersistenceIdentity = null } = {}) {
+export function createStatusCommand({ store = null, guard = null, getGuard = null, audit = null, rootAudit = null, policy = null, now = () => new Date(), logger = null, getEarlyStatus = null, sessionIdOf = defaultSessionIdOf, getRootInfo = null, getPersistenceIdentity = null, getRootsView = null, getRootCounts = null } = {}) {
   const currentGuard = () => (typeof getGuard === 'function' ? getGuard() : guard);
 
   const parseBoolean = (text) => {
@@ -652,6 +672,8 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
         };
       }
       try {
+        const rootsView = typeof getRootsView === 'function' ? getRootsView() : null;
+        const rootCounts = typeof getRootCounts === 'function' ? getRootCounts() : null;
         return {
           kind: 'success',
           text: statusText({
@@ -659,6 +681,8 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
             guard: currentGuard(),
             audit,
             rootAudit,
+            rootsView,
+            rootCounts,
             now,
             policy,
             earlyStatus: typeof getEarlyStatus === 'function' ? getEarlyStatus() : null,
