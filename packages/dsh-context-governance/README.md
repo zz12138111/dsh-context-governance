@@ -119,7 +119,7 @@ packages/dsh-context-governance/
 - 审计 `audit.jsonl`：显式字段白名单（`src/audit.js` 的 `AUDIT_FIELD_WHITELIST`）；只写元数据，不写正文/标题；敏感字符串替换为 `[redacted:kind]`。
 - 写盘耗时：每次 `protectSync` 的 `durationMs` 进 audit 与 guard 样本；`/cg status` 显示 p50/p95；判据 p95>50ms 才考虑减 fsync，**不改异步**。
 - M1.2：`capability@apply`/`capability@ready` 两行能力探测（诊断 + audit，只记类型）；`tokenMeter` 延迟获取 + `assistant/message.usage` 兜底；`compaction-cost` 增加 `tokensBefore/AfterSource`（`tokenMeter`/`usage`/`none`）与可选 parts，`auditVersion` 自 0.1.11 起为 `cost-v1.1`；`/cg status` 增加 `last-cost:` 行。
-- T2′（0.1.12）：只读观测宿主 `compaction/prune`，写 `prune-observed`（工具名、阴影范围、token、replacementSeq、cycle）；`compaction-cost` 增 `tokensPruned`/`pruneCount`/`pruneTools`，`auditVersion=cost-v1.2`；`/cg status [last-cost]` 显示 `pruned=<tokens> tools=<top5>`。**不折叠、不改 content、不写落盘文件**。
+- T2′（0.1.12）：只读观测宿主 `compaction/prune`，写 `prune-observed`（工具名、阴影范围、token、replacementSeq、cycle）；`compaction-cost` 增 `tokensPruned`/`pruneCount`/`pruneTools`，`auditVersion=cost-v1.2`；`/cg last-cost` 显示 `pruned=<tokens> tools=<top5>`（旧写法 `/cg status last-cost` 会落到 usage；1.0.1 统一）。**不折叠、不改 content、不写落盘文件**。
 - 0.1.13：`batch-list` 判据收窄——只从人类 `user/message` 与 `assistant/message` 正文取“数字/数字”比例（排除 `tool/*`、JSON/代码块、日期）；没有比例判 `skip` 并写 `protection-skip`（`reason=no-ratio-in-user-messages`），不再空泛 pass；能力探测加 `get.compaction(strict=false)`（`obj`=有 impl 未 active / `undefined`=本 scope 未提供 / 不支持=`unknown`）。
 - 0.1.14：`batch-list` 改为**同消息绑定**——批次语义（`批次|进度|progress|batch`）与比例必须在同一条对话正文里，否则 `skip(no-batch-semantics)`；`YYYY/MM` 不算比例（`date-like-ratio`）；`stripStructuredPayload` 只剥像 JSON 的 `{…}`/`[…]`，正文 `{511/958}` 保留。判据原则：宁可 `skip` 不可 `fail`。
 - 0.1.15：后端识别补**事件形态推断**——原生 free-form → host-basic (inferred)、五段式 → context-zip (inferred)、混合 → mixed (unverified)；只进 /cg status/审计展示，功能路径不读推断。
@@ -146,7 +146,7 @@ packages/dsh-context-governance/
 
 样例输出（带 fixture 头）见 `../../analysis/req-20261025-09/samples-0.2.1.txt`（**示意/裁剪，非实跑**）；完整口径见 `../../docs/T5-状态命令与审计.md` §1.1–§1.5。
 
-**命令可用性（1.0）**：`/cg status` / `/cg roots` / `/cg policy show` / `/cg set` / `/cg profile` / `/cg header` / `/cg compact`。`/cg compact now`、`/cg cost` 仍未实现——当前对未知参数只返回 usage，不假装执行。
+**命令可用性（1.0）**：`/cg status` / `/cg roots` / `/cg policy show` / `/cg set` / `/cg profile` / `/cg header` / `/cg compact` / `/cg last-cost`。`/cg compact now`、`/cg cost` 仍未实现——当前对未知参数只返回 usage，不假装执行。
 
 ## 配置（bundle patch）
 
