@@ -5,7 +5,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/zz12138111/dsh-plugins.git",
+    "url": "git+https://github.com/zz12138111/dsh-context-governance.git",
     "directory": "packages/dsh-context-governance"
   },
   "description": "上下文治理（M1）：任务态记忆文件 + 压缩前后不断线。零硬依赖薄治理层，压缩沿用宿主或 context-zip。",
