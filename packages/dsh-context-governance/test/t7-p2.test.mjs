@@ -11,6 +11,7 @@ import { CompressionGuard } from '../src/compress/runtime.js';
 import { buildProtectionItems } from '../src/compress/protection-memory.js';
 import { apply, inject, resolveConfig } from '../src/index.js';
 import { MemoryStore } from '../src/memory/store.js';
+import { resolveScope } from '../src/scope.js';
 import { MEM_QUERY_NAME, MEM_WRITE_NAME } from '../src/tools/mem-tools.js';
 import { buildProtectionSnapshotFixture } from './p2-helpers.mjs';
 import { FIVE_SECTION_SUMMARY, buildCompaction, healthyMessages } from './compress-helpers.mjs';
@@ -50,12 +51,31 @@ async function withStore(fn) {
 
 const projectRoot = path.resolve('D:\\work\\demo');
 
+/** 1.0 #1：与生产同一份归域判定（index 注入 resolveScope）。 */
+const scopeResolver = (session) => resolveScope({
+  root: projectRoot,
+  cwd: session?.header?.cwd ?? session?.cwd ?? '',
+});
+
+async function flushMicrotasks() {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+async function readAudit(rootDir) {
+  try {
+    const text = await fs.readFile(path.join(rootDir, 'audit.jsonl'), 'utf8');
+    return text.split('\n').filter((line) => line.trim() !== '').map((line) => JSON.parse(line));
+  } catch {
+    return [];
+  }
+}
+
 function sessionWithCwd(cwd, id = 'session-p2') {
   return { id, header: { id, cwd }, surface: { nodes: [1, 2] }, eventAt: () => undefined, append: () => ({ seq: 99 }) };
 }
 
-test('P2-1：别的 cwd 的会话压缩被忽略，不写本记忆、不回注', async () => {
-  await withStore(async (store) => {
+test('P2-1：别的 cwd 的会话只记 host-native cost，不写本记忆、不回注', async () => {
+  await withStore(async (store, rootDir) => {
     const ctx = makeCtx();
     const guard = new CompressionGuard({
       ctx,
@@ -64,17 +84,28 @@ test('P2-1：别的 cwd 的会话压缩被忽略，不写本记忆、不回注',
       logger: ctx.logger,
       projectRoot,
       onlyProject: true,
+      resolveScope: scopeResolver,
     });
     guard.start();
     const foreign = sessionWithCwd('D:\\work\\other-project');
     ctx.handlers[0].handler(foreign, { type: 'compaction/start', seq: 1, data: { compactionId: 'cmp-foreign' } });
     ctx.handlers[0].handler(foreign, { type: 'compaction/end', seq: 2, data: { compactionId: 'cmp-foreign' } });
+    await flushMicrotasks();
     const status = guard.status;
     assert.equal(status.stats.starts, 0);
     assert.equal(status.stats.protectionWrites, 0);
     assert.equal(status.scope.ignoredForeignEvents, 2);
     assert.equal(status.scope.ignoredForeignSessions, 1);
+    assert.equal(status.scope.foreignCosts, 1);
     assert.equal(store.protectionPending, 0);
+    assert.equal(store.allEntries().length, 0, '外部会话不得写本地记忆条目');
+    const rows = await readAudit(rootDir);
+    const costs = rows.filter((entry) => entry.event === 'compaction-cost');
+    assert.equal(costs.length, 1, '外部会话真实压缩必须留一条成本行');
+    assert.equal(costs[0].source, 'host-native');
+    assert.equal(costs[0].sessionId, 'session-p2');
+    assert.equal(costs[0].project, undefined);
+    assert.equal(rows.some((entry) => /^protection-|^reinjection/.test(entry.event)), false);
     assert.ok(ctx.logs.some(([level, message]) => level === 'warn' && message.includes('ignoring session')));
     guard.stop();
   });
@@ -90,6 +121,7 @@ test('P2-1：同 cwd 会话照常处理；cwd 未知时放行但计数', async (
       logger: ctx.logger,
       projectRoot,
       onlyProject: true,
+      resolveScope: scopeResolver,
     });
     guard.start();
     const own = sessionWithCwd(projectRoot.toUpperCase(), 'session-own');
@@ -104,21 +136,39 @@ test('P2-1：同 cwd 会话照常处理；cwd 未知时放行但计数', async (
   });
 });
 
-test('P2-1：onlyProject=false 时全部会话都处理（显式 opt-out）', async () => {
-  await withStore(async (store) => {
-    const ctx = makeCtx();
-    const guard = new CompressionGuard({
-      ctx,
-      hostVersion: '0.2.1-rc.3',
-      store,
-      logger: ctx.logger,
-      projectRoot,
-      onlyProject: false,
-    });
-    guard.start();
-    ctx.handlers[0].handler(sessionWithCwd('D:\\work\\other'), { type: 'compaction/start', seq: 1, data: { compactionId: 'cmp-x' } });
-    assert.equal(guard.status.stats.starts, 1);
-    guard.stop();
+test('P2-1：onlyProject 只作展示——true/false 下外部会话都 skip（只记 host-native cost）', async () => {
+  await withStore(async (store, rootDir) => {
+    for (const onlyProject of [true, false]) {
+      const ctx = makeCtx();
+      const guard = new CompressionGuard({
+        ctx,
+        hostVersion: '0.2.1-rc.3',
+        store,
+        logger: ctx.logger,
+        projectRoot,
+        onlyProject,
+        resolveScope: scopeResolver,
+      });
+      guard.start();
+      const foreign = sessionWithCwd('D:\\work\\other', `session-op-${onlyProject}`);
+      ctx.handlers[0].handler(foreign, {
+        type: 'compaction/start', seq: 1, data: { compactionId: `cmp-op-${onlyProject}` },
+      });
+      ctx.handlers[0].handler(foreign, {
+        type: 'compaction/end', seq: 2, data: { compactionId: `cmp-op-${onlyProject}` },
+      });
+      await flushMicrotasks();
+      assert.equal(guard.status.stats.starts, 0, `onlyProject=${onlyProject}：外部不得进入保护/观测`);
+      assert.equal(guard.status.scope.foreignCosts, 1, `onlyProject=${onlyProject}：外部仍须记一条 cost`);
+      guard.stop();
+    }
+    assert.equal(store.protectionPending, 0);
+    assert.equal(store.allEntries().length, 0, '两种 onlyProject 下外部都不得写本地记忆');
+    const rows = await readAudit(rootDir);
+    const costs = rows.filter((entry) => entry.event === 'compaction-cost');
+    assert.equal(costs.length, 2);
+    assert.ok(costs.every((row) => row.source === 'host-native'));
+    assert.equal(rows.some((entry) => /^protection-|^reinjection/.test(entry.event)), false);
   });
 });
 
