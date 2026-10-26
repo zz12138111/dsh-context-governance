@@ -127,6 +127,8 @@ test('S1：即时命中——waitForReport 返回本 cycle 报告 → committed 
   assert.equal(forced.compaction, 'committed');
   assert.equal(forced.compactionId, 'host-uuid-new');
   assert.equal(forced.cycle, 'early-cycle-1');
+  // 审核 S1.1-④：命中路径不得写 early-report-wait。
+  assert.equal(audit.entries.some((entry) => entry.event === 'early-report-wait'), false, '命中时不得写诊断行');
 });
 
 test('S1：等待中命中——报告回来前只写 early-decision，回来后写 forced', async () => {
@@ -214,6 +216,94 @@ test('S1.1：过滤不匹配写 early-report-wait(mismatch)，仍写 unknown', a
   assert.equal(wait.reason, 'mismatch');
   assert.equal(wait.waitedMs, 7);
   assert.equal(wait.cycle, 'early-cycle-6');
+});
+
+test('S1.1：报告 600ms 后才 resolve → wiring 仍写 committed + host compactionId', async () => {
+  const guard = makeGuard({
+    lastReport: { compactionId: 'old', sessionId: 's1', compaction: 'skipped', protection: 'ok', failures: [], reinjected: null },
+  });
+  guard.preProtect = async () => ({ ok: true, cycleKey: 'early-cycle-7' });
+  guard.markEarlyAccepted = () => {};
+  guard.waitForReport = () => new Promise((resolve) => {
+    setTimeout(() => resolve({
+      ok: true,
+      reason: 'none',
+      waitedMs: 600,
+      report: {
+        compactionId: 'host-uuid-600',
+        sessionId: 's1',
+        cycle: 'early-cycle-7',
+        compaction: 'committed',
+        protection: 'ok',
+        failures: [],
+        reinjected: true,
+      },
+    }), 600);
+  });
+  const { ctx } = makeCtx({ engine: makeEngine() });
+  const audit = makeAudit();
+  const wiring = wireEarlyCompaction({
+    ctx, getGuard: () => guard, getPolicy: () => POLICY, audit, getArmed: () => true, now: () => 0,
+  });
+  await wiring.check({ id: 's1' });
+  const forced = audit.entries.find((entry) => entry.event === 'early-forced');
+  assert.equal(forced.compaction, 'committed', '600ms 迟到也必须写成 committed');
+  assert.equal(forced.compactionId, 'host-uuid-600');
+  assert.equal(audit.entries.some((entry) => entry.event === 'early-report-wait'), false);
+});
+
+test('S1.1：waitForReport 抛错 → early-report-wait(error) + unknown，不抛给主流程', async () => {
+  const guard = makeGuard({
+    lastReport: { compactionId: 'old', sessionId: 's1', compaction: 'committed', protection: 'ok', failures: [], reinjected: true },
+  });
+  guard.preProtect = async () => ({ ok: true, cycleKey: 'early-cycle-8' });
+  guard.markEarlyAccepted = () => {};
+  guard.waitForReport = () => Promise.reject(new Error('wait exploded'));
+  const { ctx } = makeCtx({ engine: makeEngine() });
+  const audit = makeAudit();
+  const wiring = wireEarlyCompaction({
+    ctx, getGuard: () => guard, getPolicy: () => POLICY, audit, getArmed: () => true, now: () => 0,
+  });
+  await assert.doesNotReject(() => wiring.check({ id: 's1' }));
+  const forced = audit.entries.find((entry) => entry.event === 'early-forced');
+  assert.equal(forced.compaction, 'unknown');
+  assert.equal(forced.compactionId, null, '不得抄 prevReport 的 old');
+  const wait = audit.entries.find((entry) => entry.event === 'early-report-wait');
+  assert.equal(wait.reason, 'error');
+  assert.equal(wait.cycle, 'early-cycle-8');
+  assert.equal(Number.isInteger(wait.waitedMs), true, `waitedMs 必须是整数毫秒，实际 ${wait.waitedMs}`);
+  assert.equal(wait.waitedMs >= 0, true);
+});
+
+test('S1.1：ok=false 时即使带报告也不采用（以 ok 为准）', async () => {
+  const guard = makeGuard({
+    lastReport: { compactionId: 'old', sessionId: 's1', compaction: 'skipped', protection: 'ok', failures: [], reinjected: null },
+  });
+  guard.preProtect = async () => ({ ok: true, cycleKey: 'early-cycle-9' });
+  guard.waitForReport = () => Promise.resolve({
+    ok: false,
+    reason: 'timeout',
+    report: {
+      compactionId: 'host-uuid-half-baked',
+      sessionId: 's1',
+      cycle: 'early-cycle-9',
+      compaction: 'committed',
+      protection: 'ok',
+      failures: [],
+      reinjected: true,
+    },
+    waitedMs: 5,
+  });
+  const { ctx } = makeCtx({ engine: makeEngine() });
+  const audit = makeAudit();
+  const wiring = wireEarlyCompaction({
+    ctx, getGuard: () => guard, getPolicy: () => POLICY, audit, getArmed: () => true, now: () => 0,
+  });
+  await wiring.check({ id: 's1' });
+  const forced = audit.entries.find((entry) => entry.event === 'early-forced');
+  assert.equal(forced.compaction, 'unknown', 'ok=false 不得因 report 非空就写 committed');
+  assert.equal(forced.compactionId, null);
+  assert.equal(audit.entries.find((entry) => entry.event === 'early-report-wait').reason, 'timeout');
 });
 
 test('S1：跨会话/跨 cycle 的报告不得写进本会话 early-forced', async () => {

@@ -146,7 +146,7 @@ export class CompressionGuard {
   #reports = [];
   /** S1：已写完保护/回注、可供 early 审计读取的本 cycle 报告 id。 */
   #readyReports = new Set();
-  /** S1：等待本 cycle 报告的 early 接线（最多 500ms）。 */
+  /** S1.1：等待本 cycle 报告的 early 接线（最多 `EARLY_REPORT_WAIT_MS`，当前 3000ms）。 */
   #reportWaiters = new Set();
   #unsubscribe = null;
   #started = false;
@@ -760,7 +760,8 @@ export class CompressionGuard {
    * 返回 `{ ok, reason, report, waitedMs }`，`reason ∈ 'timeout' | 'mismatch' | 'none'`：
    * - `none`：拿到本 cycle 的新报告（`ok=true`）；
    * - `timeout`：等待窗口内没有出现任何新候选报告；
-   * - `mismatch`：出现过新候选报告，但会话/周期/ready 过滤不匹配（被别的会话抢先等）。
+   * - `mismatch`：**等待期间**收到过新候选报告，但会话/周期/ready 过滤不匹配（被别的会话抢先等）；
+   *   进入等待前已存在的旧报告不算候选（否则纯 timeout 会被误报）。
    * 失败只返回 `ok=false`，不抛错、不阻塞 turn；由调用方写 `unknown` + 诊断审计。
    *
    * @param {{previousCompactionId?: string|null, sessionId?: string|null, cycleKey?: string|null, timeoutMs?: number}} [input]
@@ -796,7 +797,7 @@ export class CompressionGuard {
       if (isFresh(report)) {
         return Promise.resolve({ ok: true, reason: 'none', report: cloneJson(report), waitedMs: waited() });
       }
-      if (isCandidate(report)) sawCandidate = true;
+      // 审核 S1.1-①：进入等待前已有的旧报告不得标成候选，否则纯 timeout 会被误报成 mismatch。
     }
     return new Promise((resolve) => {
       let timer = null;

@@ -277,10 +277,12 @@ export function wireEarlyCompaction(options = {}) {
     let report = null;
     // S1.1：等待结论只用于诊断审计，不参与 accepted 判定、不增加 compactNow 调用。
     let waitOutcome = null;
+    let waitStartedAt = 0;
     if (result.accepted === true) {
       try {
         // S1：有 guard 的 waitForReport 就等本 cycle 的完整报告；老 guard/旧测试无此方法时保留即时读取。
         if (typeof guard?.waitForReport === 'function') {
+          waitStartedAt = Date.now();
           const awaited = await guard.waitForReport({
             previousCompactionId: prevReport?.compactionId ?? null,
             sessionId,
@@ -289,7 +291,8 @@ export function wireEarlyCompaction(options = {}) {
           });
           // S1.1：新形状 { ok, reason, report, waitedMs }；旧 guard/桩仍可能返回裸报告或 null。
           if (awaited !== null && typeof awaited === 'object' && typeof awaited.ok === 'boolean' && 'report' in awaited) {
-            report = awaited.report ?? null;
+            // 审核 S1.1-⑥：ok:false 时一律不取 report（以 ok 为准，避免半成品报告被当成命中）。
+            report = awaited.ok === true ? (awaited.report ?? null) : null;
             waitOutcome = {
               reason: awaited.reason ?? (report === null ? 'timeout' : 'none'),
               waitedMs: Number(awaited.waitedMs) || 0,
@@ -307,7 +310,8 @@ export function wireEarlyCompaction(options = {}) {
         logger?.warn?.(`[context-governance] early report wait failed: ${String(error?.message ?? error)}`);
         report = null;
         // 只有该异常分支会写 'error'（不属于 waitForReport 的 timeout/mismatch/none 枚举）。
-        waitOutcome = { reason: 'error', waitedMs: 0 };
+        // waitedMs 记真实 elapsed；waitStartedAt=0（未进入等待）时按未计时 0 处理。
+        waitOutcome = { reason: 'error', waitedMs: waitStartedAt === 0 ? 0 : Math.max(0, Date.now() - waitStartedAt) };
       }
     }
     // 双保险：即使 guard 返回了别的会话/周期，也不能写进本会话的 early-forced。

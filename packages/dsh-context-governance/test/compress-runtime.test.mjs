@@ -163,6 +163,22 @@ test('S1.1：waitForReport 区分 mismatch（别的会话抢先报告）', async
   guard.stop();
 });
 
+test('S1.1：等待前已有的旧报告不算候选——纯等待仍记 timeout', async () => {
+  const ctx = makeCtx(new BasicCompactionEngine());
+  const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.2' });
+  guard.start();
+  const built = buildCompaction({ before: healthyMessages(), summary: FREE_FORM_SUMMARY, start: 2, end: 11 });
+  // 预置一条已 ready 的报告，但不属于本次等待的会话（多会话同根）。
+  emitAll(ctx, built);
+  await flushEnd();
+  const pending = guard.waitForReport({ previousCompactionId: null, sessionId: 'session-other', timeoutMs: 20 });
+  const outcome = await pending;
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.reason, 'timeout', '进入等待前的旧报告不得标成 mismatch');
+  assert.equal(outcome.report, null);
+  guard.stop();
+});
+
 test('context-zip：识别五段摘要并保持 full', async () => {
   const ctx = makeCtx(new ContextZipEngine());
   const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.2', backendVersion: '0.1.10' });
