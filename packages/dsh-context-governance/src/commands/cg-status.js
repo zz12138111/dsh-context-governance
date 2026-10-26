@@ -8,6 +8,7 @@
 import { resolveBackendFields } from '../compress/adapters.js';
 import {
   CONFIG_ONLY_KEYS,
+  PROFILE_NAMES,
   SESSION_KEYS,
   collectInvalid,
   computePressure,
@@ -89,6 +90,14 @@ function statusText({ store, guard, audit, now, policy = null, earlyStatus = nul
   if (policy !== null && typeof policy.resolve === 'function') {
     resolvedPolicy = policy.resolve(sessionId);
     lines.push(`policy: ${summarizePolicy(resolvedPolicy)}`);
+    // 1b：本会话生效 profile 与来源（不持久化；重启回配置/默认）。
+    if (typeof policy.profileInfo === 'function') {
+      const info = policy.profileInfo(sessionId);
+      lines.push(
+        `profile: ${info.profile === '' ? '(none)' : info.profile} (source=${info.source}` +
+        `${sessionId === null ? '; session-level: unavailable (no session id)' : ''})`,
+      );
+    }
     // 0.2.1（DEC-20261025-66）：current / conservative / 来源 / 时间；不一致时明示校验口径。
     if (resolvedPolicy.window !== undefined) lines.push(summarizeWindow(resolvedPolicy.window));
     const rejected = collectInvalid(policy, resolvedPolicy);
@@ -254,7 +263,8 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
       return { kind: 'error', text: '[context-governance] session layer is unavailable (policy not wired)' };
     }
     if (sessionId === null) return { kind: 'error', text: NO_SESSION_TEXT };
-    const sessionValues = policy.sessionValues(sessionId, { create: true });
+    // 读不建桶：非法键/被拒的 set 不得留下空会话桶。
+    const sessionValues = policy.sessionValues(sessionId, { create: false });
     if (argText === '' || argText === 'show' || argText === 'list') {
       return {
         kind: 'success',
@@ -350,17 +360,19 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
       next[key] = parsed.value;
     }
     // 先写会话层再整体求解：<0.30 未确认会被 resolve 回退，此时撤销并明确报错。
-    const previous = { ...sessionValues };
-    for (const key of Object.keys(sessionValues)) delete sessionValues[key];
-    Object.assign(sessionValues, next);
+    // 只有校验全部通过后才建桶，避免非法键留下空桶。
+    const bucket = policy.sessionValues(sessionId, { create: true });
+    const previous = { ...bucket };
+    for (const key of Object.keys(bucket)) delete bucket[key];
+    Object.assign(bucket, next);
     const resolved = policy.resolve(sessionId);
     // P3-2：只判本次会话层引入的未确认（配置层本来就 0.25 时，不该连 /cg set compact.early 都挡住）。
     const blocking = resolved.invalid.find(
       (item) => item.reason === 'low-threshold-unacked' && item.source === 'session',
     );
     if (blocking !== undefined) {
-      for (const key of Object.keys(sessionValues)) delete sessionValues[key];
-      Object.assign(sessionValues, previous);
+      for (const key of Object.keys(bucket)) delete bucket[key];
+      Object.assign(bucket, previous);
       const atValue = next['compact.at'] ?? previous['compact.at'];
       return {
         kind: 'error',
@@ -376,7 +388,7 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
       text: [
         'context-governance set',
         `applied: ${pairs.map(([key, value]) => `${key}=${value}`).join(', ')}`,
-        `session: ${sessionText(sessionValues)}`,
+        `session: ${sessionText(bucket)}`,
         `policy: ${summarizePolicy(resolved)}`,
       ].join('\n'),
     };
@@ -386,11 +398,46 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
     definitionId: CG_COMMAND_DEFINITION_ID,
     name: CG_COMMAND_NAME,
     description: '上下文治理状态：后端/能力、策略链、记忆、上次压缩与回注、prune 成本、写盘 p50/p95、审计',
-    input: { hint: 'status | status last-cost | policy show | set <key>=<value> | set reset | header on|off' },
+    input: { hint: 'status | status last-cost | policy show | set <key>=<value> | set reset | header on|off | profile <batch|coding|review|research>|reset' },
     handler: async (invocation = {}) => {
       const raw = String(invocation.rawInput ?? '').trim();
       const resolvedSessionId = typeof sessionIdOf === 'function' ? sessionIdOf(invocation) : null;
       const sessionId = typeof resolvedSessionId === 'string' && resolvedSessionId !== '' ? resolvedSessionId : null;
+      // 1b：profile 按会话（入口为本命令；不持久化，重启回配置/默认）。
+      if (raw === 'profile' || raw.startsWith('profile ')) {
+        if (policy === null || typeof policy.resolve !== 'function' || typeof policy.profileInfo !== 'function') {
+          return { kind: 'error', text: '[context-governance] profile layer is unavailable (policy not wired)' };
+        }
+        const arg = raw.slice('profile'.length).trim();
+        if (arg === '' || arg === 'status') {
+          const info = policy.profileInfo(sessionId);
+          const suffix = sessionId === null ? '; session-level: unavailable (no session id)' : '';
+          return {
+            kind: 'success',
+            text: `context-governance profile\nprofile: ${info.profile === '' ? '(none)' : info.profile} (source=${info.source}${suffix})`,
+          };
+        }
+        if (sessionId === null) return { kind: 'error', text: NO_SESSION_TEXT };
+        if (arg === 'reset' || arg === 'none') {
+          policy.setSessionProfile(sessionId, null);
+          audit?.append?.('policy-set', { source: 'session', key: 'profile', value: 'reset' });
+          // 不硬编码 none：清除后生效值可能是配置 profile（如 research），必须重新取。
+          const info = policy.profileInfo(sessionId);
+          return {
+            kind: 'success',
+            text: `context-governance profile\nprofile: ${info.profile === '' ? '(none)' : info.profile} (source=${info.source})`,
+          };
+        }
+        if (!PROFILE_NAMES.includes(arg)) {
+          return {
+            kind: 'error',
+            text: `context-governance profile: 未知档位 ${arg}（可用：${PROFILE_NAMES.join(', ')}；reset 清空）`,
+          };
+        }
+        policy.setSessionProfile(sessionId, arg);
+        audit?.append?.('policy-set', { source: 'session', key: 'profile', value: arg });
+        return { kind: 'success', text: `context-governance profile\nprofile: ${arg} (source=session)` };
+      }
       if (raw === 'header' || raw.startsWith('header ')) {
         if (policy === null || typeof policy.resolve !== 'function' || typeof policy.sessionValues !== 'function') {
           return { kind: 'error', text: '[context-governance] session layer is unavailable (policy not wired)' };
@@ -469,9 +516,17 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
             typeof policy.sessionValues === 'function' ? policy.sessionValues(sessionId, { create: false }) : {},
             rejectedSessionKeys(resolved),
           )}`;
+        const profileLine = typeof policy.profileInfo === 'function'
+          ? (() => {
+            const info = policy.profileInfo(sessionId);
+            return `profile: ${info.profile === '' ? '(none)' : info.profile} (source=${info.source}` +
+              `${sessionId === null ? '; session-level: unavailable (no session id)' : ''})`;
+          })()
+          : null;
         const lines = [
           'context-governance policy',
           summarizePolicy(resolved),
+          ...(profileLine === null ? [] : [profileLine]),
           `layers: ${layerChain(policy, sessionId === null ? null : (
             typeof policy.sessionValues === 'function' ? policy.sessionValues(sessionId) : {}
           ))}`,
@@ -501,6 +556,7 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
         return {
           kind: 'error',
           text: 'Usage: /cg status [last-cost] | /cg policy show | /cg set <key>=<value> | /cg set reset' +
+            ' | /cg header [status|on|off] | /cg compact [status|arm|disarm] | /cg profile [status|reset|<name>]' +
             '   (未指定参数时等价于 /cg status)',
         };
       }

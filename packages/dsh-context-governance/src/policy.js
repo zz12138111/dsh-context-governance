@@ -45,6 +45,9 @@ export const PROFILE_PRESETS = Object.freeze({
   research: Object.freeze({ 'compact.early': false }),
 });
 
+/** 合法 profile 名（单一来源；命令校验与文档都从这里取）。 */
+export const PROFILE_NAMES = Object.freeze(Object.keys(PROFILE_PRESETS));
+
 export const NATIVE_DEFAULT_RATIO = 0.6785;
 export const NATIVE_HEADROOM_TOKENS = 65536;
 export const NATIVE_RATIO_CAP = 0.8;

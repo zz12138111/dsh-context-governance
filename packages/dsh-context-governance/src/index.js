@@ -287,16 +287,28 @@ export function buildPolicyState(config, deps = {}) {
   }
   layers.push(project);
   // 1a：会话层按 sessionId 分桶（进程内存；重启清空）。读不建桶、写才建桶。
+  // 1b：同一 registry 条目扩为 { values, profile }，不另起存储。
   const sessionLayers = new Map();
   const EMPTY_SESSION_VALUES = Object.freeze({});
-  const sessionValuesFor = (sessionId, { create = false } = {}) => {
-    if (typeof sessionId !== 'string' || sessionId === '') return EMPTY_SESSION_VALUES;
-    let values = sessionLayers.get(sessionId);
-    if (values === undefined && create) {
-      values = {};
-      sessionLayers.set(sessionId, values);
+  const ensureSessionEntry = (sessionId, { create = false } = {}) => {
+    if (typeof sessionId !== 'string' || sessionId === '') return null;
+    let entry = sessionLayers.get(sessionId);
+    if (entry === undefined && create) {
+      entry = { values: {}, profile: null };
+      sessionLayers.set(sessionId, entry);
     }
-    return values ?? EMPTY_SESSION_VALUES;
+    return entry ?? null;
+  };
+  const sessionValuesFor = (sessionId, { create = false } = {}) => {
+    const entry = ensureSessionEntry(sessionId, { create });
+    return entry?.values ?? EMPTY_SESSION_VALUES;
+  };
+  const sessionProfileFor = (sessionId) => ensureSessionEntry(sessionId)?.profile ?? null;
+  const setSessionProfile = (sessionId, profile) => {
+    const entry = ensureSessionEntry(sessionId, { create: true });
+    if (entry === null) return false;
+    entry.profile = typeof profile === 'string' && profile !== '' ? profile : null;
+    return true;
   };
   // 0.2.1（DEC-20261025-66 / 68）：窗口由运行时观察；每次 resolve 现算 native（不锁 apply）。
   // P2-3：`/cg set` 被拒的 transient（每 episode 去重；窗口恢复时清空），不写进 build 期的 state.invalid。
@@ -323,8 +335,17 @@ export function buildPolicyState(config, deps = {}) {
     const degenerate = checkNative === null;
     const degenerateTokens = conservative?.tokens ?? configWindow;
     const runtimeInvalid = [];
+    // 1b：profile 按会话解析（会话覆盖 > 配置 > 无）；替换构建期写入的全局 profile 层。
+    const sessionProfile = sessionProfileFor(sessionId);
+    const effectiveProfile = sessionProfile ?? config.policy.profile;
+    const effectiveProfileLayer = profileLayer(effectiveProfile);
+    const baseLayers = layers.filter((layer) => !String(layer.source).startsWith('profile='));
     const sessionLayer = { source: 'session', values: sessionValuesFor(sessionId) };
-    const filtered = [...layers, sessionLayer].map((layer) => {
+    const filtered = [
+      ...(effectiveProfileLayer === null ? [] : [effectiveProfileLayer]),
+      ...baseLayers,
+      sessionLayer,
+    ].map((layer) => {
       const values = { ...layer.values };
       const at = values['compact.at'];
       if (at !== undefined) {
@@ -392,6 +413,17 @@ export function buildPolicyState(config, deps = {}) {
     sessionValues: sessionValuesFor,
     /** 1a：按会话取“会话层”形状（供 resolve/展示复用）。 */
     sessionLayerFor: (sessionId) => ({ source: 'session', values: sessionValuesFor(sessionId) }),
+    /** 1b：按会话 profile 覆盖值（无则 null；不读全局）。 */
+    sessionProfileFor,
+    /** 1b：写会话 profile（null/'' = 清除；重启不持久）。 */
+    setSessionProfile,
+    /** 1b：本会话生效 profile 与来源（session > config > default）。 */
+    profileInfo: (sessionId) => {
+      const sessionProfile = sessionProfileFor(sessionId);
+      const name = sessionProfile ?? (config.policy.profile ?? '');
+      const source = sessionProfile !== null ? 'session' : (name === '' ? 'default' : 'config');
+      return { profile: name, source };
+    },
     /** 1a：当前进程内已有覆盖的会话（只读快照，供测试/诊断）。 */
     sessionIds: () => [...sessionLayers.keys()],
     windowTokens: config.policy.windowTokens,
