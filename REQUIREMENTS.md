@@ -438,10 +438,10 @@
 |---|---|---|---|
 | A5 | 会话级止损命令 | `/cg compact arm` / `/cg compact disarm`；`docs/1.0-状态定义-v1.md:66`；`TASKS/REQ-20261025-09-提前压启用-拆解.md:42` | 已录（见补定义 D2） |
 | B5 | 会话层可设键 | 参数表「可 `/cg set`」列（`docs/M2-需求草案-v0.6.md:61-70`）：`compact.at` / `compact.early` / `compact.early.armed` / `compact.cooldownMin` / `compact.minDeltaTokens` / `cost.remainingTurns` / `reinject.maxChars`、`maxLines`；`compact.estimateSafety` / `compact.lowThresholdAck` 仅配置文件 | 已录 |
-| C5 | profile 打标入口 | 派生文档只写「按会话打标」（`docs/M2-需求草案-v0.6.md:164-165`），**未定入口形态** | **待定** |
+| C5 | profile 打标入口 | **已定（需求侧判定 D7）**：入口形态**由实现定**（命令 / 会话元数据 / 配置键均可），需求只约束效果——按会话隔离、`/cg status` 显示本会话 profile 与来源、设置立即生效（草案 `R-PROFILE-2`，草案未生效、用户可推翻） | **已定（需求侧）** |
 | D4 | 配置级关闭 | `compact.early.armed=false`（加载后全局）；与会话级（A5）、策略级（`compact.early=false`）构成三层（见补定义 E5） | 已录 |
 | E1 | `compact.early.armed` 参数 | 默认 `true`、来源 `default`；项目层出现一律不生效（忽略 + `policy-invalid`，不清空整层）（`docs/1.0-状态定义-v1.md:39,65`） | 已录（参数表已加行） |
-| E2 | 「本项目」判定 | 主单无定义；现有观测口径仅 `:467`「最近观察到的本项目会话」，判定方式未定 | **待定** |
+| E2 | 「本项目」判定 | **已定（需求侧，规则）**：本项目 = 项目根下的会话（单根模型：`R-MEMROOT-2` 根固定/推断并持久化 + `R-SCOPE-1` 据此判 `foreign-session`；草案未生效）；**根来源 A/B（空推断 vs 显式配置）本身待 D9（用户定）** | **已定（规则）/ 待定（根来源）** |
 | E4 | 默认值调整规则 | 全仓无「默认值变更/记录要求」规定；现状默认值见参数表 | **待定** |
 
 ### 会话特点与偏好
