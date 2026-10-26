@@ -58,29 +58,51 @@ test('0.2.4 T1：会话层命令可开可关，优先级高于配置；policy.ea
 });
 
 test('0.2.4 T1：/cg compact arm|disarm 只改会话层，写 early-armed/disarmed 审计', async () => {
-  const sessionLayer = { source: 'session', values: {} };
+  const SID = 'session-abcdef0123456789';
+  const sessions = new Map();
+  const sessionValues = (id, { create = false } = {}) => {
+    if (typeof id !== 'string' || id === '') return {};
+    let values = sessions.get(id);
+    if (values === undefined && create) {
+      values = {};
+      sessions.set(id, values);
+    }
+    return values ?? {};
+  };
   const audit = { entries: [], append(event, details) { this.entries.push({ event, ...details }); } };
   const policy = {
-    sessionLayer,
     native: 0.6934,
     validationNative: () => 0.6934,
-    resolve: () => resolvePolicy([sessionLayer], { native: 0.6934 }),
+    sessionValues,
+    resolve: (id = null) => resolvePolicy([{ source: 'session', values: sessionValues(id) }], { native: 0.6934 }),
   };
   const command = createStatusCommand({ policy, audit, now: () => new Date('2026-10-26T00:00:00Z') });
 
-  const off = await command.handler({ rawInput: 'compact disarm', sessionId: 'session-abcdef0123456789' });
+  // 生产形状：invocation.agent.session.id（不读 invocation.sessionId）。
+  const off = await command.handler({ rawInput: 'compact disarm', agent: { session: { id: SID } } });
   assert.equal(off.kind, 'success');
-  assert.equal(sessionLayer.values['compact.early.armed'], false);
+  assert.equal(sessionValues(SID)['compact.early.armed'], false);
   assert.equal(audit.entries[0].event, 'early-disarmed');
   assert.equal(audit.entries[0].source, 'session');
-  assert.equal(audit.entries[0].sessionId, 'session-abcdef0123456789');
+  assert.equal(audit.entries[0].sessionId, SID, '审计 sessionId 写全 id（与 early-forced 一致）');
+  assert.equal(audit.entries[0].sessionShortId, 'abcdef01', '审计 sessionShortId 复用 policy.shortSessionId');
 
-  const on = await command.handler({ rawInput: 'compact arm', sessionId: 'session-abcdef0123456789' });
+  const on = await command.handler({ rawInput: 'compact arm', agent: { session: { id: SID } } });
   assert.equal(on.kind, 'success');
-  assert.equal(sessionLayer.values['compact.early.armed'], true);
+  assert.equal(sessionValues(SID)['compact.early.armed'], true);
   assert.equal(audit.entries[1].event, 'early-armed');
 
-  const denied = await command.handler({ rawInput: 'set compact.early.armed=true' });
+  const denied = await command.handler({
+    rawInput: 'set compact.early.armed=true',
+    agent: { session: { id: SID } },
+  });
   assert.equal(denied.kind, 'error');
   assert.match(denied.text, /\/cg set 修改|只能在配置文件改/);
+
+  // R-SESSION-2：无会话标识 → 明示不可用、拒绝、不建桶。
+  const before = sessions.size;
+  const noSession = await command.handler({ rawInput: 'compact disarm' });
+  assert.equal(noSession.kind, 'error');
+  assert.match(noSession.text, /会话级不可用/);
+  assert.equal(sessions.size, before, '无 session 标识不得写入任何桶');
 });

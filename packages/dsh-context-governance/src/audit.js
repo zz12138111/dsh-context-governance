@@ -23,6 +23,7 @@ export const MAX_AUDIT_MAX_BYTES = 1024 * 1024 * 1024;
 /** 允许出现在审计里的字段（白名单）。`ts`/`event` 由 AuditLog 生成。 */
 export const AUDIT_FIELD_WHITELIST = Object.freeze({
   sessionId: 'id',
+  sessionShortId: 'id',
   compactionId: 'id',
   cycle: 'id',
   manual: 'boolean',

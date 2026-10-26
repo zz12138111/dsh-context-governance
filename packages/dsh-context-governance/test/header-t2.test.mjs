@@ -121,15 +121,19 @@ test('T2 /cg header off 后完全不注入（不是空包裹）', async () => {
     enabled: true,
     hasRuleFile: true,
     now: NOW,
-    isEnabled: () => state.resolve().values['header.enabled'] !== false,
+    // 1a：isEnabled 按会话（header 开关是会话级键）。
+    isEnabled: (session) => state.resolve(session?.id ?? null).values['header.enabled'] !== false,
   });
   const handler = handlers.find((item) => item.event === 'agent/pre-step').handler;
   const command = createStatusCommand({ policy: state, now: () => new Date('2026-10-26T00:00:00Z') });
-  const off = await command.handler({ rawInput: 'header off' });
+  const off = await command.handler({ rawInput: 'header off', agent: { session: { id: 'session-off' } } });
   assert.equal(off.kind, 'success');
   assert.match(off.text, /header: off/);
   const decision = await handler({ agent: { session: { id: 'session-off' } }, step: 1 }, async () => ({ kind: 'accept', messages: [] }));
   assert.equal(decision.messages.length, 0, 'off 后必须完全不注入');
+  // 另一个会话不受影响（1a 隔离）
+  const other = await handler({ agent: { session: { id: 'session-other' } }, step: 1 }, async () => ({ kind: 'accept', messages: [] }));
+  assert.equal(other.messages.length, 1, 'B 会话仍应注入 header');
 });
 
 test('T2 P2-1/P2-2：固定冲突声明行 + wrapper 标 state-only+preference + 偏好行自标非硬规则', () => {

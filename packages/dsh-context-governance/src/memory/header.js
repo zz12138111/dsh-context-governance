@@ -148,7 +148,7 @@ function isSubagentPayload(payload) {
  * @param {object} ctx 插件上下文（需要 `on`；`logger` 可选）
  * @param {object} store MemoryStore
  * @param {{
- *   enabled?: boolean, isEnabled?: () => boolean, hasRuleFile?: boolean,
+ *   enabled?: boolean, isEnabled?: (session: object|null) => boolean, hasRuleFile?: boolean,
  *   maxLines?: number, maxChars?: number, oldAgeDays?: number, oldLimit?: number,
  *   onInjected?: (header: object) => void,
  * }} [options]
@@ -157,7 +157,7 @@ export function registerMemoryHeader(ctx, store, options = {}) {
   if (options.enabled !== true) return { registered: false, reason: 'disabled-by-config' };
   if (typeof ctx?.on !== 'function') return { registered: false, reason: 'ctx.on is unavailable' };
   const seen = new Set();
-  const enabledNow = () => (typeof options.isEnabled === 'function' ? options.isEnabled() !== false : true);
+  const enabledNow = (session) => (typeof options.isEnabled === 'function' ? options.isEnabled(session) !== false : true);
   try {
     ctx.on('agent/pre-step', async (payload, next) => {
       const decision = await next();
@@ -165,9 +165,10 @@ export function registerMemoryHeader(ctx, store, options = {}) {
       // `{...undefined, messages}` 会造出没有 kind 的 decision，宿主读 decision.kind 直接崩。
       if (decision === null || typeof decision !== 'object' || !('kind' in decision)) return decision;
       try {
-        if (!enabledNow()) return decision;
         const session = payload?.agent?.session ?? null;
         const sessionId = typeof session?.id === 'string' ? session.id : null;
+        // 1a：header 开关按会话判定（isEnabled 收 session）。
+        if (!enabledNow(session)) return decision;
         if (sessionId === null || payload?.step !== 1 || seen.has(sessionId)) return decision;
         if (decision.kind === 'reject') return decision;
         if (isSubagentPayload(payload)) return decision; // 子会话默认不注入

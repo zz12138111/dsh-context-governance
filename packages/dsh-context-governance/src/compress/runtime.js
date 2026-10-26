@@ -567,8 +567,17 @@ export class CompressionGuard {
    * 只读，不触发压缩、不改任何状态；比例换算与 safety 系数在命令侧（policy.computePressure）。
    */
   pressure() {
-    const session = this.#lastSession;
-    if (session === null) return { sessionId: null, seq: null, measuredTokens: null, estimatedTokens: null };
+    return this.pressureFor(this.#lastSession);
+  }
+
+  /**
+   * 1a/#9：按指定会话取压力（未观察到该会话时各值为 null，不回落“最近会话”）。
+   * 供 early-wiring 在 turn/end 时按发起会话判定，避免用别的会话的压力。
+   */
+  pressureFor(session) {
+    if (session === null || session === undefined) {
+      return { sessionId: null, seq: null, measuredTokens: null, estimatedTokens: null };
+    }
     const key = this.#sessionKey(session);
     const usage = key === null ? undefined : this.#lastUsage.get(key);
     return {

@@ -18,10 +18,23 @@ import {
   summarizePressure,
   summarizeWindow,
   validateLayer,
+  shortSessionId,
 } from '../policy.js';
 
 export const CG_COMMAND_NAME = 'cg';
 export const CG_COMMAND_DEFINITION_ID = 'dsh-context-governance/cg';
+
+/**
+ * 1a/B-4：生产只读宿主真实字段 `agent.session.id`，不做形状兜底。
+ * 单测可在 `createStatusCommand({ sessionIdOf })` 注入 resolver，业务代码只有一条路径。
+ */
+function defaultSessionIdOf(invocation) {
+  const id = invocation?.agent?.session?.id;
+  return typeof id === 'string' && id !== '' ? id : null;
+}
+
+const NO_SESSION_TEXT = '[context-governance] 会话级不可用：宿主未提供会话标识（agent.session.id），已拒绝；' +
+  '不会退化为进程级覆盖';
 
 function costLine(status) {
   const cost = status?.lastCost ?? null;
@@ -66,7 +79,7 @@ function formatEarlyStatus(earlyStatus) {
   return `last-early: ${event}${reason}${effective}${at}`;
 }
 
-function statusText({ store, guard, audit, now, policy = null, earlyStatus = null }) {
+function statusText({ store, guard, audit, now, policy = null, earlyStatus = null, sessionId = null }) {
   const lines = [];
   const status = guard?.status ?? null;
   lines.push('context-governance status');
@@ -74,14 +87,19 @@ function statusText({ store, guard, audit, now, policy = null, earlyStatus = nul
   // 策略链与观察器无关：观察器没挂时也要能看到生效阈值与被拒的层。
   let resolvedPolicy = null;
   if (policy !== null && typeof policy.resolve === 'function') {
-    resolvedPolicy = policy.resolve();
+    resolvedPolicy = policy.resolve(sessionId);
     lines.push(`policy: ${summarizePolicy(resolvedPolicy)}`);
     // 0.2.1（DEC-20261025-66）：current / conservative / 来源 / 时间；不一致时明示校验口径。
     if (resolvedPolicy.window !== undefined) lines.push(summarizeWindow(resolvedPolicy.window));
     const rejected = collectInvalid(policy, resolvedPolicy);
     if (rejected.length > 0) lines.push(`policy-invalid: ${rejected.length} (${formatInvalid(rejected)})`);
-    const overrides = formatSession(policy.sessionLayer?.values, rejectedSessionKeys(resolvedPolicy));
-    if (overrides !== 'none') lines.push(`policy-session: ${overrides}`);
+    if (sessionId === null) {
+      lines.push('policy-session: unavailable (no session id)');
+    } else {
+      const values = typeof policy.sessionValues === 'function' ? policy.sessionValues(sessionId) : {};
+      const overrides = formatSession(values, rejectedSessionKeys(resolvedPolicy));
+      if (overrides !== 'none') lines.push(`policy-session: ${overrides}`);
+    }
   }
   lines.push(formatEarlyStatus(earlyStatus));
   if (status === null) {
@@ -204,7 +222,7 @@ function statusText({ store, guard, audit, now, policy = null, earlyStatus = nul
  *
  * @param {{store?:object|null, guard?:object|null, getGuard?:() => object|null, audit?:object|null, now?:() => Date}} options
  */
-export function createStatusCommand({ store = null, guard = null, getGuard = null, audit = null, policy = null, now = () => new Date(), logger = null, getEarlyStatus = null } = {}) {
+export function createStatusCommand({ store = null, guard = null, getGuard = null, audit = null, policy = null, now = () => new Date(), logger = null, getEarlyStatus = null, sessionIdOf = defaultSessionIdOf } = {}) {
   const currentGuard = () => (typeof getGuard === 'function' ? getGuard() : guard);
 
   const parseBoolean = (text) => {
@@ -228,11 +246,12 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
   };
   const sessionText = (sessionValues) => formatSession(sessionValues);
   /** `/cg set key=value [key=value…] | /cg set reset`：会话层覆盖（最高优先级）。 */
-  const handleSet = (argText) => {
-    if (policy === null || typeof policy.resolve !== 'function' || policy.sessionLayer === undefined) {
+  const handleSet = (argText, sessionId = null) => {
+    if (policy === null || typeof policy.resolve !== 'function' || typeof policy.sessionValues !== 'function') {
       return { kind: 'error', text: '[context-governance] session layer is unavailable (policy not wired)' };
     }
-    const sessionValues = policy.sessionLayer.values;
+    if (sessionId === null) return { kind: 'error', text: NO_SESSION_TEXT };
+    const sessionValues = policy.sessionValues(sessionId, { create: true });
     if (argText === '' || argText === 'show' || argText === 'list') {
       return {
         kind: 'success',
@@ -331,7 +350,7 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
     const previous = { ...sessionValues };
     for (const key of Object.keys(sessionValues)) delete sessionValues[key];
     Object.assign(sessionValues, next);
-    const resolved = policy.resolve();
+    const resolved = policy.resolve(sessionId);
     // P3-2：只判本次会话层引入的未确认（配置层本来就 0.25 时，不该连 /cg set compact.early 都挡住）。
     const blocking = resolved.invalid.find(
       (item) => item.reason === 'low-threshold-unacked' && item.source === 'session',
@@ -367,20 +386,31 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
     input: { hint: 'status | status last-cost | policy show | set <key>=<value> | set reset | header on|off' },
     handler: async (invocation = {}) => {
       const raw = String(invocation.rawInput ?? '').trim();
+      const resolvedSessionId = typeof sessionIdOf === 'function' ? sessionIdOf(invocation) : null;
+      const sessionId = typeof resolvedSessionId === 'string' && resolvedSessionId !== '' ? resolvedSessionId : null;
       if (raw === 'header' || raw.startsWith('header ')) {
-        if (policy === null || policy.sessionLayer === undefined) {
+        if (policy === null || typeof policy.resolve !== 'function' || typeof policy.sessionValues !== 'function') {
           return { kind: 'error', text: '[context-governance] session layer is unavailable (policy not wired)' };
         }
-        const sessionValues = policy.sessionLayer.values;
         const arg = raw.slice('header'.length).trim();
         if (arg === '' || arg === 'status') {
-          const enabled = sessionValues['header.enabled'] !== false;
+          const resolved = policy.resolve(sessionId);
+          const values = sessionId === null ? {} : policy.sessionValues(sessionId, { create: false });
+          const enabled = values['header.enabled'] === undefined
+            ? resolved.values['header.enabled'] !== false
+            : values['header.enabled'] !== false;
+          const source = sessionId === null
+            ? 'config/default'
+            : (values['header.enabled'] === undefined ? 'config' : 'session');
+          const suffix = sessionId === null ? '; session-level: unavailable (no session id)' : '';
           return {
             kind: 'success',
-            text: `context-governance header\nheader: ${enabled ? 'on' : 'off'} (source=${sessionValues['header.enabled'] === undefined ? 'config' : 'session'})`,
+            text: `context-governance header\nheader: ${enabled ? 'on' : 'off'} (source=${source}${suffix})`,
           };
         }
         if (arg === 'on' || arg === 'off') {
+          if (sessionId === null) return { kind: 'error', text: NO_SESSION_TEXT };
+          const sessionValues = policy.sessionValues(sessionId, { create: true });
           sessionValues['header.enabled'] = arg === 'on';
           audit?.append?.('policy-set', { source: 'session', key: 'header.enabled', value: arg });
           return { kind: 'success', text: `context-governance header\nheader: ${arg} (source=session)` };
@@ -388,23 +418,27 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
         return { kind: 'error', text: 'Usage: /cg header [status|on|off]' };
       }
       if (raw === 'compact' || raw.startsWith('compact ')) {
-        if (policy === null || policy.sessionLayer === undefined) {
+        if (policy === null || typeof policy.resolve !== 'function' || typeof policy.sessionValues !== 'function') {
           return { kind: 'error', text: '[context-governance] session layer is unavailable (policy not wired)' };
         }
-        const sessionValues = policy.sessionLayer.values;
         const arg = raw.slice('compact'.length).trim();
         if (arg === '' || arg === 'status') {
-          const resolved = typeof policy.resolve === 'function' ? policy.resolve() : null;
-          const on = sessionValues['compact.early.armed'] ?? (resolved?.values?.['compact.early.armed'] === true);
-          const source = sessionValues['compact.early.armed'] === undefined ? 'config/default' : 'session';
-          return { kind: 'success', text: `context-governance compact\narmed: ${on ? 'on' : 'off'} (source=${source})` };
+          const resolved = policy.resolve(sessionId);
+          const values = sessionId === null ? {} : policy.sessionValues(sessionId, { create: false });
+          const on = values['compact.early.armed'] ?? (resolved?.values?.['compact.early.armed'] === true);
+          const source = values['compact.early.armed'] === undefined ? 'config/default' : 'session';
+          const suffix = sessionId === null ? '; session-level: unavailable (no session id)' : '';
+          return { kind: 'success', text: `context-governance compact\narmed: ${on ? 'on' : 'off'} (source=${source}${suffix})` };
         }
         if (arg === 'arm' || arg === 'disarm') {
+          if (sessionId === null) return { kind: 'error', text: NO_SESSION_TEXT };
+          const sessionValues = policy.sessionValues(sessionId, { create: true });
           sessionValues['compact.early.armed'] = arg === 'arm';
-          const sessionId = invocation.sessionId ?? invocation.session?.id ?? null;
+          // 1a/B-4：审计同时写全 id（与 early-forced 等一致）+ 8 位短 id（复用 policy.shortSessionId）。
           audit?.append?.(arg === 'arm' ? 'early-armed' : 'early-disarmed', {
             source: 'session',
             sessionId,
+            sessionShortId: shortSessionId(sessionId),
           });
           return { kind: 'success', text: `context-governance compact\narmed: ${arg === 'arm' ? 'on' : 'off'} (source=session)` };
         }
@@ -412,7 +446,7 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
       }
       if (raw === 'set' || raw.startsWith('set ') || raw === 'reset') {
         try {
-          return handleSet(raw === 'reset' ? 'reset' : raw.slice(3).trim());
+          return handleSet(raw === 'reset' ? 'reset' : raw.slice(3).trim(), sessionId);
         } catch (error) {
           return {
             kind: 'error',
@@ -424,13 +458,21 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
         if (policy === null || typeof policy.resolve !== 'function') {
           return { kind: 'error', text: '[context-governance] policy is unavailable' };
         }
-        const resolved = policy.resolve();
+        const resolved = policy.resolve(sessionId);
         const rejected = collectInvalid(policy, resolved);
+        const sessionLine = sessionId === null
+          ? 'session: unavailable (no session id)'
+          : `session: ${formatSession(
+            typeof policy.sessionValues === 'function' ? policy.sessionValues(sessionId, { create: false }) : {},
+            rejectedSessionKeys(resolved),
+          )}`;
         const lines = [
           'context-governance policy',
           summarizePolicy(resolved),
-          `layers: ${layerChain(policy)}`,
-          `session: ${formatSession(policy.sessionLayer?.values, rejectedSessionKeys(resolved))}`,
+          `layers: ${layerChain(policy, sessionId === null ? null : (
+            typeof policy.sessionValues === 'function' ? policy.sessionValues(sessionId) : {}
+          ))}`,
+          sessionLine,
           ...policyTable(resolved),
           ...(rejected.length > 0
             ? ['invalid:', ...rejected.map((item) =>
@@ -469,6 +511,7 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
             now,
             policy,
             earlyStatus: typeof getEarlyStatus === 'function' ? getEarlyStatus() : null,
+            sessionId,
           }),
         };
       } catch (error) {

@@ -7,20 +7,36 @@ import test from 'node:test';
 import { createStatusCommand } from '../src/commands/cg-status.js';
 import { resolvePolicy } from '../src/policy.js';
 
+const SESSION_ID = 'session-status-000000000001';
+
 function makeCommand({ invalid = [], configureSession = null, getEarlyStatus = null } = {}) {
-  const sessionLayer = { source: 'session', values: {} };
-  if (configureSession !== null) configureSession(sessionLayer.values);
+  const sessions = new Map();
+  const sessionValues = (id, { create = false } = {}) => {
+    if (typeof id !== 'string' || id === '') return {};
+    let values = sessions.get(id);
+    if (values === undefined && create) {
+      values = {};
+      sessions.set(id, values);
+    }
+    return values ?? {};
+  };
+  if (configureSession !== null) configureSession(sessionValues(SESSION_ID, { create: true }));
   const policy = {
-    sessionLayer,
     invalid,
     native: 0.6934,
     validationNative: () => 0.6934,
-    resolve: () => {
-      const resolved = resolvePolicy([sessionLayer], { native: 0.6934 });
+    sessionValues,
+    resolve: (id = null) => {
+      const resolved = resolvePolicy([{ source: 'session', values: sessionValues(id) }], { native: 0.6934 });
       return { ...resolved, window: null, invalid: [...invalid, ...resolved.invalid] };
     },
   };
-  return createStatusCommand({ policy, getEarlyStatus, now: () => new Date('2026-10-26T00:00:00Z') });
+  return createStatusCommand({
+    policy,
+    getEarlyStatus,
+    sessionIdOf: () => SESSION_ID,
+    now: () => new Date('2026-10-26T00:00:00Z'),
+  });
 }
 
 async function status(command) {
@@ -57,4 +73,16 @@ test('0.2.4 T3：项目层 armed 被拒必须在 status 可见', async () => {
     invalid: [{ source: 'project', key: 'compact.early.armed', reason: 'project-excluded' }],
   }));
   assert.match(text, /policy-invalid: 1 \(project\/compact\.early\.armed:project-excluded\)/);
+});
+
+test('0.2.4 T3：无会话标识 → session 行不可用，early 回落 config/default', async () => {
+  const command = createStatusCommand({
+    policy: { resolve: () => resolvePolicy([], { native: 0.6934 }), sessionValues: () => ({}) },
+    sessionIdOf: () => null,
+    now: () => new Date('2026-10-26T00:00:00Z'),
+  });
+  const result = await command.handler({ rawInput: 'status' });
+  assert.equal(result.kind, 'success');
+  assert.match(result.text, /policy-session: unavailable \(no session id\)/);
+  assert.match(result.text, /early=on \(default\)/);
 });

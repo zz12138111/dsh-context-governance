@@ -366,9 +366,13 @@ export function formatInvalid(items = [], max = 5) {
   return shown.join(', ');
 }
 
-/** 层级链展示：空层标 `(empty)`，避免被误读成“该项目层已生效”。 */
-export function layerChain(policy) {
-  const layers = Array.isArray(policy?.layers) ? policy.layers : [];
+/**
+ * 层级链展示：空层标 `(empty)`，避免被误读成“该项目层已生效”。
+ * 1a：会话层按会话传入（无会话上下文时传 null，不显示该层）。
+ */
+export function layerChain(policy, sessionValues = null) {
+  const layers = Array.isArray(policy?.layers) ? [...policy.layers] : [];
+  if (sessionValues !== null) layers.push({ source: 'session', values: sessionValues });
   if (layers.length === 0) return 'builtin';
   return layers
     .map((layer) => {

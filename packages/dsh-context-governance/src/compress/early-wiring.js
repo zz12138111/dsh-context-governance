@@ -12,9 +12,9 @@ import { EarlyCompactor } from './early.js';
 import { EARLY_DECISION, decideEarly } from './early-gate.js';
 
 export const EARLY_DELAY_MS = 50;
-/** 冷却期：同一会话两次提前压至少间隔 10 分钟。 */
+/** 冷却期默认值（policy `compact.cooldownMin` 生效时按其分钟数换算）。 */
 export const EARLY_COOLDOWN_MS = 10 * 60 * 1000;
-/** 增量门槛：effective 至少上升 1 个百分点才再压。 */
+/** 增量门槛默认值（policy `compact.minDeltaTokens` 生效时按窗口换算成比例）。 */
 export const EARLY_MIN_DELTA_RATIO = 0.01;
 
 function getOrNull(ctx, name) {
@@ -52,8 +52,8 @@ function engineFor(ctx, agent) {
  * @param {object} options
  * @param {object} options.ctx 插件上下文（需要 `on`；服务用 `ctx.get`）
  * @param {() => object|null} options.getGuard 取 CompressionGuard
- * @param {() => object|null} options.getPolicy 取 policy.resolve() 结果
- * @param {() => boolean} [options.getArmed] 执行开关；默认恒 false
+ * @param {(session?: object) => object|null} options.getPolicy 按会话取 policy.resolve() 结果
+ * @param {(session?: object) => boolean} [options.getArmed] 按会话取执行开关；默认恒 false
  * @param {object|null} [options.audit] AuditLog
  * @param {object|null} [options.logger]
  * @param {() => number} [options.now]
@@ -73,13 +73,15 @@ export function wireEarlyCompaction(options = {}) {
     onDecision = null,
     now = () => Date.now(),
     schedule = (fn, ms) => setTimeout(fn, ms),
-    cooldownMs = EARLY_COOLDOWN_MS,
-    minDeltaRatio = EARLY_MIN_DELTA_RATIO,
+    cooldownMs: cooldownMsOption,
+    minDeltaRatio: minDeltaRatioOption,
   } = options;
 
   const state = new Map();
   const timers = new Set();
-  const armedNow = () => getArmed() === true;
+  const armedNow = (session) => getArmed(session) === true;
+  const explicitCooldown = Number.isFinite(cooldownMsOption) && cooldownMsOption >= 0;
+  const explicitDelta = Number.isFinite(minDeltaRatioOption) && minDeltaRatioOption >= 0;
   let lastDecision = null;
   const record = (entry) => {
     lastDecision = entry;
@@ -92,12 +94,14 @@ export function wireEarlyCompaction(options = {}) {
 
   async function check(session) {
     // armed=false：完全静默（不审计、不取服务）——接线 ≠ 触发。
-    if (!armedNow()) return;
-    const policy = getPolicy();
+    if (!armedNow(session)) return;
+    const policy = getPolicy(session);
     if (policy === null || policy === undefined || policy.early === false) return;
 
     const guard = getGuard();
-    const pressureStatus = guard?.status?.pressure ?? {};
+    const pressureStatus = (typeof guard?.pressureFor === 'function'
+      ? guard.pressureFor(session)
+      : null) ?? guard?.status?.pressure ?? {};
     const pressure = computePressure({
       measuredTokens: pressureStatus.measuredTokens ?? null,
       estimatedTokens: pressureStatus.estimatedTokens ?? null,
@@ -112,6 +116,18 @@ export function wireEarlyCompaction(options = {}) {
     const sessionId = session?.id ?? null;
     const previous = sessionId === null ? null : state.get(sessionId) ?? null;
     const nowMs = now();
+    // 1a/#3：cooldownMin / minDeltaTokens 从生效策略读取（不再只用常量）；显式选项优先（单测）。
+    const cooldownMin = Number(policy.values?.['compact.cooldownMin']);
+    const cooldownMs = explicitCooldown
+      ? cooldownMsOption
+      : (Number.isFinite(cooldownMin) && cooldownMin > 0 ? cooldownMin * 60000 : EARLY_COOLDOWN_MS);
+    const windowTokens = Number(policy.window?.currentTokens ?? policy.window?.configTokens ?? 0);
+    const minDeltaTokens = Number(policy.values?.['compact.minDeltaTokens']);
+    const minDeltaRatio = explicitDelta
+      ? minDeltaRatioOption
+      : (Number.isFinite(minDeltaTokens) && minDeltaTokens >= 0 && windowTokens > 0
+        ? minDeltaTokens / windowTokens
+        : EARLY_MIN_DELTA_RATIO);
     const cooldownOk = previous === null || nowMs - previous.at >= cooldownMs;
     const deltaOk = previous === null
       || !Number.isFinite(previous.effective) || !Number.isFinite(effective)
@@ -205,7 +221,7 @@ export function wireEarlyCompaction(options = {}) {
     ? ctx.on('session/event', (session, event) => {
       if (event?.type !== 'turn/end') return;
       // 审核 §10-⑤ 附注：armed=false 时不排定时器（无服务/审计副作用，也不积 timers）。
-      if (!armedNow()) return;
+      if (!armedNow(session)) return;
       const timer = schedule(() => {
         timers.delete(timer);
         void check(session).catch((error) => {

@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { registerStatusCommand } from './commands/cg-status.js';
-import { POLICY_FILE_MAX_BYTES, nativeFromWindow, nativeRatio, profileLayer, resolvePolicy, validateLayer } from './policy.js';
+import { POLICY_FILE_MAX_BYTES, nativeFromWindow, nativeRatio, profileLayer, resolvePolicy, shortSessionId, validateLayer } from './policy.js';
 import { detectHostVersion, normalizeBackendVersion } from './compress/adapters.js';
 import { CompressionGuard } from './compress/runtime.js';
 import { wireEarlyCompaction } from './compress/early-wiring.js';
@@ -286,14 +286,23 @@ export function buildPolicyState(config, deps = {}) {
     }
   }
   layers.push(project);
-  // 会话层（`/cg set`）：最高优先级；0.2.0 起为进程内覆盖，重启即失效。
-  const sessionLayer = { source: 'session', values: {} };
-  layers.push(sessionLayer);
+  // 1a：会话层按 sessionId 分桶（进程内存；重启清空）。读不建桶、写才建桶。
+  const sessionLayers = new Map();
+  const EMPTY_SESSION_VALUES = Object.freeze({});
+  const sessionValuesFor = (sessionId, { create = false } = {}) => {
+    if (typeof sessionId !== 'string' || sessionId === '') return EMPTY_SESSION_VALUES;
+    let values = sessionLayers.get(sessionId);
+    if (values === undefined && create) {
+      values = {};
+      sessionLayers.set(sessionId, values);
+    }
+    return values ?? EMPTY_SESSION_VALUES;
+  };
   // 0.2.1（DEC-20261025-66 / 68）：窗口由运行时观察；每次 resolve 现算 native（不锁 apply）。
   // P2-3：`/cg set` 被拒的 transient（每 episode 去重；窗口恢复时清空），不写进 build 期的 state.invalid。
   const transientRejections = [];
   let windowProvider = () => null;
-  const resolveWithWindow = () => {
+  const resolveWithWindow = (sessionId = null) => {
     const win = windowProvider() ?? null;
     const configWindow = config.policy.windowTokens;
     const reservedTokens = config.policy.reservedTokens;
@@ -314,7 +323,8 @@ export function buildPolicyState(config, deps = {}) {
     const degenerate = checkNative === null;
     const degenerateTokens = conservative?.tokens ?? configWindow;
     const runtimeInvalid = [];
-    const filtered = layers.map((layer) => {
+    const sessionLayer = { source: 'session', values: sessionValuesFor(sessionId) };
+    const filtered = [...layers, sessionLayer].map((layer) => {
       const values = { ...layer.values };
       const at = values['compact.at'];
       if (at !== undefined) {
@@ -357,6 +367,7 @@ export function buildPolicyState(config, deps = {}) {
       invalid: [...invalid, ...runtimeInvalid, ...resolved.invalid, ...transientRejections],
       window: {
         currentTokens: win?.current ? currentTokens : null,
+        configTokens: configWindow,
         currentSessionId: win?.current?.sessionId ?? null,
         currentObservedAt: win?.current?.observedAt ?? null,
         currentSource,
@@ -377,7 +388,12 @@ export function buildPolicyState(config, deps = {}) {
     native,
     layers,
     invalid,
-    sessionLayer,
+    /** 1a：按会话读取覆盖值（create=false 不建桶；命令写入时 create=true）。 */
+    sessionValues: sessionValuesFor,
+    /** 1a：按会话取“会话层”形状（供 resolve/展示复用）。 */
+    sessionLayerFor: (sessionId) => ({ source: 'session', values: sessionValuesFor(sessionId) }),
+    /** 1a：当前进程内已有覆盖的会话（只读快照，供测试/诊断）。 */
+    sessionIds: () => [...sessionLayers.keys()],
     windowTokens: config.policy.windowTokens,
     reservedTokens: config.policy.reservedTokens,
     /** 由 apply 注入运行时的 windowState 读取器（guard 可能还不可用，故为惰性）。 */
@@ -516,16 +532,16 @@ export async function apply(ctx, rawConfig = {}) {
         earlyWiring = wireEarlyCompaction({
           ctx,
           getGuard: () => guard,
-          getPolicy: () => {
+          getPolicy: (session) => {
             try {
-              return policyState.resolve();
+              return policyState.resolve(session?.id ?? null);
             } catch {
               return null;
             }
           },
-          getArmed: () => {
+          getArmed: (session) => {
             try {
-              return policyState.resolve().values['compact.early.armed'] === true;
+              return policyState.resolve(session?.id ?? null).values['compact.early.armed'] === true;
             } catch {
               return false;
             }
@@ -578,25 +594,33 @@ export async function apply(ctx, rawConfig = {}) {
     const WINDOW_REJECT_REASONS = new Set(['over-native-runtime', 'native-uncomputable']);
     const checkWindowViolations = () => {
       try {
-        const resolved = policyState.resolve();
-        // P3-7/P2-3：窗口恢复（不再有窗口级拒绝）后清空去重 Set，下一 episode 能再写审计。
-        const hasWindowReject = resolved.invalid.some((item) => WINDOW_REJECT_REASONS.has(item.reason));
-        if (!hasWindowReject) windowViolations.clear();
-        for (const item of resolved.invalid) {
-          if (!WINDOW_REJECT_REASONS.has(item.reason)) continue;
-          const key = `${item.source}|${item.key}|${item.reason}`;
-          if (windowViolations.has(key)) continue;
-          windowViolations.add(key);
-          guard.auditLog?.append?.('policy-invalid', {
-            source: item.source,
-            reason: item.reason,
-            code: item.key,
-          });
-          ctx.logger?.warn?.(
-            `[context-governance] policy layer rejected at runtime: ${item.source}/${item.key}:${item.reason}` +
-            `${item.detail === undefined ? '' : ` ${item.detail}`}`,
-          );
+        // 1a：会话层按会话逐桶检查（窗口收缩也要让会话覆盖失效，不再只看全局链）。
+        const sessionIds = typeof policyState.sessionIds === 'function' ? policyState.sessionIds() : [];
+        const targets = [null, ...sessionIds];
+        const seenThisPass = new Set();
+        for (const target of targets) {
+          const resolved = policyState.resolve(target);
+          for (const item of resolved.invalid) {
+            if (!WINDOW_REJECT_REASONS.has(item.reason)) continue;
+            const key = `${target ?? 'global'}|${item.source}|${item.key}|${item.reason}`;
+            seenThisPass.add(key);
+            if (windowViolations.has(key)) continue;
+            windowViolations.add(key);
+            guard.auditLog?.append?.('policy-invalid', {
+              source: item.source,
+              reason: item.reason,
+              code: item.key,
+              ...(target === null ? {} : { sessionId: target, sessionShortId: shortSessionId(target) }),
+            });
+            ctx.logger?.warn?.(
+              `[context-governance] policy layer rejected at runtime: ${item.source}/${item.key}:${item.reason}` +
+              `${item.detail === undefined ? '' : ` ${item.detail}`}`,
+            );
+          }
         }
+        // P3-7/P2-3：本轮不再出现的拒绝项清出去重 Set，下一 episode 能再写审计。
+        if (seenThisPass.size === 0) windowViolations.clear();
+        else for (const key of [...windowViolations]) if (!seenThisPass.has(key)) windowViolations.delete(key);
       } catch (error) {
         ctx.logger?.warn?.(`[context-governance] runtime window check failed: ${String(error?.message ?? error)}`);
       }
@@ -608,7 +632,8 @@ export async function apply(ctx, rawConfig = {}) {
   // M3 T2（0.3.1）：新会话 header（默认开）。放在 guard 之后注册，保持 session/event 处理顺序稳定。
   const header = registerMemoryHeader(ctx, store, {
     enabled: config.memoryHeader.enabled,
-    isEnabled: () => config.memoryHeader.enabled && policyState.resolve().values['header.enabled'] !== false,
+    isEnabled: (session) => config.memoryHeader.enabled &&
+      policyState.resolve(session?.id ?? null).values['header.enabled'] !== false,
     hasRuleFile: ruleFilePresent,
     maxLines: config.memoryHeader.maxLines,
     maxChars: config.memoryHeader.maxChars,

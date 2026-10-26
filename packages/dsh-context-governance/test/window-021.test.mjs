@@ -14,6 +14,10 @@ import { apply, buildPolicyState, resolveConfig } from '../src/index.js';
 import { nativeFromWindow, summarizeWindow } from '../src/policy.js';
 import { tempDir } from './helpers.mjs';
 
+const SESSION = 'session-window-00000000001';
+/** 1a：测试通过工厂注入会话标识（生产默认读 agent.session.id）。 */
+const cmd = (options = {}) => createStatusCommand({ sessionIdOf: () => SESSION, ...options });
+
 function makeCtx() {
   const handlers = [];
   const calls = { compactNow: 0, compactRegion: 0 };
@@ -138,7 +142,7 @@ test('0.2.1 动态 native + conservative 校验：1M/128k 双会话下 at=0.6 �
   const state = buildPolicyState(config, {
     readFile: () => { const error = new Error('missing'); error.code = 'ENOENT'; throw error; },
   });
-  state.sessionLayer.values['compact.at'] = 0.6; // 1M 下合法（native 0.8），128k 保守窗口下非法（0.375）
+  state.sessionValues(SESSION, { create: true })['compact.at'] = 0.6; // 1M 下合法（native 0.8），128k 保守窗口下非法（0.375）
   state.setWindowProvider(() => ({
     current: { sessionId: 'session-aaaaaaaa', tokens: 1_048_576, observedAt: '2026-10-26T00:00:00.000Z' },
     conservative: { sessionId: 'session-bbbbbbbb', tokens: 131_072, observedAt: '2026-10-26T00:00:01.000Z' },
@@ -146,7 +150,7 @@ test('0.2.1 动态 native + conservative 校验：1M/128k 双会话下 at=0.6 �
     source: 'projection',
     removed: false,
   }));
-  const resolved = state.resolve();
+  const resolved = state.resolve(SESSION);
   assert.equal(resolved.window.native, 0.8, '展示/native 用 current');
   assert.equal(resolved.window.nativeConservative, 0.375, '校验用 conservative');
   assert.equal(resolved.window.validated, true);
@@ -166,7 +170,7 @@ test('0.2.1 /cg status 双显：session 短 id、current/conservative、来源/�
     source: 'projection',
     removed: false,
   }));
-  const command = createStatusCommand({
+  const command = cmd({
     guard: { status: guardStatus({ measuredTokens: 262_144, estimatedTokens: 200_000 }) },
     policy: state,
     now: () => new Date('2026-10-26T00:00:00Z'),
@@ -188,14 +192,14 @@ test('0.2.1 无观察：窗口 unknown + 允许设 at 但状态标未校验；�
     source: 'unknown',
     removed: true,
   }));
-  const resolved = state.resolve();
+  const resolved = state.resolve(SESSION);
   assert.equal(resolved.window.validated, false);
   assert.equal(resolved.values['compact.at'], 0.30);
   const line = summarizeWindow(resolved.window);
   assert.match(line, /current=unknown/);
   assert.match(line, /removed by request\/context/);
   assert.match(line, /unvalidated/);
-  const command = createStatusCommand({ policy: state, guard: { status: guardStatus(null) }, now: () => new Date('2026-10-26T00:00:00Z') });
+  const command = cmd({ policy: state, guard: { status: guardStatus(null) }, now: () => new Date('2026-10-26T00:00:00Z') });
   const set = await command.handler({ rawInput: 'set compact.at=0.5' });
   assert.equal(set.kind, 'success', '无观察时允许设 at');
   const show = await command.handler({ rawInput: 'policy show' });
@@ -210,7 +214,7 @@ test('0.2.1 /cg set：有保守窗口时按 conservative 校验（0.55 > 0.375 �
     source: 'projection',
     removed: false,
   }));
-  const command = createStatusCommand({ policy: state, now: () => new Date('2026-10-26T00:00:00Z') });
+  const command = cmd({ policy: state, now: () => new Date('2026-10-26T00:00:00Z') });
   const rejected = await command.handler({ rawInput: 'set compact.at=0.55' });
   assert.equal(rejected.kind, 'error');
   assert.match(rejected.text, /over-native/);
@@ -228,7 +232,7 @@ test('0.2.1 验收#6：窗口观察/策略/状态全过程不产生任何压缩�
     handlers[0](first, { type: 'request/context', seq: 1, data: { contextWindow: 1_048_576 } });
     handlers[0](first, { type: 'request/context', seq: 2, data: { contextWindow: 131_072 } });
     handlers[0](first, { type: 'assistant/message', seq: 3, data: { usage: { inputTokens: 100_000 } } });
-    state.resolve();
+    state.resolve(SESSION);
     state.validationNative();
     guard.pressure();
     guard.windowState;
@@ -247,7 +251,7 @@ test('0.2.1 退化口径 A（DEC-68）：W=128k O=256k → native unknown、at �
   const state = buildPolicyState(config, {
     readFile: () => { const error = new Error('missing'); error.code = 'ENOENT'; throw error; },
   });
-  state.sessionLayer.values['compact.at'] = 0.6;
+  state.sessionValues(SESSION, { create: true })['compact.at'] = 0.6;
   const degenerateWindow = {
     current: { sessionId: 'session-aaaaaaaa', tokens: 131_072, observedAt: '2026-10-26T00:00:00.000Z' },
     conservative: { sessionId: 'session-aaaaaaaa', tokens: 131_072, observedAt: '2026-10-26T00:00:00.000Z' },
@@ -256,7 +260,7 @@ test('0.2.1 退化口径 A（DEC-68）：W=128k O=256k → native unknown、at �
     removed: false,
   };
   state.setWindowProvider(() => degenerateWindow);
-  const resolved = state.resolve();
+  const resolved = state.resolve(SESSION);
   assert.equal(resolved.window.degenerate, true);
   assert.equal(resolved.window.native, null, '退化时 native 必须是 null，不能造数');
   assert.equal(resolved.window.nativeConservative, null);
@@ -276,7 +280,7 @@ test('0.2.1 退化口径 A（DEC-68）：W=128k O=256k → native unknown、at �
     source: 'projection',
     removed: false,
   }));
-  const recovered = state.resolve();
+  const recovered = state.resolve(SESSION);
   assert.equal(recovered.window.degenerate, false);
   assert.equal(recovered.values['compact.at'], 0.6, '恢复后会话层 0.6 生效');
   assert.equal(recovered.sources['compact.at'], 'session');
@@ -295,7 +299,7 @@ test('0.2.1 /cg status 退化显示 + /cg set 拒绝 at（native-uncomputable）
     source: 'projection',
     removed: false,
   }));
-  const command = createStatusCommand({
+  const command = cmd({
     guard: { status: guardStatus(null) },
     policy: state,
     now: () => new Date('2026-10-26T00:00:00Z'),
@@ -368,7 +372,7 @@ test('0.2.1 P3-11 退化时 /cg set 被拒：审计恰 1 条 + warn + status 可
     rotations: 0,
   };
   const logger = { warn: (...args) => logs.push(args.join(' ')) };
-  const command = createStatusCommand({ policy: state, audit, logger, now: () => new Date('2026-10-26T00:00:00Z') });
+  const command = cmd({ policy: state, audit, logger, now: () => new Date('2026-10-26T00:00:00Z') });
 
   const rejected = await command.handler({ rawInput: 'set compact.at=0.5' });
   assert.equal(rejected.kind, 'error');
@@ -411,7 +415,7 @@ test('0.2.1 P2-3/P3-2/P3-7：拒绝项 transient——恢复后 status/show 双�
     sizeBytes: null,
     rotations: 0,
   };
-  const command = createStatusCommand({ policy: state, audit, logger: { warn: (...args) => logs.push(args.join(' ')) }, now: () => new Date('2026-10-26T00:00:00Z') });
+  const command = cmd({ policy: state, audit, logger: { warn: (...args) => logs.push(args.join(' ')) }, now: () => new Date('2026-10-26T00:00:00Z') });
 
   // episode 1：退化 → 拒 1 条
   const first = await command.handler({ rawInput: 'set compact.at=0.5' });
@@ -430,7 +434,7 @@ test('0.2.1 P2-3/P3-2/P3-7：拒绝项 transient——恢复后 status/show 双�
   const showAfterRecover = await command.handler({ rawInput: 'policy show' });
   assert.match(showAfterRecover.text, /invalid: none/);
   assert.doesNotMatch(showAfterRecover.text, /rejected/);
-  assert.equal(state.resolve().invalid.length, 0, '恢复后 resolve() 不得再带该条');
+  assert.equal(state.resolve(SESSION).invalid.length, 0, '恢复后 resolve() 不得再带该条');
 
   // episode 2：再次退化 → 还能再写 1 条（总计 2）
   windowState = {
@@ -494,7 +498,7 @@ test('0.2.1 P3-3：回落 builtin 0.6 > conservative 0.375 必须显式提示', 
     source: 'projection',
     removed: false,
   }));
-  const resolved = state.resolve();
+  const resolved = state.resolve(SESSION);
   assert.equal(resolved.values['compact.at'], 0.6);
   assert.ok(resolved.invalid.some((item) => item.source === 'builtin' && item.reason === 'fallback-over-native'));
   assert.equal(state.sessionRejections().length, 0);
@@ -505,7 +509,7 @@ test('0.2.1 P3-1：无观察时压力行标 config-fallback', async () => {
   const state = buildPolicyState(config, {
     readFile: () => { const error = new Error('missing'); error.code = 'ENOENT'; throw error; },
   });
-  const command = createStatusCommand({
+  const command = cmd({
     guard: { status: guardStatus({ measuredTokens: 100_000, estimatedTokens: 80_000 }) },
     policy: state,
     now: () => new Date('2026-10-26T00:00:00Z'),
@@ -544,8 +548,8 @@ test('0.2.1 P3-2：被拒会话覆盖在 status 标 (rejected)，恢复后消失
     readFile: () => { const error = new Error('missing'); error.code = 'ENOENT'; throw error; },
   });
   state.setWindowProvider(() => windowState);
-  state.sessionLayer.values['compact.at'] = 0.6; // 1M 下合法（0.8）
-  const command = createStatusCommand({ policy: state, now: () => new Date('2026-10-26T00:00:00Z') });
+  state.sessionValues(SESSION, { create: true })['compact.at'] = 0.6; // 1M 下合法（0.8）
+  const command = cmd({ policy: state, now: () => new Date('2026-10-26T00:00:00Z') });
   const before = await command.handler({ rawInput: 'status' });
   assert.match(before.text, /policy-session: compact\.at=0\.6/);
   assert.doesNotMatch(before.text, /rejected/);
@@ -661,7 +665,7 @@ test('0.2.1 backfill：/cg status 显示 source=projection(backfilled) + 历史 
     conservative: { sessionId: 'session-58a2e845', tokens: 1_048_576, observedAt: new Date(historyTime).toISOString(), source: 'backfilled' },
     observed: [], source: 'projection(backfilled)', removed: false,
   }));
-  const command = createStatusCommand({
+  const command = cmd({
     guard: { status: guardStatus({ measuredTokens: 500_000, estimatedTokens: 400_000 }) },
     policy: state,
     now: () => new Date('2026-10-26T00:00:00Z'),
@@ -681,7 +685,7 @@ test('0.2.1 P3-12/P3-13 三来源字符串：backfilled/live/config 各自可辨
       { readFile: () => { const error = new Error('missing'); error.code = 'ENOENT'; throw error; } },
     );
     state.setWindowProvider(() => window);
-    const command = createStatusCommand({
+    const command = cmd({
       guard: { status: guardStatus({ measuredTokens: 100_000, estimatedTokens: 80_000 }) },
       policy: state,
       now: () => new Date('2026-10-26T00:00:00Z'),

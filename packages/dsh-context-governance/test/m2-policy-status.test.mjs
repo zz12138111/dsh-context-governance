@@ -13,6 +13,10 @@ import { apply, buildPolicyState, resolveConfig } from '../src/index.js';
 import { profileLayer, resolvePolicy, validateLayer } from '../src/policy.js';
 import { tempDir } from './helpers.mjs';
 
+const SESSION = 'session-m2-000000000000001';
+/** 1a：测试通过工厂注入会话标识（生产默认读 agent.session.id）。 */
+const cmd = (options = {}) => createStatusCommand({ sessionIdOf: () => SESSION, ...options });
+
 const NATIVE = 0.6785;
 
 function policyState(profileName = '') {
@@ -68,7 +72,7 @@ function guardWithPressure(pressure = null) {
 }
 
 test('0.2.0 /cg policy show：逐层来源 + native + early', async () => {
-  const command = createStatusCommand({ policy: policyState('research'), now: () => new Date('2026-10-25T00:00:00Z') });
+  const command = cmd({ policy: policyState('research'), now: () => new Date('2026-10-25T00:00:00Z') });
   const result = await command.handler({ rawInput: 'policy show' });
   assert.equal(result.kind, 'success');
   assert.match(result.text, /layers: profile=research -> plugin/);
@@ -79,7 +83,7 @@ test('0.2.0 /cg policy show：逐层来源 + native + early', async () => {
 });
 
 test('0.2.0 /cg status：出现 policy 合成链行', async () => {
-  const command = createStatusCommand({ guard: guardWithPressure(), policy: policyState(''), now: () => new Date('2026-10-25T00:00:00Z') });
+  const command = cmd({ guard: guardWithPressure(), policy: policyState(''), now: () => new Date('2026-10-25T00:00:00Z') });
   const result = await command.handler({ rawInput: 'status' });
   assert.equal(result.kind, 'success');
   assert.match(result.text, /policy: compact\.at=0\.58 \(source=plugin\) native=0\.6785 early=on/);
@@ -231,7 +235,7 @@ function policyForSet(values = {}) {
 const fixedNow = () => new Date('2026-10-25T00:00:00Z');
 
 test('0.2.0 /cg set：会话层覆盖最高优先级，policy show 可见', async () => {
-  const command = createStatusCommand({ policy: policyForSet({ 'compact.at': 0.58 }), now: fixedNow });
+  const command = cmd({ policy: policyForSet({ 'compact.at': 0.58 }), now: fixedNow });
   const set = await command.handler({ rawInput: 'set compact.at=0.55' });
   assert.equal(set.kind, 'success');
   assert.match(set.text, /applied: compact\.at=0\.55/);
@@ -243,7 +247,7 @@ test('0.2.0 /cg set：会话层覆盖最高优先级，policy show 可见', asyn
 });
 
 test('0.2.0 /cg set：config-only 键、越界、<0.30 未确认都拒绝且不留半截覆盖', async () => {
-  const command = createStatusCommand({ policy: policyForSet({ 'compact.at': 0.58 }), now: fixedNow });
+  const command = cmd({ policy: policyForSet({ 'compact.at': 0.58 }), now: fixedNow });
   const safety = await command.handler({ rawInput: 'set compact.estimateSafety=1.2' });
   assert.equal(safety.kind, 'error');
   assert.match(safety.text, /只能在配置文件改/);
@@ -260,7 +264,7 @@ test('0.2.0 /cg set：config-only 键、越界、<0.30 未确认都拒绝且不�
 });
 
 test('0.2.0 /cg set：布尔与 reset 回落', async () => {
-  const command = createStatusCommand({ policy: policyForSet({ 'compact.at': 0.58 }), now: fixedNow });
+  const command = cmd({ policy: policyForSet({ 'compact.at': 0.58 }), now: fixedNow });
   const set = await command.handler({ rawInput: 'set compact.early=off' });
   assert.equal(set.kind, 'success');
   const show = await command.handler({ rawInput: 'policy show' });
@@ -272,7 +276,7 @@ test('0.2.0 /cg set：布尔与 reset 回落', async () => {
 });
 
 test('0.2.0 压力四段：measured/estimated/adjusted/effective + ratio（只展示）', async () => {
-  const command = createStatusCommand({
+  const command = cmd({
     guard: guardWithPressure({ measuredTokens: 583000, estimatedTokens: 412000 }),
     policy: policyForSet({ 'compact.at': 0.58 }),
     now: fixedNow,
@@ -286,7 +290,7 @@ test('0.2.0 压力四段：measured/estimated/adjusted/effective + ratio（只�
 });
 
 test('0.2.0 压力四段：无 usage/tokenMeter 时写 -，不伪造数字', async () => {
-  const command = createStatusCommand({
+  const command = cmd({
     guard: guardWithPressure(null),
     policy: policyForSet({}),
     now: fixedNow,
@@ -322,7 +326,7 @@ test('P3-2：配置层本就 <0.30 未确认时，无关的 /cg set 不被挡', 
   const state = buildPolicyState(config, {
     readFile: () => { const error = new Error('missing'); error.code = 'ENOENT'; throw error; },
   });
-  const command = createStatusCommand({ policy: state, now: fixedNow });
+  const command = cmd({ policy: state, now: fixedNow });
   const set = await command.handler({ rawInput: 'set compact.early=off' });
   assert.equal(set.kind, 'success');
   const show = await command.handler({ rawInput: 'policy show' });
@@ -334,7 +338,7 @@ test('P3-2：配置层本就 <0.30 未确认时，无关的 /cg set 不被挡', 
 });
 
 test('P3-6：一条命令里重复键被拒绝，不静默后写胜', async () => {
-  const command = createStatusCommand({ policy: policyForSet({}), now: fixedNow });
+  const command = cmd({ policy: policyForSet({}), now: fixedNow });
   const result = await command.handler({ rawInput: 'set compact.at=0.5 compact.at=0.4' });
   assert.equal(result.kind, 'error');
   assert.match(result.text, /重复键 compact\.at/);
@@ -343,7 +347,7 @@ test('P3-6：一条命令里重复键被拒绝，不静默后写胜', async () =
 });
 
 test('P3-5：set list / set show 都列出当前覆盖', async () => {
-  const command = createStatusCommand({ policy: policyForSet({}), now: fixedNow });
+  const command = cmd({ policy: policyForSet({}), now: fixedNow });
   await command.handler({ rawInput: 'set compact.early=off' });
   const listed = await command.handler({ rawInput: 'set list' });
   assert.match(listed.text, /session: compact\.early=off/);
