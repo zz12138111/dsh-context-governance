@@ -412,6 +412,7 @@
 |---|---|---|---|---|
 | `compact.at` | 真实占窗口比例到多少就压 | `0.60` | `0.20` ~ dynamic native | 是 |
 | `compact.early` | 允许提前压 | `true` | bool | 是 |
+| `compact.early.armed` | 允许**真实执行**提前压（0.2.4 启用方案；项目层出现不生效） | `true`（来源 `default`） | bool | 是 |
 | `compact.cooldownMin` | 两次压缩最小间隔 | `10` 分钟 | ≥1 | 是 |
 | `compact.minDeltaTokens` | 距上次压缩至少新增 token | `20000` | ≥0 | 是 |
 | `compact.estimateSafety` | 估算放大系数（专家项） | `1.35` | `1.0–1.6` | **否**（仅配置） |
@@ -419,6 +420,29 @@
 | `cost.remainingTurns` | 账本剩余轮次覆盖 | `null`（历史平均） | null 或 ≥0 | 是 |
 
 `compact.at > native` → 拒绝并提示“M2 不支持推迟”。`estimateSafety` 仅从配置文件读，注释式风险提示。
+
+### 补录与补定义（2026-10-26 回填，不改已有条款）
+
+> 来源：需求文档明确性判定清单（缺失 A5/B5/C5/D4/E1/E2/E4；含糊/歧义 C4/D2/E3/E5）。**本小节只补录派生文档已生效条目与补定义，不修改上面任何目标/参数/边界**；查不到原文的标「待定」。
+
+**补定义**
+
+1. **C4 术语**：「四层」指**配置作用域**（内置 / 插件配置 / 项目 / 会话）；`profile`（`batch`/`coding`/`review`/`research`）是层间的**标签层**，**不属于四层**——合成顺序见 `docs/M2-需求草案-v0.6.md:177`「显式层（会话 > 项目 > 插件）> 标签层（profile/偏好）> 内置默认」。
+2. **E3 空窗语义**：`(native−0.02, native]` **不是可用区间**——`at ≥ native−0.02` 一律拒绝（`policy-invalid(above-effective-window)`）；运行时 `native` 收缩导致生效值落入该区间 → 该层自动失效（`window-shrunk`），`/cg status` **不得显示 `early=on`**。
+3. **D2 可退通道最低级别**：**至少会话级**——`/cg compact disarm` 只影响当前会话、立即生效、会话结束回默认（`docs/1.0-状态定义-v1.md:66`；用户 2026-10-26 拍「会话级实现」）。
+4. **E5 回退层级**：会话级（即时）→ 配置级（`compact.early.armed=false`，加载/重启生效）→ 策略级（`compact.early=false`，profile）→ 失败兜底回宿主默认（不静默降级）；与 M1 原则（上 `:30`）「失败显式、可回退」一致。
+
+**补录（派生文档已生效条目）**
+
+| # | 条目 | 原文 / 来源 | 状态 |
+|---|---|---|---|
+| A5 | 会话级止损命令 | `/cg compact arm` / `/cg compact disarm`；`docs/1.0-状态定义-v1.md:66`；`TASKS/REQ-20261025-09-提前压启用-拆解.md:42` | 已录（见补定义 D2） |
+| B5 | 会话层可设键 | 参数表「可 `/cg set`」列（`docs/M2-需求草案-v0.6.md:61-70`）：`compact.at` / `compact.early` / `compact.early.armed` / `compact.cooldownMin` / `compact.minDeltaTokens` / `cost.remainingTurns` / `reinject.maxChars`、`maxLines`；`compact.estimateSafety` / `compact.lowThresholdAck` 仅配置文件 | 已录 |
+| C5 | profile 打标入口 | 派生文档只写「按会话打标」（`docs/M2-需求草案-v0.6.md:164-165`），**未定入口形态** | **待定** |
+| D4 | 配置级关闭 | `compact.early.armed=false`（加载后全局）；与会话级（A5）、策略级（`compact.early=false`）构成三层（见补定义 E5） | 已录 |
+| E1 | `compact.early.armed` 参数 | 默认 `true`、来源 `default`；项目层出现一律不生效（忽略 + `policy-invalid`，不清空整层）（`docs/1.0-状态定义-v1.md:39,65`） | 已录（参数表已加行） |
+| E2 | 「本项目」判定 | 主单无定义；现有观测口径仅 `:467`「最近观察到的本项目会话」，判定方式未定 | **待定** |
+| E4 | 默认值调整规则 | 全仓无「默认值变更/记录要求」规定；现状默认值见参数表 | **待定** |
 
 ### 会话特点与偏好
 
