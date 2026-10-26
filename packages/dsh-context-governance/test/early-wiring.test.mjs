@@ -91,7 +91,7 @@ test('0.2.2 接线：armed=true + 压力在位 → early-decision + early-forced
   assert.equal(info[1].includes('latest-user-message'), false, 'logger 不得带失败项/正文');
 });
 
-test('0.2.2 接线：accepted 但无新报告 → protection=null（不得回退 ok）', async () => {
+test('0.2.2 接线：accepted 但无新报告 → compaction=unknown（B-2）、protection=null', async () => {
   const guard = makeGuard({
     lastReport: { compactionId: 'old', compaction: 'committed', protection: 'ok', failures: [], reinjected: true },
   });
@@ -103,7 +103,7 @@ test('0.2.2 接线：accepted 但无新报告 → protection=null（不得回退
   assert.deepEqual(audit.entries.map((entry) => entry.event), ['early-decision', 'early-forced']);
   const forced = audit.entries[1];
   assert.equal(forced.accepted, true);
-  assert.equal(forced.compaction, 'committed');
+  assert.equal(forced.compaction, 'unknown', 'B-2：没有新报告必须写 unknown，不得写 committed');
   assert.equal(forced.protection, null, '没有新报告时必须写未知 null，不得写 ok');
   assert.deepEqual(forced.failures, []);
   assert.equal(forced.reinjected, null);

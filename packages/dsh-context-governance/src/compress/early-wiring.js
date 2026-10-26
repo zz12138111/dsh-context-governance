@@ -185,7 +185,9 @@ export function wireEarlyCompaction(options = {}) {
     const fields = {
       sessionId,
       accepted: result.accepted === true,
-      compaction: fresh?.compaction ?? (result.accepted === true ? 'committed' : 'failed'),
+      // B-2（1.0）：没有 fresh report 时不得写 committed（旧行为），写 unknown；
+      // 只有拿到本轮新报告时才采用报告里的枚举。
+      compaction: fresh === null ? (result.accepted === true ? 'unknown' : 'failed') : (fresh.compaction ?? 'unknown'),
       protection: result.accepted === true ? (fresh?.protection ?? null) : null,
       failures: result.accepted === true && Array.isArray(fresh?.failures)
         ? fresh.failures.map((failure) => failure.name)
