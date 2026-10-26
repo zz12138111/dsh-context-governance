@@ -1,0 +1,48 @@
+# 2a 身份来源（静态取证）：宿主 `profileContext` 字段
+
+- 日期：2026-10-26
+- 方法：只读解析本机 `app.asar` 头部（未安装工具、未改宿主），按需提取以下文件文本：
+  - `dsh/node_modules/@deepseek-ai/dsh/lib/profile-boot-C14i-8IN.js`
+  - `dsh/node_modules/@deepseek-ai/dsh-home-paths/lib/index.js`
+  - 已装插件侧用法：`C:\Users\19091\.dsh\profiles\desktop\node_modules\@michengai\dsh-skills-manager\lib\plugin-updater.js:129`
+- 宿主进程：pid **26040**（`DeepSeek Harness.exe`），命令行含
+  `...\resources\app.asar\dsh` 与 `C:\Users\19091\.dsh\profiles\desktop`。
+
+## 结论（代码锚点）
+
+1. `profile-boot-C14i-8IN.js` 构造并向宿主 provide：
+   ```js
+   const profileContext = {
+     name: options.profile,
+     ...,
+     dir: composed.profile.dir,
+     patchPath: composed.profile.patchPath,
+     installAnchor: ...,
+     startedBundles: ...,
+     cwd: process.cwd(),
+     home: resolveDshHome(),
+     ...
+   };
+   hostCtx.provide("profileContext", profileContext);
+   ```
+   → `name` / `dir` / `home` 都是真实字段，`home` 是绝对路径。
+2. `home` 来自 `@deepseek-ai/dsh-home-paths` 的 `resolveDshHome()`：
+   优先级 `configured > $DSH_HOME > ~/.dsh`；空/空白 `$DSH_HOME` 视为未设。
+   宿主 PEB 无 `DSH_HOME`/`DSH_PROFILE`（1a 实测 361 项），→ `home = C:\Users\19091\.dsh`。
+3. 已装插件 `@michengai/dsh-skills-manager` 直接用 `launched?.name` / `launched?.dir`
+   （`plugin-updater.js:129`），佐证字段名与语义。
+4. 运行中 desktop profile 目录为 `C:\Users\19091\.dsh\profiles\desktop`
+   → `profileContext.name` 应为 `desktop`。
+
+## 对 2a 实现的意义
+
+- 身份唯一来源 `ctx.get('profileContext')` 的 `name`/`dir`/`home` 均可用；
+  **不读 `$DSH_HOME`/`$DSH_PROFILE`**（shell 能看不等于插件进程能看）。
+- 本机 desktop profile 的状态文件预期落点（anchor=home）：
+  `C:\Users\19091\.dsh\context-governance\root-state-desktop.json`。
+- 取不到 `home` 时回落 `dir` 锚点：`<profile.dir>\context-governance\root-state.json`。
+
+## 待补（真机，未采不签收）
+
+重启后现采：diagnostics 的 `persistence-identity: ...` 行、`/cg status` 的
+`project-root:` 行、状态文件实际落点与内容、`inferred-fresh` 审计行。
