@@ -1,26 +1,24 @@
 /**
- * 1.0 #1（B-1）：会话作用域判定（单根模型）。
+ * P1：会话作用域判定（多根模型，B）。
  *
- * 纯函数、只读、无副作用：给 `early-wiring` 的提前压触发、`runtime` 的观测/保护、
- * `header` 注入与命令面提供**同一份**判定，避免各处各写一套 cwd 比较。
- *
- * 术语：
- * - `governed`：该会话是否在唯一项目根内 → 观测/保护/回注/记忆写只对 governed 为真；
- * - `skipReason`：**提前压触发**的跳过原因，三枚举互斥（`foreign-session` /
- *   `no-project-root` / `out-of-scope`）；`governed=true` 且 `skipReason=out-of-scope`
- *   表示“根内但策略层关掉了提前压”，保护/观测照常。
- * - cwd 为空：无法归属，按旧行为放行（`unattributed=true`），不误判为外部会话。
+ * 纯函数、只读、无副作用。生产路径由 index 注入基于 `RootRegistry` 的 resolver
+ * （直接返回 governed），本函数只作 `CompressionGuard` 直接构造时的根边界兜底：
+ * - `root` 为空 → `no-project-root`（完全不碰）；
+ * - `managed=false` → `unmanaged-root`（P1 非主根：不观测/不保护/不写）；
+ * - `cwd` 为空 → `no-project-root`（fail-closed；子会话由 registry 继承父根后再入）；
+ * - 根内 + 策略关闭 → `out-of-scope`（保护/观测照常，只是不提前压）。
  */
 import path from 'node:path';
 
 export const SCOPE_MODE = Object.freeze({
   SINGLE_ROOT: 'single-root',
+  MULTI_ROOT: 'multi-root',
   UNRESOLVED: 'unresolved',
 });
 
 export const SCOPE_SKIP = Object.freeze({
-  FOREIGN: 'foreign-session',
   NO_ROOT: 'no-project-root',
+  UNMANAGED: 'unmanaged-root',
   OUT_OF_SCOPE: 'out-of-scope',
 });
 
@@ -51,28 +49,39 @@ export function cwdWithinRoot(cwd, root) {
 
 /**
  * @param {object} input
- * @param {string|null} [input.root] 唯一项目根（null/'' = 根未确定）
+ * @param {string|null} [input.root] 本会话根（null/'' = 无根）
  * @param {string} [input.cwd] 会话 cwd
+ * @param {boolean} [input.managed] 该根是否纳管（P1 只有主根为 true）
  * @param {boolean} [input.earlyEnabled] 策略层是否允许提前压（`compact.early`）
- * @returns {{mode:string, root:string|null, cwd:string, governed:boolean,
- *   skipReason:string|null, unattributed:boolean}}
+ * @param {boolean} [input.isSubagent] 子会话（压缩/审计纳管、不写记忆；P1 只透传）
  */
-export function resolveScope({ root = null, cwd = '', earlyEnabled = true } = {}) {
+export function resolveScope({
+  root = null,
+  cwd = '',
+  managed = true,
+  earlyEnabled = true,
+  isSubagent = false,
+} = {}) {
   const normalizedRoot = normalizeRoot(root);
   const normalizedCwd = typeof cwd === 'string' ? cwd.trim() : '';
   const rootKnown = normalizedRoot !== null;
-  const unattributed = rootKnown && normalizedCwd === '';
-  const inside = rootKnown && (unattributed || cwdWithinRoot(normalizedCwd, normalizedRoot));
-  // 三枚举互斥：策略层禁用与位置无关；根未知优先于“外部”。
+  const missingCwd = rootKnown && normalizedCwd === '';
+  const inside = rootKnown && !missingCwd && cwdWithinRoot(normalizedCwd, normalizedRoot);
+  const governed = rootKnown && managed !== false && inside;
   const skipReason = earlyEnabled === false
     ? SCOPE_SKIP.OUT_OF_SCOPE
-    : (rootKnown ? (inside ? null : SCOPE_SKIP.FOREIGN) : SCOPE_SKIP.NO_ROOT);
+    : (!rootKnown || missingCwd)
+      ? SCOPE_SKIP.NO_ROOT
+      : managed === false
+        ? SCOPE_SKIP.UNMANAGED
+        : (inside ? null : SCOPE_SKIP.UNMANAGED);
   return {
-    mode: rootKnown ? SCOPE_MODE.SINGLE_ROOT : SCOPE_MODE.UNRESOLVED,
+    mode: rootKnown ? (managed === false ? SCOPE_MODE.MULTI_ROOT : SCOPE_MODE.SINGLE_ROOT) : SCOPE_MODE.UNRESOLVED,
     root: normalizedRoot,
     cwd: normalizedCwd,
-    governed: inside,
+    governed,
     skipReason,
-    unattributed,
+    unattributed: missingCwd,
+    isSubagent: isSubagent === true,
   };
 }

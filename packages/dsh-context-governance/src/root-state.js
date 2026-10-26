@@ -518,7 +518,9 @@ export function writeStateV2Merged(stateFile, incoming, { hashFn = undefined } =
     disk.primaryRootId = incoming.primaryRootId;
     disk.primaryRoot = disk.roots[incoming.primaryRootId].root;
   }
-  if (typeof incoming.configRoot === 'string' && incoming.configRoot !== '') disk.configRoot = incoming.configRoot;
+  if (incoming.configRoot === null || typeof incoming.configRoot === 'string') {
+    disk.configRoot = incoming.configRoot;
+  }
   return writeStateV2(stateFile, disk);
 }
 

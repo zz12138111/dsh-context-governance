@@ -20,7 +20,14 @@ import {
   samePath,
 } from './identity.js';
 import { MEMORY_ROOT_REL } from './paths.js';
-import { emptyV2State, loadStateV2, makeV2Entry, sessionCwd, writeStateV2Merged } from '../root-state.js';
+import {
+  emptyV2State,
+  loadStateV2,
+  makeV2Entry,
+  persistPrimaryV2,
+  sessionCwd,
+  writeStateV2Merged,
+} from '../root-state.js';
 
 export const ROOT_WARN_THRESHOLD = 16;
 export const DEFAULT_PIN_LIMIT = 1000;
@@ -98,6 +105,7 @@ export class RootRegistry {
   #rootAudit;
   #configRoot;
   #project;
+  #profile;
   #home;
   #now;
   #logger;
@@ -106,6 +114,7 @@ export class RootRegistry {
   #pins = new Map();
   #seen = new Set();
   #loadedIds = new Set();
+  #attachRootId = null;
   #writable;
   #lastPersistAt = 0;
   #warnedLimit = false;
@@ -118,6 +127,7 @@ export class RootRegistry {
     rootAudit = null,
     configRoot = null,
     project = null,
+    profile = null,
     home = null,
     now = () => new Date(),
     logger = null,
@@ -130,12 +140,14 @@ export class RootRegistry {
     this.#rootAudit = rootAudit;
     this.#configRoot = normalizeRootPath(configRoot);
     this.#project = typeof project === 'string' && project.trim() !== '' ? project.trim() : null;
+    this.#profile = typeof profile === 'string' && profile !== '' ? profile : null;
     this.#home = typeof home === 'string' && home.trim() !== '' ? path.resolve(home) : null;
     this.#now = now;
     this.#logger = logger;
     this.#hashFn = hashFn;
     this.#pinLimit = Math.max(Number(pinLimit) || DEFAULT_PIN_LIMIT, 1);
     this.#loadedIds = new Set(Object.keys(this.#state.roots));
+    this.#attachRootId = this.#state.primaryRootId;
     this.#writable = loaded === null || loaded.writable !== false;
   }
 
@@ -160,6 +172,12 @@ export class RootRegistry {
     return id === null ? null : (this.#state.roots[id] ?? null);
   }
 
+  /** P1 挂载根（config 覆盖或持久化主根）；不等于持久化 primaryRootId。 */
+  get attach() {
+    const id = this.#attachRootId ?? this.#state.primaryRootId;
+    return id === null ? null : (this.#state.roots[id] ?? null);
+  }
+
   #audit(event, details) {
     try {
       this.#rootAudit?.append?.(event, details);
@@ -169,7 +187,8 @@ export class RootRegistry {
   }
 
   #isManaged(entry) {
-    return entry !== null && entry.state === 'active' && this.#state.primaryRootId === entry.rootId;
+    if (entry === null || entry.state !== 'active') return false;
+    return entry.rootId === (this.#attachRootId ?? this.#state.primaryRootId);
   }
 
   #pin(sid, entry, source) {
@@ -237,10 +256,75 @@ export class RootRegistry {
     return { entry, created: true, source };
   }
 
-  /** 登记并设为主根（P1 挂载根；config 根或首次推断根）。 */
+  /**
+   * P1 挂载根：登记（config 根/持久化根）但**不**改持久化 primaryRootId；
+   * `primaryRootId` 只由首次推断（claimPrimary）确定，作为 config 移除后的回落锚点。
+   */
+  setAttachRoot(candidate, { origin = 'persisted' } = {}) {
+    const ensured = this.ensureRoot(candidate, { origin: origin === 'config' ? 'config' : 'inferred' });
+    if (ensured === null) return null;
+    this.#attachRootId = ensured.entry.rootId;
+    return ensured.entry;
+  }
+
+  /** 写 configRoot 镜像（只审计/展示，不参与根选择）；null = 清掉。 */
+  noteConfigRoot(candidate) {
+    const normalized = normalizeRootPath(candidate);
+    if (normalized === null) {
+      if (this.#state.configRoot !== null) {
+        this.#state.configRoot = null;
+        this.#persist(true);
+      }
+      return;
+    }
+    if (!samePath(normalized, this.#state.configRoot ?? '')) {
+      this.#state.configRoot = normalized;
+      this.#persist(true);
+    }
+  }
+
+  /** 登记并设为主根（首次推断；落盘 primaryRootId + attach）。 */
   claimPrimary(candidate, { origin = 'inferred', inferredFromCwd = null } = {}) {
+    // 首次推断：状态文件不存在时用 link 独占发布（两进程只有一方建文件）。
+    if (this.#stateFile !== null && this.#state.roots === undefined) return null;
+    if (this.#stateFile !== null && Object.keys(this.#state.roots).length === 0
+      && !fs.existsSync(this.#stateFile)) {
+      const published = persistPrimaryV2(this.#stateFile, {
+        root: candidate,
+        profile: this.#profile,
+        inferredFromCwd,
+        hashFn: this.#hashFn,
+        now: this.#now(),
+      });
+      if (published.ok && published.state !== null) {
+        if (published.existed) {
+          this.#state = published.state;
+          this.#loadedIds = new Set(Object.keys(this.#state.roots));
+          this.#attachRootId = this.#state.primaryRootId;
+          const primary = this.primary;
+          if (primary !== null) this.#seen.add(primary.rootId);
+          return primary;
+        }
+        this.#state = published.state;
+        this.#loadedIds = new Set();
+        this.#attachRootId = published.state.primaryRootId;
+        const entry = this.#state.roots[published.state.primaryRootId];
+        if (entry === undefined) return null;
+        this.#seen.add(entry.rootId);
+        this.#audit('root-registered', {
+          root: entry.root,
+          rootId: entry.rootId,
+          source: entry.origin,
+          inferredFromCwd: entry.inferredFromCwd,
+          rootCount: 1,
+        });
+        this.#lastPersistAt = this.#now().getTime();
+        return entry;
+      }
+    }
     const ensured = this.ensureRoot(candidate, { cwd: inferredFromCwd, origin });
     if (ensured === null || ensured.entry.state === 'fail-closed') return null;
+    this.#attachRootId = ensured.entry.rootId;
     if (this.#state.primaryRootId !== ensured.entry.rootId) {
       this.#state.primaryRootId = ensured.entry.rootId;
       this.#state.primaryRoot = ensured.entry.root;

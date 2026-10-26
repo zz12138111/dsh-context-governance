@@ -31,7 +31,7 @@ test('2b 作用域：根内/根外/根未知/cwd 空 的 governed 与 skipReason
 
   const outside = resolveScope({ root: ROOT, cwd: OUTSIDE });
   assert.equal(outside.governed, false);
-  assert.equal(outside.skipReason, SCOPE_SKIP.FOREIGN);
+  assert.equal(outside.skipReason, SCOPE_SKIP.UNMANAGED, 'P1 非主根 = unmanaged-root（不再有 foreign-session）');
 
   const noRoot = resolveScope({ root: null, cwd: OUTSIDE });
   assert.equal(noRoot.mode, SCOPE_MODE.UNRESOLVED);
@@ -40,9 +40,9 @@ test('2b 作用域：根内/根外/根未知/cwd 空 的 governed 与 skipReason
   assert.equal(noRoot.root, null);
 
   const noCwd = resolveScope({ root: ROOT, cwd: '' });
-  assert.equal(noCwd.governed, true, 'cwd 为空无法归属：按旧行为放行');
+  assert.equal(noCwd.governed, false, 'B：空 cwd fail-closed（不再放行给主根）');
   assert.equal(noCwd.unattributed, true);
-  assert.equal(noCwd.skipReason, null);
+  assert.equal(noCwd.skipReason, SCOPE_SKIP.NO_ROOT);
 });
 
 test('2b 作用域：三枚举互斥（同一入参只出现一个 skipReason）', () => {
@@ -54,12 +54,13 @@ test('2b 作用域：三枚举互斥（同一入参只出现一个 skipReason）
     { root: ROOT, cwd: OUTSIDE, earlyEnabled: false },
     { root: null, cwd: OUTSIDE, earlyEnabled: false },
     { root: ROOT, cwd: '', earlyEnabled: true },
+    { root: ROOT, cwd: OUTSIDE, managed: false, earlyEnabled: true },
   ];
-  const allowed = new Set([SCOPE_SKIP.FOREIGN, SCOPE_SKIP.NO_ROOT, SCOPE_SKIP.OUT_OF_SCOPE, null]);
+  const allowed = new Set([SCOPE_SKIP.UNMANAGED, SCOPE_SKIP.NO_ROOT, SCOPE_SKIP.OUT_OF_SCOPE, null]);
   for (const input of cases) {
     const scope = resolveScope(input);
     assert.equal(allowed.has(scope.skipReason), true, `非法 skipReason：${String(scope.skipReason)}`);
-    const hits = [SCOPE_SKIP.FOREIGN, SCOPE_SKIP.NO_ROOT, SCOPE_SKIP.OUT_OF_SCOPE]
+    const hits = [SCOPE_SKIP.UNMANAGED, SCOPE_SKIP.NO_ROOT, SCOPE_SKIP.OUT_OF_SCOPE]
       .filter((reason) => reason === scope.skipReason).length;
     assert.ok(hits <= 1, `skipReason 必须互斥，输入=${JSON.stringify(input)}`);
   }
@@ -69,17 +70,17 @@ test('2b 作用域：三枚举互斥（同一入参只出现一个 skipReason）
   assert.equal(insideDisabled.skipReason, SCOPE_SKIP.OUT_OF_SCOPE);
 });
 
-test('2b 作用域：out-of-scope 与位置无关；onlyProject 不扩大作用域', () => {
+test('2b 作用域：out-of-scope 与位置无关；managed=false 优先于位置', () => {
   const inside = resolveScope({ root: ROOT, cwd: `${ROOT}\\src`, earlyEnabled: false });
   const outside = resolveScope({ root: ROOT, cwd: OUTSIDE, earlyEnabled: false });
   assert.equal(inside.skipReason, SCOPE_SKIP.OUT_OF_SCOPE);
-  assert.equal(outside.skipReason, SCOPE_SKIP.OUT_OF_SCOPE, '策略层禁用时外部会话也报 out-of-scope');
+  assert.equal(outside.skipReason, SCOPE_SKIP.OUT_OF_SCOPE, '策略层禁用时根外也报 out-of-scope');
 
-  // onlyProject 只是 legacy 展示开关：不参与作用域判定（根外永远是外部会话）。
-  const legacyOffOutside = resolveScope({ root: ROOT, cwd: OUTSIDE, onlyProject: false });
+  // P1：非主根（managed=false）即使在根内也不纳管；onlyProject 已弃用、不参与判定。
+  const unmanagedInside = resolveScope({ root: ROOT, cwd: `${ROOT}\\src`, managed: false });
+  assert.equal(unmanagedInside.governed, false);
+  assert.equal(unmanagedInside.skipReason, SCOPE_SKIP.UNMANAGED);
   const legacyOffInside = resolveScope({ root: ROOT, cwd: `${ROOT}\\src`, onlyProject: false });
-  assert.equal(legacyOffOutside.skipReason, SCOPE_SKIP.FOREIGN);
-  assert.equal(legacyOffOutside.governed, false);
   assert.equal(legacyOffInside.skipReason, null);
   assert.equal(legacyOffInside.governed, true);
 });
@@ -174,20 +175,20 @@ function makeScopeWiring({ guard = makeGuard(), policy = POLICY, audit = makeAud
   return { wiring, audit, engine };
 }
 
-test('2b 接线：外部会话 + 已知压力 → compactNow=0、无 early-forced、reason=foreign-session', async () => {
+test('2b 接线：外部会话 + 已知压力 → compactNow=0、无 early-forced、reason=unmanaged-root', async () => {
   const engine = { calls: 0, async compactNow() { this.calls += 1; } };
   const audit = makeAudit();
   const { wiring } = makeScopeWiring({ engine, audit });
   await wiring.check({ id: 's-external', cwd: OUTSIDE });
   assert.equal(engine.calls, 0);
   assert.deepEqual(audit.entries.map((entry) => entry.event), ['early-skipped']);
-  assert.equal(audit.entries[0].reason, SCOPE_SKIP.FOREIGN);
+  assert.equal(audit.entries[0].reason, SCOPE_SKIP.UNMANAGED);
   assert.equal(audit.entries[0].sessionId, 's-external');
   assert.equal(audit.entries[0].sessionShortId, shortSessionId('s-external'));
   assert.equal(wiring.getLast().event, 'early-skipped');
 });
 
-test('2b 接线：外部会话 + unknown 压力 → 仍是 foreign-session（不是 unknown-pressure）', async () => {
+test('2b 接线：外部会话 + unknown 压力 → 仍是 unmanaged-root（不是 unknown-pressure）', async () => {
   const engine = { calls: 0, async compactNow() { this.calls += 1; } };
   const audit = makeAudit();
   const { wiring } = makeScopeWiring({
@@ -195,7 +196,7 @@ test('2b 接线：外部会话 + unknown 压力 → 仍是 foreign-session（不
   });
   await wiring.check({ id: 's-external', cwd: OUTSIDE });
   assert.equal(engine.calls, 0);
-  assert.equal(audit.entries[0].reason, SCOPE_SKIP.FOREIGN);
+  assert.equal(audit.entries[0].reason, SCOPE_SKIP.UNMANAGED);
   assert.notEqual(audit.entries[0].reason, 'unknown-pressure');
 });
 

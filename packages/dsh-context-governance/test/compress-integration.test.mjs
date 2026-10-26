@@ -65,7 +65,7 @@ test('apply：注册工具 + 挂上压缩观察器 + dispose 释放记忆锁', a
 
     for (const dispose of ctx.disposers) await dispose();
     assert.equal(
-      await fs.stat(path.join(rootDir, '.dsh', 'memory', '.writer.json')).then(() => true, () => false),
+      await fs.stat(path.join(rootDir, 'memory', 'governance', '.writer.json')).then(() => true, () => false),
       false,
     );
   } finally {
@@ -90,6 +90,7 @@ test('0.1.13：batch 只有关键字、没有数字比例 → skip 且写 protec
       userMessage(4, '最后一条用户消息：继续。'),
     ];
     const built = buildCompaction({ before, summary: FREE_FORM_SUMMARY, start: 1, end: 3 });
+    built.session.header = { id: 'session-t3-fixture', cwd: rootDir };
     const handler = ctx.handlers[0].handler;
     handler(built.session, built.events.find((item) => item.type === 'compaction/start'));
     handler(built.session, built.events.find((item) => item.type === 'compaction/summary'));
@@ -97,7 +98,7 @@ test('0.1.13：batch 只有关键字、没有数字比例 → skip 且写 protec
     built.session.surface.nodes = built.postSurface;
     handler(built.session, built.events.find((item) => item.type === 'compaction/end'));
 
-    const auditFile = path.join(rootDir, '.dsh', 'memory', 'audit.jsonl');
+    const auditFile = path.join(rootDir, 'memory', 'governance', 'audit.jsonl');
     const lines = (await fs.readFile(auditFile, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
     const skip = lines.find((entry) => entry.event === 'protection-skip');
     assert.ok(skip, 'protection-skip 审计缺失');
@@ -128,6 +129,7 @@ test('0.1.14：无批次语义的比例 → protection-skip(no-batch-semantics)�
       userMessage(4, '最后一条用户消息：继续。'),
     ];
     const built = buildCompaction({ before, summary: FREE_FORM_SUMMARY, start: 1, end: 3, manual: true });
+    built.session.header = { id: 'session-t3-fixture', cwd: rootDir };
     const handler = ctx.handlers[0].handler;
     handler(built.session, built.events.find((item) => item.type === 'compaction/start'));
     handler(built.session, built.events.find((item) => item.type === 'compaction/summary'));
@@ -135,7 +137,7 @@ test('0.1.14：无批次语义的比例 → protection-skip(no-batch-semantics)�
     built.session.surface.nodes = built.postSurface;
     handler(built.session, built.events.find((item) => item.type === 'compaction/end'));
 
-    const auditFile = path.join(rootDir, '.dsh', 'memory', 'audit.jsonl');
+    const auditFile = path.join(rootDir, 'memory', 'governance', 'audit.jsonl');
     const lines = (await fs.readFile(auditFile, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
     assert.equal(lines.some((entry) => entry.event === 'manual-compaction-loss'), false, 'skip 不得升级为旧 loss 事件');
     assert.equal(lines.some((entry) => entry.event === 'compaction-loss'), false, 'skip 不得升级为 compaction-loss');

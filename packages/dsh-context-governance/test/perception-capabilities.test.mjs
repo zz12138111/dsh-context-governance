@@ -166,7 +166,7 @@ test('apply：审计文件在装载时就存在，并留 apply 记录（不含�
       project: 'test-project',
       compression: { enabled: true, hostVersion: '0.2.1-rc.3', backendVersion: '' },
     });
-    const auditFile = path.join(rootDir, '.dsh', 'memory', 'audit.jsonl');
+    const auditFile = path.join(rootDir, 'memory', 'governance', 'audit.jsonl');
     const text = await fs.readFile(auditFile, 'utf8');
     const first = JSON.parse(text.trim().split('\n')[0]);
     assert.equal(first.event, 'apply');

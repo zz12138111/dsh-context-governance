@@ -498,12 +498,13 @@ test('2a apply：未配置 → 根未知（最小 status 可用），首个带 c
     assert.equal(attached, true, '应在首个带 cwd 的事件后挂载并写状态');
 
     const state = JSON.parse(await fs.readFile(stateFile, 'utf8'));
-    assert.equal(state.version, 1);
-    assert.equal(state.root, normalizeRootPath(repo));
-    assert.equal(state.source, 'inferred');
-    assert.equal(state.inferredFromCwd, path.resolve(deep));
-    assert.equal(state.instance.profile, 'prof');
-    assert.equal(typeof state.inferredAt, 'string');
+    assert.equal(state.version, 2);
+    assert.equal(state.primaryRoot, normalizeRootPath(repo));
+    const entry = state.roots[state.primaryRootId];
+    assert.equal(entry.root, normalizeRootPath(repo));
+    assert.equal(entry.inferredFromCwd, path.resolve(deep));
+    assert.equal(entry.origin, 'inferred');
+    assert.equal(typeof entry.inferredAt, 'string');
 
     const status = await commands.at(-1).handler({ rawInput: 'status' });
     assert.match(status.text, new RegExp(`^project-root: ${normalizeRootPath(repo).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\(source=inferred, inferred-fresh\\)$`, 'm'));
@@ -541,7 +542,8 @@ test('2a apply：已有持久化状态 → 直接按 persisted 启动，不重�
     assert.match(status.text, new RegExp(`^project-root: ${normalizeRootPath(repo).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\(source=persisted\\)$`, 'm'));
     assert.equal(handlers.filter((handler) => handler.cb.name === 'firstInferenceRootWatcher').length, 0, '根已确定时不得再挂首次推断 watcher');
     const state = JSON.parse(await fs.readFile(stateFile, 'utf8'));
-    assert.equal(state.inferredAt, '2026-10-25T00:00:00.000Z', '沿用持久化状态，不应重写');
+    assert.equal(state.version, 2, '重启后 v2 状态沿用');
+    assert.equal(state.roots[state.primaryRootId].inferredAt, '2026-10-25T00:00:00.000Z', '沿用持久化推断时间，不应重写');
   } finally {
     await closeContext(cleanups);
     await fs.rm(dir, { recursive: true, force: true });
@@ -573,7 +575,8 @@ test('2a apply：显式配置根赢过持久化根 → status changed-from，持
       'm',
     ));
     const state = JSON.parse(await fs.readFile(stateFile, 'utf8'));
-    assert.equal(state.root, path.resolve(oldRoot), 'config 不得改写持久化 root（移除配置后要回落到它）');
+    assert.equal(state.primaryRoot, path.resolve(oldRoot), 'config 不得改写持久化主根（移除配置后要回落到它）');
+    assert.equal(state.roots[state.primaryRootId].root, path.resolve(oldRoot));
     assert.equal(state.configRoot, path.resolve(newRoot), 'config 覆盖留镜像，供回落审计');
   } finally {
     await closeContext(cleanups);
@@ -611,8 +614,8 @@ test('2a apply：config 移除后回落到持久化根 → changed-from 可见�
       `\\(source=persisted, changed-from=${path.resolve(previousConfigRoot).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\)$`,
       'm',
     ));
-    const state = readRootState(stateFile);
-    assert.equal(state.root, path.resolve(persistedRoot));
+    const state = JSON.parse(await fs.readFile(stateFile, 'utf8'));
+    assert.equal(state.primaryRoot, path.resolve(persistedRoot));
     assert.equal(state.configRoot, null, '回落后期镜必须清掉，避免每次启动重复审计');
   } finally {
     await closeContext(cleanups);
@@ -655,8 +658,9 @@ test('2a apply：两段采样——先非 git 会话（no-project-root，不写�
     const attached = await until(() => commands.length >= 2 && fs.access(stateFile).then(() => true, () => false));
     assert.equal(attached, true, '第二段应推断成功并落盘');
     const state = JSON.parse(await fs.readFile(stateFile, 'utf8'));
-    assert.equal(state.root, normalizeRootPath(repo));
-    assert.equal(state.inferredFromCwd, path.resolve(deep));
+    assert.equal(state.version, 2);
+    assert.equal(state.primaryRoot, normalizeRootPath(repo));
+    assert.equal(state.roots[state.primaryRootId].inferredFromCwd, path.resolve(deep));
     const status = await commands.at(-1).handler({ rawInput: 'status' });
     assert.match(status.text, /^project-root: .*\(source=inferred, inferred-fresh\)$/m);
     const diag = await fs.readFile(diagFile, 'utf8');

@@ -335,7 +335,7 @@ test('0.2.1 P2-1 退化拒层必须落审计（policy-invalid reason=native-unco
     });
     const session = { id: 'session-aaaaaaaa', header: { id: 'session-aaaaaaaa', cwd: rootDir } };
     handlers[0](session, { type: 'request/context', seq: 1, data: { contextWindow: 131_072 } });
-    const auditFile = path.join(rootDir, '.dsh', 'memory', 'audit.jsonl');
+    const auditFile = path.join(rootDir, 'memory', 'governance', 'audit.jsonl');
     const records = (await fs.readFile(auditFile, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
     const rejected = records.filter((record) => record.event === 'policy-invalid');
     assert.equal(rejected.length, 1, `退化应只写 1 条 policy-invalid，实际 ${JSON.stringify(rejected)}`);
@@ -473,7 +473,7 @@ test('0.2.1 P3-7（apply 路径）：windowViolations 去重 Set 恢复后清空
     feed(131_072);   // 第一次拒层：0.5 > 0.375 → audit 1
     feed(1_048_576); // 恢复：Set 应清空
     feed(131_072);   // 第二次拒层：必须再写 1 条 → audit 2
-    const auditFile = path.join(rootDir, '.dsh', 'memory', 'audit.jsonl');
+    const auditFile = path.join(rootDir, 'memory', 'governance', 'audit.jsonl');
     const records = (await fs.readFile(auditFile, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
     const rejected = records.filter((record) => record.event === 'policy-invalid' && record.reason === 'window-shrunk');
     assert.equal(rejected.length, 2, `跨 episode 必须写 2 条，实际 ${JSON.stringify(rejected)}`);

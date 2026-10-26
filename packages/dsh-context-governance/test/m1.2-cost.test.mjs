@@ -271,7 +271,7 @@ test('M1.2 能力探测双行：apply + ready，ready 能看到晚注册的 comp
       compression: { enabled: true, hostVersion: '0.2.1-rc.3', backendVersion: '' },
       diagnostics: { logFile },
     });
-    const auditFile = path.join(rootDir, '.dsh', 'memory', 'audit.jsonl');
+    const auditFile = path.join(rootDir, 'memory', 'governance', 'audit.jsonl');
     const initial = (await fs.readFile(auditFile, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
     assert.ok(initial.some((entry) => entry.event === 'capability@apply'));
     assert.equal(initial.some((entry) => entry.event === 'capability@ready'), false);

@@ -74,7 +74,7 @@ function sessionWithCwd(cwd, id = 'session-p2') {
   return { id, header: { id, cwd }, surface: { nodes: [1, 2] }, eventAt: () => undefined, append: () => ({ seq: 99 }) };
 }
 
-test('P2-1：别的 cwd 的会话只记 host-native cost，不写本记忆、不回注', async () => {
+test('P1：别的 cwd 的会话 = unmanaged-root，零审计、零记忆、零 cost', async () => {
   await withStore(async (store, rootDir) => {
     const ctx = makeCtx();
     const guard = new CompressionGuard({
@@ -88,30 +88,23 @@ test('P2-1：别的 cwd 的会话只记 host-native cost，不写本记忆、不
     });
     guard.start();
     const foreign = sessionWithCwd('D:\\work\\other-project');
-    ctx.handlers[0].handler(foreign, { type: 'compaction/start', seq: 1, data: { compactionId: 'cmp-foreign' } });
-    ctx.handlers[0].handler(foreign, { type: 'compaction/end', seq: 2, data: { compactionId: 'cmp-foreign' } });
+    ctx.handlers[0].handler(foreign, { type: 'compaction/start', seq: 1, data: { compactionId: 'cmp-unmanaged' } });
+    ctx.handlers[0].handler(foreign, { type: 'compaction/end', seq: 2, data: { compactionId: 'cmp-unmanaged' } });
     await flushMicrotasks();
     const status = guard.status;
     assert.equal(status.stats.starts, 0);
     assert.equal(status.stats.protectionWrites, 0);
-    assert.equal(status.scope.ignoredForeignEvents, 2);
-    assert.equal(status.scope.ignoredForeignSessions, 1);
-    assert.equal(status.scope.foreignCosts, 1);
+    assert.equal(status.scope.unmanagedEvents, 2);
     assert.equal(store.protectionPending, 0);
-    assert.equal(store.allEntries().length, 0, '外部会话不得写本地记忆条目');
+    assert.equal(store.allEntries().length, 0, 'unmanaged 会话不得写本地记忆条目');
     const rows = await readAudit(rootDir);
-    const costs = rows.filter((entry) => entry.event === 'compaction-cost');
-    assert.equal(costs.length, 1, '外部会话真实压缩必须留一条成本行');
-    assert.equal(costs[0].source, 'host-native');
-    assert.equal(costs[0].sessionId, 'session-p2');
-    assert.equal(costs[0].project, undefined);
-    assert.equal(rows.some((entry) => /^protection-|^reinjection/.test(entry.event)), false);
-    assert.ok(ctx.logs.some(([level, message]) => level === 'warn' && message.includes('ignoring session')));
+    assert.equal(rows.length, 0, 'P1：unmanaged 不写任何 per-root 审计（含 cost）');
+    assert.ok(ctx.logs.some(([level, message]) => level === 'warn' && message.includes('not governing session')));
     guard.stop();
   });
 });
 
-test('P2-1：同 cwd 会话照常处理；cwd 未知时放行但计数', async () => {
+test('P1：同根会话照常处理；cwd 未知 = no-project-root（不计数进入主路径）', async () => {
   await withStore(async (store) => {
     const ctx = makeCtx();
     const guard = new CompressionGuard({
@@ -130,13 +123,13 @@ test('P2-1：同 cwd 会话照常处理；cwd 未知时放行但计数', async (
 
     const unknown = { id: 'session-unknown', surface: { nodes: [] }, eventAt: () => undefined, append: () => ({ seq: 1 }) };
     ctx.handlers[0].handler(unknown, { type: 'compaction/start', seq: 2, data: { compactionId: 'cmp-unknown' } });
-    assert.equal(guard.status.stats.starts, 2);
-    assert.equal(guard.status.scope.unattributedEvents, 1);
+    assert.equal(guard.status.stats.starts, 1, '空 cwd fail-closed，不得进入观测主路径');
+    assert.equal(guard.status.scope.noRootEvents, 1);
     guard.stop();
   });
 });
 
-test('P2-1：onlyProject 只作展示——true/false 下外部会话都 skip（只记 host-native cost）', async () => {
+test('P1：onlyProject 已弃用——true/false 下 unmanaged 都不记账', async () => {
   await withStore(async (store, rootDir) => {
     for (const onlyProject of [true, false]) {
       const ctx = makeCtx();
@@ -158,17 +151,13 @@ test('P2-1：onlyProject 只作展示——true/false 下外部会话都 skip（
         type: 'compaction/end', seq: 2, data: { compactionId: `cmp-op-${onlyProject}` },
       });
       await flushMicrotasks();
-      assert.equal(guard.status.stats.starts, 0, `onlyProject=${onlyProject}：外部不得进入保护/观测`);
-      assert.equal(guard.status.scope.foreignCosts, 1, `onlyProject=${onlyProject}：外部仍须记一条 cost`);
+      assert.equal(guard.status.stats.starts, 0, `onlyProject=${onlyProject}：unmanaged 不得进入保护/观测`);
+      assert.equal(guard.status.scope.unmanagedEvents, 2);
       guard.stop();
     }
     assert.equal(store.protectionPending, 0);
-    assert.equal(store.allEntries().length, 0, '两种 onlyProject 下外部都不得写本地记忆');
-    const rows = await readAudit(rootDir);
-    const costs = rows.filter((entry) => entry.event === 'compaction-cost');
-    assert.equal(costs.length, 2);
-    assert.ok(costs.every((row) => row.source === 'host-native'));
-    assert.equal(rows.some((entry) => /^protection-|^reinjection/.test(entry.event)), false);
+    assert.equal(store.allEntries().length, 0);
+    assert.equal((await readAudit(rootDir)).length, 0);
   });
 });
 
@@ -277,6 +266,8 @@ test('P2-1：reinjection.maxFailures 接进配置（默认 3、夹取 1–20）�
       const bySeq = new Map(built.events.map((event) => [event.seq, event]));
       const session = {
         id: 'session-cfg',
+        cwd: rootDir,
+        header: { id: 'session-cfg', cwd: rootDir },
         surface: { nodes: [...built.session.surface.nodes] },
         eventAt: (seq) => bySeq.get(seq),
         append: () => { throw new Error('append rejected'); },
@@ -289,7 +280,7 @@ test('P2-1：reinjection.maxFailures 接进配置（默认 3、夹取 1–20）�
       await new Promise((resolve) => setImmediate(resolve));
       await new Promise((resolve) => setImmediate(resolve));
     }
-    const audit = (await fs.readFile(path.join(rootDir, '.dsh', 'memory', 'audit.jsonl'), 'utf8'))
+    const audit = (await fs.readFile(path.join(rootDir, 'memory', 'governance', 'audit.jsonl'), 'utf8'))
       .split('\n').filter(Boolean).map((line) => JSON.parse(line));
     const failed = audit.find((entry) => entry.event === 'reinjection-failed');
     assert.ok(failed, '应有 reinjection-failed');

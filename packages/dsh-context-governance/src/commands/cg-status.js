@@ -99,7 +99,9 @@ function statusText({ store, guard, audit, rootAudit = null, now, policy = null,
   if (rootInfo !== null) {
     if (rootInfo.root === null) {
       // §11.1-10：根未知必须明示 no-project-root（不是空值或猜一个根）。
-      lines.push('project-root: unknown (no-project-root)');
+      lines.push(rootInfo.failClosedReason
+        ? `project-root: ${rootInfo.attemptedRoot ?? 'unknown'} (fail-closed: ${rootInfo.failClosedReason})`
+        : 'project-root: unknown (no-project-root)');
     } else {
       const fresh = rootInfo.source === 'inferred' ? ', inferred-fresh' : '';
       const persistFailed = rootInfo.source === 'inferred' && rootInfo.statePersisted === false ? ', state-write-failed' : '';

@@ -147,6 +147,26 @@ test('P1/T18 registry：不扫盘——只登记 state 里/会话出现的根', 
   assert.equal(reg.view().length, 1);
 });
 
+test('P1/T15 registry：子会话继承父根、不新增根；父根未知/无 cwd → no-root', async () => {
+  const base = await tempDir();
+  const root = makeRoot(base, 'alpha');
+  const file = stateFileIn(base);
+  const clock = { value: new Date('2026-10-26T10:00:00Z') };
+  const reg = makeRegistry({ stateFile: file, clock });
+  reg.claimPrimary(root, { origin: 'inferred' });
+  const parent = reg.resolveSessionRoot(session('p1', root));
+  assert.equal(parent.status, 'managed');
+  const child = reg.resolveSessionRoot({ header: { id: 'c1', parentSession: 'p1', origin: 'subagent' } });
+  assert.equal(child.status, 'managed');
+  assert.equal(child.source, 'parent');
+  assert.equal(child.isSubagent, true);
+  assert.equal(child.entry.root, root);
+  assert.equal(reg.counts().roots, 1, '子会话不得新增根');
+  const orphan = reg.resolveSessionRoot({ header: { id: 'c2', parentSession: 'missing', origin: 'subagent' } });
+  assert.equal(orphan.status, 'no-root');
+  assert.equal(orphan.isSubagent, true);
+});
+
 test('P1/T19 registry：lastSeenAt 节流、pin 上限、hash 碰撞延长', async () => {
   const base = await tempDir();
   const rootA = makeRoot(base, 'alpha');

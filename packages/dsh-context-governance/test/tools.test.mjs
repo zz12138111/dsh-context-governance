@@ -103,7 +103,7 @@ test('工具注册：ctx.tools.register 逐个注册，缺失时只记录失败�
 test('resolveConfig：默认项目取目录名，非法配置直接拒绝', () => {
   const config = resolveConfig({ projectRoot: 'D:\\work\\demo' });
   assert.equal(config.project, 'demo');
-  assert.equal(config.memoryRoot, path.resolve('D:\\work\\demo', '.dsh', 'memory'));
+  assert.equal(config.memoryRoot, path.resolve('D:\\work\\demo', 'memory', 'governance'));
   assert.equal(config.enabled, true);
 
   assert.throws(() => resolveConfig({ enabled: 'yes' }), /enabled must be a boolean/);
@@ -127,10 +127,10 @@ test('apply：注册工具、打开记忆库，并在 dispose 时释放写者锁
   try {
     await apply(ctx, { projectRoot: rootDir, project: 'test-project' });
     assert.deepEqual(registered, [MEM_WRITE_NAME, MEM_QUERY_NAME]);
-    assert.ok(await fs.stat(path.join(rootDir, '.dsh', 'memory', '.writer.json')).then(() => true, () => false));
+    assert.ok(await fs.stat(path.join(rootDir, 'memory', 'governance', '.writer.json')).then(() => true, () => false));
 
     for (const disposer of disposers) await disposer();
-    assert.equal(await fs.stat(path.join(rootDir, '.dsh', 'memory', '.writer.json')).then(() => true, () => false), false);
+    assert.equal(await fs.stat(path.join(rootDir, 'memory', 'governance', '.writer.json')).then(() => true, () => false), false);
   } finally {
     await fs.rm(rootDir, { recursive: true, force: true });
   }

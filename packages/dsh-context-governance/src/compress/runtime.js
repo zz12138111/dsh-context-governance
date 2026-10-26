@@ -168,7 +168,7 @@ export class CompressionGuard {
   /** 1.0 #1：会话归域判定（由 index 注入 resolveScope；缺省用根边界兜底）。 */
   #scopeResolver = null;
   #captureTitle = true;
-  #foreignSessions = new Set();
+  #scopeWarned = new Set();
   #lastInjection = new Map();
   #stats = {
     events: 0,
@@ -193,11 +193,9 @@ export class CompressionGuard {
     interruptedCycles: 0,
     abandonedCycles: 0,
     readOnlyRecoveries: 0,
-    ignoredForeignEvents: 0,
-    foreignStarts: 0,
-    foreignSummaries: 0,
-    foreignCosts: 0,
-    unattributedEvents: 0,
+    /** P1：未纳管根（unmanaged-root）与无根（no-root）事件只计数，不写审计。 */
+    unmanagedEvents: 0,
+    noRootEvents: 0,
     reinjectionShadowed: 0,
     /** 0.2.1 P3-6：收到但非法的 contextWindow 观测（不当作删除）。 */
     windowInvalidObservations: 0,
@@ -463,12 +461,9 @@ export class CompressionGuard {
         projectRoot: this.#projectRoot,
         onlyProject: this.#onlyProject,
         captureTitle: this.#captureTitle,
-        ignoredForeignEvents: this.#stats.ignoredForeignEvents,
-        ignoredForeignSessions: this.#foreignSessions.size,
-        foreignStarts: this.#stats.foreignStarts,
-        foreignSummaries: this.#stats.foreignSummaries,
-        foreignCosts: this.#stats.foreignCosts,
-        unattributedEvents: this.#stats.unattributedEvents,
+        managedEvents: this.#stats.events,
+        unmanagedEvents: this.#stats.unmanagedEvents,
+        noRootEvents: this.#stats.noRootEvents,
       },
       writeLatency: calculateLatencyStats(this.#writeDurations),
       pressure: this.pressure(),
@@ -1047,25 +1042,12 @@ export class CompressionGuard {
     const occurredAt = cost.occurredAt ?? this.#now().toISOString();
     // 0.1.18（cost-v1.4）：backend 字段解析统一走 resolveBackendFields（与 /cg status 同一来源）。
     const backendFields = resolveBackendFields(this.#adapter);
-    const foreign = state.foreign === true;
-    // R-SCOPE-2：外部会话只含压缩事实与用量；不带 protection/reinjection/prune 字段。
-    const governanceFields = foreign ? {} : {
-      tokensInjected: cost.tokensInjected,
-      injectedEntries: cost.injectedEntries,
-      tokensDropped: cost.tokensDropped,
-      tokensPruned,
-      pruneCount: prunes.length,
-      pruneTools,
-      governanceCostSource: governanceEstimated ? 'estimated' : 'unknown',
-      estimateMethod: governanceEstimated ? 'chars/4' : 'none',
-    };
+    // P1：不再有“外部会话只记账”分支；所有进入这里的会话都是本根被纳管的会话。
     this.#auditEvent('compaction-cost', {
       sessionId: state.sessionId,
       compactionId: state.compactionId,
-      ...(foreign ? {} : { project: this.#projectName }),
+      project: this.#projectName,
       ...backendFields,
-      ...(foreign ? { source: 'host-native' } : {}),
-      ...(foreign && typeof state.reason === 'string' && state.reason !== '' ? { reason: state.reason } : {}),
       model: cost.model,
       trigger: cost.trigger,
       occurredAt,
@@ -1079,11 +1061,16 @@ export class CompressionGuard {
       tokensSummary: cost.tokensSummary,
       backendUsage: cost.backendUsage,
       backendCostSource: backendMeasured ? 'measured' : 'unknown',
-      ...governanceFields,
+      tokensInjected: cost.tokensInjected,
+      injectedEntries: cost.injectedEntries,
+      tokensDropped: cost.tokensDropped,
+      tokensPruned,
+      pruneCount: prunes.length,
+      pruneTools,
+      governanceCostSource: governanceEstimated ? 'estimated' : 'unknown',
+      estimateMethod: governanceEstimated ? 'chars/4' : 'none',
       auditVersion: 'cost-v1.4',
     });
-    // 外部会话的 cost 行只进审计，不覆盖本项目 `/cg status last-cost`。
-    if (foreign) return;
     this.#lastCost = {
       sessionId: state.sessionId,
       compactionId: state.compactionId,
@@ -1096,84 +1083,6 @@ export class CompressionGuard {
       tokensPruned,
       pruneCount: prunes.length,
       pruneTools,
-    };
-  }
-
-  /** 1.0 #1：外部会话只记宿主原生压缩事实与用量；不写记忆、不保护、不回注。 */
-  #observeForeign(session, event) {
-    const type = event?.type;
-    if (type === 'assistant/message') {
-      this.#recordUsage(session, event);
-      this.#captureCostAfter(session, event);
-      return;
-    }
-    const id = event?.data?.compactionId ?? null;
-    if (id === null) return;
-    if (type === 'compaction/start') {
-      if (this.#pending.has(id) || this.#completedCycles.has(id)) return;
-      this.#stats.foreignStarts += 1;
-      this.#pending.set(id, this.#foreignCostState(session, id, event, null));
-      return;
-    }
-    if (type === 'compaction/summary') {
-      let state = this.#pending.get(id);
-      if (state === undefined || state.foreign !== true) {
-        state = this.#foreignCostState(session, id, event, 'compaction/start was not observed');
-        this.#pending.set(id, state);
-        this.#stats.foreignStarts += 1;
-      }
-      this.#stats.foreignSummaries += 1;
-      const usage = event?.data?.usage;
-      const usageKeys = ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'totalTokens'];
-      const hasUsage = usage !== null && typeof usage === 'object' && !Array.isArray(usage)
-        && usageKeys.some((key) => Number.isFinite(usage[key]));
-      if (hasUsage) state.cost.backendUsage = usage; // 空对象/无有效数值 → 保持 null + unknown
-      state.cost.tokensSummary = Number.isFinite(usage?.outputTokens) ? usage.outputTokens : null;
-      state.cost.tokensShadowed = Number.isFinite(event?.data?.shadowedTokenCount)
-        ? event.data.shadowedTokenCount
-        : null;
-      const modelParts = [event?.data?.provider, event?.data?.model]
-        .filter((part) => typeof part === 'string' && part !== '');
-      state.cost.model = modelParts.length > 0 ? modelParts.join('/') : null;
-      return;
-    }
-    if (type === 'compaction/end') {
-      if (this.#completedCycles.has(id)) return;
-      const state = this.#pending.get(id) ?? this.#foreignCostState(session, id, event, 'compaction/start was not observed');
-      this.#pending.delete(id);
-      this.#completedCycles.add(id);
-      this.#completedOrder.push(id);
-      while (this.#completedOrder.length > 200) {
-        this.#completedCycles.delete(this.#completedOrder.shift());
-      }
-      state.cost.occurredAt = Number.isFinite(event?.time)
-        ? new Date(event.time).toISOString()
-        : this.#now().toISOString();
-      this.#stats.foreignCosts += 1;
-      // R-SCOPE-2：一条真实压缩必须落下一条成本行；外部会话不进入 pendingCosts 等待补 usage。
-      queueMicrotask(() => {
-        try {
-          const afterTokens = this.#measureTokens(session);
-          state.cost.tokensAfter = afterTokens;
-          state.cost.tokensAfterSource = afterTokens === null ? 'none' : 'tokenMeter';
-          state.cost.tokensAfterParts = null;
-          this.#writeCost(state, session);
-        } catch (error) {
-          this.#logger?.warn?.(`[context-governance] foreign cost audit failed: ${String(error?.message ?? error)}`);
-        }
-      });
-    }
-  }
-
-  #foreignCostState(session, compactionId, event, reason) {
-    return {
-      foreign: true,
-      reason: reason ?? null,
-      compactionId,
-      sessionId: session?.id ?? null,
-      manual: event?.data?.sourceCommandId != null,
-      prunes: [],
-      cost: this.#newCost(event?.data?.sourceCommandId != null ? 'manual' : 'auto', session),
     };
   }
 
@@ -1567,25 +1476,24 @@ export class CompressionGuard {
           this.#logger?.warn?.(`[context-governance] ready capability hook failed: ${String(error?.message ?? error)}`);
         }
       }
-      // 1.0 #1/B-1：根已确定但 cwd 在根外 = 外部会话 → 提前压/保护/回注/记忆全不碰，
-      // 只按 R-SCOPE-2 记宿主原生压缩的事实与用量（cost-only，source=host-native）。
+      // P1（B）:只有主根 managed；unmanaged-root / no-root 一律不观测、不保护、不回注、不写审计。
+      // （不再有“外部会话只记 cost 行”的 R-SCOPE-2 分支；P2 起其他根改为各自纳管。）
       const scope = this.#scopeOf(session);
       if (!scope.governed) {
-        this.#stats.ignoredForeignEvents += 1;
-        if (scope.unattributed === true) this.#stats.unattributedEvents += 1;
+        if (scope.skipReason === SCOPE_SKIP.NO_ROOT) this.#stats.noRootEvents += 1;
+        else this.#stats.unmanagedEvents += 1;
         const sessionId = session?.header?.id ?? session?.id ?? 'unknown';
-        if (!this.#foreignSessions.has(sessionId)) {
-          this.#foreignSessions.add(sessionId);
+        const key = `${scope.root ?? 'none'}|${scope.isSubagent === true ? 'sub' : 'main'}`;
+        if (!this.#scopeWarned.has(key)) {
+          this.#scopeWarned.add(key);
           this.#logger?.warn?.(
-            `[context-governance] ignoring session ${sessionId} for protection/reinjection: ` +
-            `cwd ${this.#sessionCwd(session) || 'unknown'} is outside project ${this.#projectRoot}; ` +
-            'cost-only observation',
+            `[context-governance] not governing session ${sessionId}: ` +
+            `root=${scope.root ?? 'unknown'} reason=${scope.skipReason ?? 'unknown'} ` +
+            `(cwd=${this.#sessionCwd(session) || 'unknown'}; P1 only the primary root is managed)`,
           );
         }
-        if (scope.skipReason === SCOPE_SKIP.FOREIGN) this.#observeForeign(session, event);
         return;
       }
-      if (scope.unattributed === true) this.#stats.unattributedEvents += 1;
       this.#stats.events += 1;
       this.#lastSession = session;
       // 0.2.1 backfill：既有会话可能拿不到新的 request/context，首次事件时回填一次历史窗口。

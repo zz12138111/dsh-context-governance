@@ -13,7 +13,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { registerStatusCommand } from './commands/cg-status.js';
-import { identityDiagnostic, inferRootFromCwd, persistInferredRoot, readRootState, resolvePersistenceIdentity, samePath, sessionCwd, writeRootState } from './root-state.js';
+import { identityDiagnostic, inferRootFromCwd, resolvePersistenceIdentity, samePath, sessionCwd } from './root-state.js';
+import { MEMORY_ROOT_REL, memoryRootFor } from './roots/paths.js';
+import { RootRegistry } from './roots/registry.js';
 import { POLICY_FILE_MAX_BYTES, WINDOW_USABLE_MARGIN, atExceedsUsableWindow, nativeFromWindow, nativeRatio, profileLayer, resolvePolicy, shortSessionId, usableAtCeiling, validateLayer } from './policy.js';
 import { detectHostVersion, normalizeBackendVersion } from './compress/adapters.js';
 import { CompressionGuard } from './compress/runtime.js';
@@ -23,7 +25,7 @@ import { DEFAULT_AUDIT_MAX_BYTES, MAX_AUDIT_MAX_BYTES, MIN_AUDIT_MAX_BYTES, crea
 import { appendDiagnosticLine, capabilityLine, PLUGIN_VERSION, startupLine } from './diagnostics.js';
 import { DEFAULT_MEMORY_DIR, MemoryStore, MemoryStoreError } from './memory/store.js';
 import { registerMemoryHeader } from './memory/header.js';
-import { resolveScope } from './scope.js';
+import { SCOPE_SKIP, resolveScope } from './scope.js';
 import { MEM_QUERY_NAME, MEM_WRITE_NAME, registerMemoryTools } from './tools/mem-tools.js';
 
 export const name = 'dsh-context-governance';
@@ -38,7 +40,8 @@ export const inject = ['tools'];
 export const DEFAULT_CONFIG = Object.freeze({
   enabled: true,
   projectRoot: '',
-  memoryRoot: DEFAULT_MEMORY_DIR,
+  // P1：目录固定（需求授权边界）；非 memory/governance 的相对值在 attach 时该根 fail-closed。
+  memoryRoot: MEMORY_ROOT_REL,
   project: '',
   readOnly: false,
   indexMaxChars: 64_000,
@@ -532,30 +535,44 @@ export async function apply(ctx, rawConfig = {}) {
     ctx.logger?.info?.('[context-governance] disabled by config');
     return;
   }
-  // 2a：根来源 显式配置 > 持久化 > 首次推断（首次推断在首个会话事件时做）。
+  // 2a/P1：根来源 = 显式配置（仅优先匹配）> 持久化主根 > 首次推断（首个会话事件）。
   const identity = resolvePersistenceIdentity(ctx);
   // P1：profile 级 root audit（用户级）。身份不可用 → 不写用户级文件（fail-closed）。
   const rootAudit = identity.ok ? createRootAudit(identity, { maxBytes: config.audit.maxBytes }) : null;
-  const persisted = identity.ok ? readRootState(identity.stateFile) : null;
   const configuredRoot = config.projectRoot === '' ? null : config.projectRoot;
-  // 根变化可见（§11.1-6）：config 覆盖持久化根，或 config 移除后回落持久化根。
+  const registry = identity.ok
+    ? RootRegistry.load({
+      stateFile: identity.stateFile,
+      rootAudit,
+      configRoot: configuredRoot,
+      project: config.project,
+      profile: identity.name,
+      home: identity.home ?? identity.dir,
+      logger: ctx.logger,
+    })
+    : null;
+  const persistedRoot = registry?.primary?.root ?? null;
+  // 根变化可见：config 覆盖持久化主根，或 config 移除后回落持久化主根。
   let changedFrom = null;
-  if (configuredRoot !== null && persisted !== null && !samePath(configuredRoot, persisted.root)) {
-    changedFrom = persisted.root;
-  } else if (configuredRoot === null && persisted !== null && persisted.configRoot !== null
-    && !samePath(persisted.configRoot, persisted.root)) {
-    changedFrom = persisted.configRoot;
+  if (configuredRoot !== null && persistedRoot !== null && !samePath(configuredRoot, persistedRoot)) {
+    changedFrom = persistedRoot;
+  } else if (configuredRoot === null && persistedRoot !== null
+    && registry?.state?.configRoot !== null && registry?.state?.configRoot !== undefined
+    && !samePath(registry.state.configRoot, persistedRoot)) {
+    changedFrom = registry.state.configRoot;
   }
   const rootInfo = {
-    root: configuredRoot ?? (persisted === null ? null : persisted.root),
-    source: configuredRoot !== null ? 'config' : (persisted !== null ? 'persisted' : 'none'),
+    root: configuredRoot ?? persistedRoot,
+    source: configuredRoot !== null ? 'config' : (persistedRoot !== null ? 'persisted' : 'none'),
     identity,
     stateFile: identity.ok ? identity.stateFile : null,
-    persistedRoot: persisted === null ? null : persisted.root,
-    configRootMirror: persisted === null ? null : persisted.configRoot,
+    persistedRoot,
+    configRootMirror: registry?.state?.configRoot ?? null,
     changedFrom,
     inferredFromCwd: null,
     statePersisted: null,
+    failClosedReason: null,
+    attemptedRoot: null,
   };
 
   // P1：身份事件写 root audit（不再写 per-root audit；见设计评审 §4.2）。
@@ -574,19 +591,57 @@ export async function apply(ctx, rawConfig = {}) {
   }
 
   const startRuntime = async (root, source) => {
+    // 目录固定 + containment：memoryRoot 必须是 <root>/memory/governance，否则该根 fail-closed。
+    const memory = memoryRootFor(root, config.memoryRootRel ?? config.memoryRoot);
+    if (!memory.ok) {
+      const entry = registry?.attach ?? registry?.primary ?? null;
+      if (entry !== null) registry?.failClosed(entry.rootId, memory.reason);
+      rootInfo.failClosedReason = memory.reason;
+      rootInfo.attemptedRoot = root;
+      rootInfo.root = null;
+      rootInfo.source = 'none';
+      ctx.logger?.warn?.(
+        `[context-governance] root ${root} fail-closed: ${memory.reason} ` +
+        `(memoryRoot=${config.memoryRootRel ?? config.memoryRoot}); no store/memory will be created`,
+      );
+      return false;
+    }
     rootInfo.root = root;
     rootInfo.source = source;
+    rootInfo.failClosedReason = null;
     config.projectRoot = root;
-    config.memoryRoot = path.resolve(root, config.memoryRootRel ?? config.memoryRoot);
-    if (config.project === '') config.project = path.basename(root);
+    config.memoryRoot = memory.memoryRoot;
+    const attachEntry = registry?.attach ?? null;
+    if (config.project === '') config.project = attachEntry?.project ?? path.basename(root);
     // 策略链只在 attach 时算：profile 标签 → 插件配置 → 项目 .cg-policy.json（命令侧只读它）。
     const policyState = buildPolicyState(config);
-    // 1.0 #1：单根模型的唯一归域入口；提前压/观测/保护/header/mem_* 都读它。
-    const scopeOf = (session) => resolveScope({
-      root: rootInfo.root,
-      cwd: sessionCwd(session),
-      earlyEnabled: true,
-    });
+    // P1：唯一归域入口 = registry（只主根 managed；其余 unmanaged/no-root 直接跳过）。
+    const scopeOf = (session) => {
+      if (registry === null) {
+        return resolveScope({ root, cwd: sessionCwd(session), earlyEnabled: true });
+      }
+      const resolved = registry.resolveSessionRoot(session);
+      if (resolved.status === 'managed') {
+        return {
+          mode: 'multi-root',
+          root: resolved.entry.root,
+          cwd: resolved.cwd,
+          governed: true,
+          skipReason: null,
+          unattributed: false,
+          isSubagent: resolved.isSubagent === true,
+        };
+      }
+      return {
+        mode: 'multi-root',
+        root: resolved.entry === null ? null : resolved.entry.root,
+        cwd: resolved.cwd,
+        governed: false,
+        skipReason: resolved.status === 'no-root' ? SCOPE_SKIP.NO_ROOT : SCOPE_SKIP.UNMANAGED,
+        unattributed: false,
+        isSubagent: resolved.isSubagent === true,
+      };
+    };
 
     const store = await openStore(config);
     const registration = registerMemoryTools(ctx, store);
@@ -795,10 +850,13 @@ export async function apply(ctx, rawConfig = {}) {
     // M3 T2（0.3.1）：新会话 header（默认开）。放在 guard 之后注册，保持 session/event 处理顺序稳定。
     const header = registerMemoryHeader(ctx, store, {
       enabled: config.memoryHeader.enabled,
-      isEnabled: (session) => config.memoryHeader.enabled &&
-        policyState.resolve(session?.id ?? null).values['header.enabled'] !== false &&
-        // 1.0 #1：外部会话不注入本项目记忆 header。
-        scopeOf(session).governed,
+      isEnabled: (session) => {
+        const scope = scopeOf(session);
+        return config.memoryHeader.enabled &&
+          !scope.isSubagent &&
+          scope.governed &&
+          policyState.resolve(session?.id ?? null).values['header.enabled'] !== false;
+      },
       hasRuleFile: ruleFilePresent,
       maxLines: config.memoryHeader.maxLines,
       maxChars: config.memoryHeader.maxChars,
@@ -935,26 +993,23 @@ export async function apply(ctx, rawConfig = {}) {
     } catch {
       /* 审计失败不影响主流程 */
     }
-    // §11.1-6：config 只写镜像，不改持久化 root；移除配置后回落到持久化 root 并留痕。
-    if (identity.ok && persisted !== null) {
-      const mirrorRoot = source === 'config' && !samePath(root, persisted.root) ? root : null;
-      if (mirrorRoot !== null || persisted.configRoot !== null) {
-        const mirrored = writeRootState(identity.stateFile, {
-          root: persisted.root,
-          inferredAt: persisted.inferredAt,
-          inferredFromCwd: persisted.inferredFromCwd,
-          profile: identity.name,
-          ...(mirrorRoot === null ? {} : { configRoot: mirrorRoot }),
-        });
-        if (!mirrored) ctx.logger?.warn?.(`[context-governance] root state mirror write failed: ${identity.stateFile}`);
-      }
+    // P1：config 只写镜像（registry.state.configRoot），不改持久化 primaryRoot；移除配置后回落主根。
+    if (registry !== null) {
+      const mirrorRoot = configuredRoot !== null
+        && (rootInfo.persistedRoot === null || !samePath(configuredRoot, rootInfo.persistedRoot))
+        ? configuredRoot
+        : null;
+      registry.noteConfigRoot(mirrorRoot);
+      rootInfo.configRootMirror = registry.state.configRoot;
     }
     if (config.diagnostics.logFile !== '') appendDiagnosticLine(config.diagnostics.logFile, identityDiagnostic(identity));
   };
 
   if (rootInfo.root !== null) {
-    await startRuntime(rootInfo.root, rootInfo.source);
-    return;
+    registry?.setAttachRoot(rootInfo.root, { origin: rootInfo.source === 'config' ? 'config' : 'persisted' });
+    const started = await startRuntime(rootInfo.root, rootInfo.source);
+    if (started !== false) return;
+    // fail-closed（memoryRoot 非固定/逃逸）：不建 store；落到最小 status 路径并保留原因。
   }
 
   // 根未知（未配置且无持久化状态）：先不建 store/guard；注册最小状态命令，等首个带 cwd 的会话事件推断。
@@ -1039,34 +1094,36 @@ export async function apply(ctx, rawConfig = {}) {
     attaching = true;
     try { watcherDispose?.(); } catch { /* ignore */ }
     try { commandRef.current?.dispose?.(); } catch { /* ignore */ }
-    // §11.1-8：独占发布；已有状态（另一进程/另一会话先写）→ 读回既有根，不覆盖。
-    const published = persistInferredRoot(identity.stateFile, {
-      root: inferred,
-      inferredFromCwd: cwd,
-      profile: identity.name,
-    });
-    let chosenRoot = inferred;
-    if (!published.ok) {
+    // 首推独占发布（link）：另一进程已写 → 采用既有主根，不覆盖。
+    const entry = registry?.claimPrimary(inferred, { origin: 'inferred', inferredFromCwd: cwd }) ?? null;
+    if (entry === null) {
       rootInfo.statePersisted = false;
       diag(`persistence: root state write failed path=${identity.stateFile}`, 'warn');
-    } else if (published.existed && published.root !== null && !samePath(published.root, inferred)) {
-      chosenRoot = published.root;
-      rootInfo.statePersisted = true;
-      diag(`persistence: another process already persisted root=${chosenRoot}; keeping it`, 'warn');
-    } else if (published.existed && published.root === null) {
-      // 已存在但文件损坏：本次重建（损坏按未持久化处理，§11.1-5）。
-      rootInfo.statePersisted = writeRootState(identity.stateFile, {
-        root: inferred,
-        inferredFromCwd: cwd,
-        profile: identity.name,
-      });
-      if (!rootInfo.statePersisted) diag(`persistence: root state write failed path=${identity.stateFile}`, 'warn');
-    } else {
-      rootInfo.statePersisted = true;
+      attaching = false;
+      if (!stopped) {
+        registerMinimal();
+        watch();
+      }
+      return;
     }
+    rootInfo.statePersisted = registry?.writable !== false;
+    const chosenRoot = entry.root;
     const attachSource = samePath(chosenRoot, inferred) ? 'inferred' : 'persisted';
     if (attachSource === 'inferred') rootInfo.inferredFromCwd = cwd;
-    void startRuntime(chosenRoot, attachSource).catch((error) => {
+    else diag(`persistence: another process already persisted root=${chosenRoot}; keeping it`, 'warn');
+    void (async () => {
+      registry?.setAttachRoot(chosenRoot, { origin: 'inferred' });
+      const started = await startRuntime(chosenRoot, attachSource);
+      if (started === false) {
+        rootInfo.root = null;
+        rootInfo.source = 'none';
+        rootInfo.inferredFromCwd = null;
+        attaching = false;
+        if (stopped) return;
+        registerMinimal();
+        diag(`persistence: root ${chosenRoot} is fail-closed; staying on minimal status`, 'warn');
+      }
+    })().catch((error) => {
       // 挂载失败：回落到“根未知”，恢复最小命令并重新等下一次会话事件。
       rootInfo.root = null;
       rootInfo.source = 'none';
