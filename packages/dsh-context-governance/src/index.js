@@ -13,8 +13,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { registerStatusCommand } from './commands/cg-status.js';
-import { identityDiagnostic, inferRootFromCwd, resolvePersistenceIdentity, samePath, sessionCwd } from './root-state.js';
-import { MEMORY_ROOT_REL, memoryRootFor } from './roots/paths.js';
+import { identityDiagnostic, inferRootFromCwd, loadStateV2, resolvePersistenceIdentity, samePath, sessionCwd } from './root-state.js';
+import { MEMORY_ROOT_REL, memoryRootFor, resolveDiagnosticsPath, userLevelDir } from './roots/paths.js';
 import { RootRegistry } from './roots/registry.js';
 import { POLICY_FILE_MAX_BYTES, WINDOW_USABLE_MARGIN, atExceedsUsableWindow, nativeFromWindow, nativeRatio, profileLayer, resolvePolicy, shortSessionId, usableAtCeiling, validateLayer } from './policy.js';
 import { detectHostVersion, normalizeBackendVersion } from './compress/adapters.js';
@@ -22,7 +22,7 @@ import { CompressionGuard } from './compress/runtime.js';
 import { wireEarlyCompaction } from './compress/early-wiring.js';
 import { formatCapability, probeCapability } from './capabilities.js';
 import { DEFAULT_AUDIT_MAX_BYTES, MAX_AUDIT_MAX_BYTES, MIN_AUDIT_MAX_BYTES, createRootAudit } from './audit.js';
-import { appendDiagnosticLine, capabilityLine, PLUGIN_VERSION, startupLine } from './diagnostics.js';
+import { appendDiagnosticLine, capabilityLine, PLUGIN_VERSION, registerDiagnosticPath, startupLine } from './diagnostics.js';
 import { DEFAULT_MEMORY_DIR, MemoryStore, MemoryStoreError } from './memory/store.js';
 import { registerMemoryHeader } from './memory/header.js';
 import { SCOPE_SKIP, resolveScope } from './scope.js';
@@ -537,9 +537,32 @@ export async function apply(ctx, rawConfig = {}) {
   }
   // 2a/P1：根来源 = 显式配置（仅优先匹配）> 持久化主根 > 首次推断（首个会话事件）。
   const identity = resolvePersistenceIdentity(ctx);
+  const configuredRoot = config.projectRoot === '' ? null : config.projectRoot;
+  // v3：logFile 白名单（用户级 / 该根 memory/governance）必须在任何写入前校验。
+  // 预读不修复（repair:false）只为拿到持久化主根，避免校验前发生迁移写盘。
+  const preload = identity.ok
+    ? loadStateV2(identity.stateFile, { repair: false, profile: identity.name })
+    : null;
+  const preloadRoot = preload?.state?.primaryRootId !== null && preload?.state?.primaryRootId !== undefined
+    ? (preload.state.roots[preload.state.primaryRootId]?.root ?? null)
+    : null;
+  const preAttachRoot = configuredRoot ?? preloadRoot;
+  const diagnostics = resolveDiagnosticsPath({
+    identity,
+    root: preAttachRoot,
+    logFile: config.diagnostics.logFile,
+  });
+  if (diagnostics.ok !== true) {
+    const message = `[context-governance] diagnostics logFile rejected (${diagnostics.reason}): ` +
+      `${config.diagnostics.logFile}; plugin will not load this profile`;
+    ctx.logger?.error?.(message);
+    ctx.logger?.warn?.(message);
+    return;
+  }
+  config.diagnostics.logFile = diagnostics.file;
+  if (diagnostics.file !== '') registerDiagnosticPath(diagnostics.file, diagnostics.bases);
   // P1：profile 级 root audit（用户级）。身份不可用 → 不写用户级文件（fail-closed）。
   const rootAudit = identity.ok ? createRootAudit(identity, { maxBytes: config.audit.maxBytes }) : null;
-  const configuredRoot = config.projectRoot === '' ? null : config.projectRoot;
   const registry = identity.ok
     ? RootRegistry.load({
       stateFile: identity.stateFile,
@@ -573,6 +596,7 @@ export async function apply(ctx, rawConfig = {}) {
     statePersisted: null,
     failClosedReason: null,
     attemptedRoot: null,
+    diagnosticsError: null,
   };
 
   // P1：身份事件写 root audit（不再写 per-root audit；见设计评审 §4.2）。
@@ -606,6 +630,25 @@ export async function apply(ctx, rawConfig = {}) {
       );
       return false;
     }
+    // v3：用实际 root/memoryRoot 再校验一次诊断路径（防预读根与实际 attach 根不一致）。
+    const diag = resolveDiagnosticsPath({
+      identity,
+      root,
+      memoryRoot: memory.memoryRoot,
+      logFile: config.diagnostics.logFile,
+    });
+    if (diag.ok !== true) {
+      rootInfo.diagnosticsError = diag.reason;
+      rootInfo.root = null;
+      rootInfo.source = 'none';
+      ctx.logger?.error?.(
+        `[context-governance] diagnostics logFile rejected at attach (${diag.reason}); ` +
+        'plugin will not manage this root',
+      );
+      return false;
+    }
+    config.diagnostics.logFile = diag.file;
+    if (diag.file !== '') registerDiagnosticPath(diag.file, diag.bases);
     rootInfo.root = root;
     rootInfo.source = source;
     rootInfo.failClosedReason = null;
@@ -770,6 +813,7 @@ export async function apply(ctx, rawConfig = {}) {
           diagnosticsLogFile: config.diagnostics.logFile,
           store,
           auditMaxBytes: config.audit.maxBytes,
+          auditBase: config.memoryRoot,
           projectRoot: config.projectRoot,
           onlyProject: config.onlyProject,
           // 1.0 #1：观测/保护/回注与早压触发共用同一归域判定。
@@ -980,6 +1024,8 @@ export async function apply(ctx, rawConfig = {}) {
       getPersistenceIdentity: () => identity,
       getRootsView: () => (registry === null ? null : registry.view()),
       getRootCounts: () => (registry === null ? null : registry.counts()),
+      getDiagnosticsLogFile: () => config.diagnostics.logFile,
+      getDiagnosticsError: () => rootInfo.diagnosticsError,
     };
     const commandRef = { current: registerStatusCommand(ctx, commandOptions) };
     const retryStatusCommand = () => {
@@ -1078,6 +1124,8 @@ export async function apply(ctx, rawConfig = {}) {
       getPersistenceIdentity: () => identity,
       getRootsView: () => (registry === null ? null : registry.view()),
       getRootCounts: () => (registry === null ? null : registry.counts()),
+      getDiagnosticsLogFile: () => config.diagnostics.logFile,
+      getDiagnosticsError: () => rootInfo.diagnosticsError,
       logger: ctx.logger,
     });
   };

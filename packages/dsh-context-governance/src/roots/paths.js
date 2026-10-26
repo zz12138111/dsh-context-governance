@@ -5,6 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { checkWriteTarget } from './containment.js';
 import { isWithin, samePath } from './identity.js';
 
 /** 根内唯一写入目录（目录固定，不接受自定义）。 */
@@ -113,4 +114,38 @@ export function isUserLevelPath(identity, file) {
     /^root-(?:state|audit).*\.tmp$/,
   ];
   return patterns.some((pattern) => pattern.test(name));
+}
+
+/**
+ * v3：诊断日志路径白名单（**两处**）：
+ * - `<home>/context-governance/`（默认且多根唯一安全）；
+ * - 该根 `<root>/memory/governance/`（只能作 per-root sink，不能当多根全局日志）。
+ * `logs/` 不在白名单。未配置时默认用户级 `logs/governance.log`。
+ * 返回的 `bases` 供实际写入前兜底校验。
+ *
+ * @returns {{ok:true, file:string, bases:string[]} | {ok:false, reason:string}}
+ */
+export function resolveDiagnosticsPath({ identity = null, root = null, memoryRoot = null, logFile = '' } = {}) {
+  const bases = [];
+  const userDir = userLevelDir(identity);
+  if (userDir !== null) bases.push(userDir);
+  if (typeof memoryRoot === 'string' && memoryRoot !== '') {
+    bases.push(memoryRoot);
+  } else if (typeof root === 'string' && root !== '') {
+    const memory = memoryRootFor(root);
+    if (memory.ok) bases.push(memory.memoryRoot);
+  }
+  const requested = typeof logFile === 'string' ? logFile.trim() : '';
+  if (requested === '') {
+    // 身份不可用 = 没有用户级目录可落默认诊断；不阻断装载，只是不写诊断。
+    if (userDir === null) return { ok: true, file: '', bases };
+    return { ok: true, file: path.join(userDir, 'logs', 'governance.log'), bases };
+  }
+  if (!path.isAbsolute(requested)) return { ok: false, reason: 'log-file-relative' };
+  for (const base of bases) {
+    if (checkWriteTarget(base, requested).ok === true) {
+      return { ok: true, file: path.resolve(requested), bases };
+    }
+  }
+  return { ok: false, reason: 'log-file-outside-whitelist' };
 }

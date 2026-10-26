@@ -12,7 +12,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { detectSensitive } from './memory/contract.js';
-import { isUserLevelPath, rootAuditFile } from './roots/paths.js';
+import { checkWriteTarget } from './roots/containment.js';
+import { isUserLevelPath, rootAuditFile, userLevelDir } from './roots/paths.js';
 
 const MAX_MEMORY_ENTRIES = 200;
 
@@ -246,17 +247,24 @@ export class AuditLog {  #file;
   #rotations = 0;
   #writeFailures = 0;
   #lastError = null;
+  #allowedBase = null;
 
   /**
    * @param {object} options
-   * @param {string} options.file 审计文件（`<memoryRoot>/audit.jsonl`）
+   * @param {string} options.file 审计文件（`<memoryRoot>/audit.jsonl` 或用户级 root audit）
    * @param {() => Date} [options.now]
    * @param {number} [options.maxBytes] 单文件上限，超出后轮转（默认 8 MiB）
+   * @param {string} [options.allowedBase] v3：实际写入 containment 的允许基目录
    */
-  constructor({ file, now = () => new Date(), maxBytes = DEFAULT_AUDIT_MAX_BYTES } = {}) {
+  constructor({ file, now = () => new Date(), maxBytes = DEFAULT_AUDIT_MAX_BYTES, allowedBase = null } = {}) {
     this.#file = typeof file === 'string' && file.trim() !== '' ? path.resolve(file) : null;
     this.#now = now;
     this.#maxBytes = Math.min(Math.max(Number(maxBytes) || DEFAULT_AUDIT_MAX_BYTES, MIN_AUDIT_MAX_BYTES), MAX_AUDIT_MAX_BYTES);
+    this.#allowedBase = typeof allowedBase === 'string' && allowedBase.trim() !== '' ? allowedBase.trim() : null;
+    if (this.#file !== null && this.#allowedBase !== null) {
+      const check = checkWriteTarget(this.#allowedBase, this.#file);
+      if (check.ok !== true) throw new Error(`audit file outside allowed base: ${check.reason}`);
+    }
     this.#ensureFile();
   }
 
@@ -265,6 +273,16 @@ export class AuditLog {  #file;
   get rotations() { return this.#rotations; }
   get writeFailures() { return this.#writeFailures; }
   get lastError() { return this.#lastError; }
+
+  /** v3：实际写入前 containment 复核（无 allowedBase 时兼容旧单测/无守卫构造）。 */
+  #guard(target = this.#file) {
+    if (this.#allowedBase === null || target === null) return true;
+    const check = checkWriteTarget(this.#allowedBase, target);
+    if (check.ok === true) return true;
+    this.#writeFailures += 1;
+    this.#lastError = `containment:${check.reason}`;
+    return false;
+  }
 
   /** 当前审计文件字节数（真实 stat；读不到时按 0；不抛错）。 */
   get sizeBytes() {
@@ -300,6 +318,7 @@ export class AuditLog {  #file;
     if (size === 0 || size + nextBytes <= this.#maxBytes) return true;
     const target = this.#rotateTarget();
     if (target === null) return true;
+    if (!this.#guard(target) || !this.#guard(this.#file)) return false;
     try {
       fs.renameSync(this.#file, target);
       // P3-8：轮转后当前文件由下一次 append 重建；大小留给 getter 重新 stat。
@@ -315,6 +334,7 @@ export class AuditLog {  #file;
   /** 插件装载时就把审计文件建出来（T5 要求：apply 即落文件，便于确认路径与写入时机）。 */
   #ensureFile() {
     if (this.#file === null) return;
+    if (!this.#guard(this.#file)) return;
     try {
       fs.mkdirSync(path.dirname(this.#file), { recursive: true });
       fs.appendFileSync(this.#file, '');
@@ -341,6 +361,7 @@ export class AuditLog {  #file;
     this.#memory.push(record);
     if (this.#memory.length > MAX_MEMORY_ENTRIES) this.#memory.shift();
     if (this.#file === null) return true;
+    if (!this.#guard(this.#file)) return false;
     const line = `${JSON.stringify(record)}\n`;
     const bytes = Buffer.byteLength(line, 'utf8');
     try {
@@ -388,9 +409,12 @@ export function createRootAudit(identity, { maxBytes, now } = {}) {
   if (identity === null || typeof identity !== 'object' || identity.ok !== true) return null;
   const file = rootAuditFile(identity);
   if (file === null || !isUserLevelPath(identity, file)) return null;
+  const allowedBase = userLevelDir(identity);
+  if (allowedBase === null) return null;
   try {
     return new AuditLog({
       file,
+      allowedBase,
       ...(Number.isFinite(maxBytes) ? { maxBytes } : {}),
       ...(typeof now === 'function' ? { now } : {}),
     });

@@ -475,7 +475,7 @@ test('2a apply：未配置 → 根未知（最小 status 可用），首个带 c
   const deep = path.join(repo, 'src');
   await fs.mkdir(path.join(repo, '.git'), { recursive: true });
   await fs.mkdir(deep, { recursive: true });
-  const diagFile = path.join(dir, 'diag.log');
+  const diagFile = path.join(home, 'context-governance', 'logs', 'diag.log');
   const commands = [];
   const handlers = [];
   const cleanups = [];
@@ -633,7 +633,7 @@ test('2a apply：两段采样——先非 git 会话（no-project-root，不写�
   await fs.mkdir(path.join(repo, '.git'), { recursive: true });
   await fs.mkdir(deep, { recursive: true });
   await fs.mkdir(nogit, { recursive: true });
-  const diagFile = path.join(dir, 'diag.log');
+  const diagFile = path.join(home, 'context-governance', 'logs', 'diag.log');
   const commands = [];
   const handlers = [];
   const cleanups = [];
@@ -672,11 +672,49 @@ test('2a apply：两段采样——先非 git 会话（no-project-root，不写�
   }
 });
 
+test('2a apply：首事件无 cwd → 保持等待；后续带 cwd 再推断（late-bind）', async () => {
+  const dir = await tempDir('cg-2a-latebind-');
+  const home = path.join(dir, 'home');
+  const profile = { name: 'prof', dir: path.join(dir, 'profile'), home };
+  const repo = path.join(dir, 'repo');
+  await fs.mkdir(path.join(repo, '.git'), { recursive: true });
+  const commands = [];
+  const handlers = [];
+  const cleanups = [];
+  const logs = { info: [], warn: [], error: [] };
+  const stateFile = path.join(home, 'context-governance', 'root-state-prof.json');
+  try {
+    await apply(
+      makeApplyContext({ profile, commands, handlers, cleanups, logs }),
+      { compression: { enabled: false }, project: 'test-project' },
+    );
+    fireSessionEvent(handlers, { id: 'sess-late', header: {} });
+    const warned = await until(() => logs.warn.some((line) => line.includes('no-project-root')));
+    assert.equal(warned, true);
+    assert.equal(commands.length, 1, '首事件无 cwd 不得挂载 runtime');
+    await assert.rejects(fs.access(stateFile), '首事件无 cwd 不得写状态文件');
+    assert.equal(handlers.some((handler) => handler.cb.name === 'firstInferenceRootWatcher'), true, 'watcher 必须继续等');
+
+    fireSessionEvent(handlers, { id: 'sess-late', header: { cwd: repo } });
+    const attached = await until(() => commands.length >= 2 && fs.access(stateFile).then(() => true, () => false));
+    assert.equal(attached, true, '后续带 cwd 应 late-bind 成功');
+    const state = JSON.parse(await fs.readFile(stateFile, 'utf8'));
+    assert.equal(state.version, 2);
+    assert.equal(state.primaryRoot, normalizeRootPath(repo));
+    const status = await commands.at(-1).handler({ rawInput: 'status' });
+    assert.match(status.text, /^project-root: .*\(source=inferred, inferred-fresh\)$/m);
+    assert.match(status.text, /^roots: 1 \(active=1, idle=0, fail-closed=0\)$/m);
+  } finally {
+    await closeContext(cleanups);
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('2a apply：推断失败（cwd 缺失）→ no-project-root 警告，根保持未知、不写盘', async () => {
   const dir = await tempDir('cg-2a-noroot-');
   const home = path.join(dir, 'home');
   const profile = { name: 'prof', dir: path.join(dir, 'profile'), home };
-  const diagFile = path.join(dir, 'diag.log');
+  const diagFile = path.join(home, 'context-governance', 'logs', 'diag.log');
   const commands = [];
   const handlers = [];
   const cleanups = [];

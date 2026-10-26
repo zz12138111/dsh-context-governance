@@ -90,7 +90,7 @@ function formatEarlyStatus(earlyStatus) {
   return `last-early: ${event}${reason}${effective}${at}`;
 }
 
-function statusText({ store, guard, audit, rootAudit = null, rootsView = null, rootCounts = null, now, policy = null, earlyStatus = null, sessionId = null, rootInfo = null, identity = null }) {
+function statusText({ store, guard, audit, rootAudit = null, rootsView = null, rootCounts = null, diagnosticsLogFile = null, diagnosticsError = null, now, policy = null, earlyStatus = null, sessionId = null, rootInfo = null, identity = null }) {
   const lines = [];
   const status = guard?.status ?? null;
   lines.push('context-governance status');
@@ -110,6 +110,10 @@ function statusText({ store, guard, audit, rootAudit = null, rootsView = null, r
     }
   }
   if (identity !== null) lines.push(identityDiagnostic(identity));
+  if (diagnosticsError) lines.push(`diagnostics: fail-closed reason=${diagnosticsError}`);
+  else if (typeof diagnosticsLogFile === 'string' && diagnosticsLogFile !== '') {
+    lines.push(`diagnostics: file=${diagnosticsLogFile}`);
+  }
   // 策略链与观察器无关：观察器没挂时也要能看到生效阈值与被拒的层。
   let resolvedPolicy = null;
   if (policy !== null && typeof policy.resolve === 'function') {
@@ -286,6 +290,13 @@ function statusText({ store, guard, audit, rootAudit = null, rootsView = null, r
     );
   }
   // P1：全部纳管根视图（只读；不打开 store、不建目录）。
+  lines.push(...rootsStatusLines({ rootsView, rootCounts }));
+  return lines.join('\n');
+}
+
+/** `/cg status` 与 `/cg roots` 共用的根集合行（只读）。 */
+function rootsStatusLines({ rootsView = null, rootCounts = null }) {
+  const lines = [];
   if (rootCounts !== null) {
     lines.push(
       `roots: ${rootCounts.roots ?? 0} (active=${rootCounts.active ?? 0}, idle=${rootCounts.idle ?? 0}, ` +
@@ -305,7 +316,7 @@ function statusText({ store, guard, audit, rootAudit = null, rootsView = null, r
       );
     }
   }
-  return lines.join('\n');
+  return lines;
 }
 
 /**
@@ -313,7 +324,7 @@ function statusText({ store, guard, audit, rootAudit = null, rootsView = null, r
  *
  * @param {{store?:object|null, guard?:object|null, getGuard?:() => object|null, audit?:object|null, now?:() => Date}} options
  */
-export function createStatusCommand({ store = null, guard = null, getGuard = null, audit = null, rootAudit = null, policy = null, now = () => new Date(), logger = null, getEarlyStatus = null, sessionIdOf = defaultSessionIdOf, getRootInfo = null, getPersistenceIdentity = null, getRootsView = null, getRootCounts = null } = {}) {
+export function createStatusCommand({ store = null, guard = null, getGuard = null, audit = null, rootAudit = null, policy = null, now = () => new Date(), logger = null, getEarlyStatus = null, sessionIdOf = defaultSessionIdOf, getRootInfo = null, getPersistenceIdentity = null, getRootsView = null, getRootCounts = null, getDiagnosticsLogFile = null, getDiagnosticsError = null } = {}) {
   const currentGuard = () => (typeof getGuard === 'function' ? getGuard() : guard);
 
   const parseBoolean = (text) => {
@@ -506,7 +517,7 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
   return {
     definitionId: CG_COMMAND_DEFINITION_ID,
     name: CG_COMMAND_NAME,
-    description: '上下文治理状态：后端/能力、策略链、记忆、上次压缩与回注、prune 成本、写盘 p50/p95、审计',
+    description: '上下文治理状态：后端/能力、策略链、记忆、上次压缩与回注、prune 成本、写盘 p50/p95、审计、纳管根清单',
     input: { hint: 'status | status last-cost | policy show | set <key>=<value> | set reset | header on|off | profile <batch|coding|review|research>|reset' },
     handler: async (invocation = {}) => {
       const raw = String(invocation.rawInput ?? '').trim();
@@ -650,8 +661,13 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
         ];
         return { kind: 'success', text: lines.join('\n') };
       }
-      if (raw === 'last-cost') {
-        try {
+      if (raw === 'roots') {
+        const rootsView = typeof getRootsView === 'function' ? getRootsView() : null;
+        const rootCounts = typeof getRootCounts === 'function' ? getRootCounts() : null;
+        if (rootCounts === null) return { kind: 'success', text: 'roots: unavailable' };
+        return { kind: 'success', text: rootsStatusLines({ rootsView, rootCounts }).join('\n') };
+      }
+      if (raw === 'last-cost') {        try {
           return {
             kind: 'success',
             text: ['context-governance last-cost', costLine(currentGuard()?.status ?? null)].join('\n'),
@@ -666,7 +682,7 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
       if (raw !== '' && raw !== 'status') {
         return {
           kind: 'error',
-          text: 'Usage: /cg status [last-cost] | /cg policy show | /cg set <key>=<value> | /cg set reset' +
+          text: 'Usage: /cg status [last-cost] | /cg roots | /cg policy show | /cg set <key>=<value> | /cg set reset' +
             ' | /cg header [status|on|off] | /cg compact [status|arm|disarm] | /cg profile [status|reset|<name>]' +
             '   (未指定参数时等价于 /cg status)',
         };
@@ -674,6 +690,8 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
       try {
         const rootsView = typeof getRootsView === 'function' ? getRootsView() : null;
         const rootCounts = typeof getRootCounts === 'function' ? getRootCounts() : null;
+        const diagnosticsLogFile = typeof getDiagnosticsLogFile === 'function' ? getDiagnosticsLogFile() : null;
+        const diagnosticsError = typeof getDiagnosticsError === 'function' ? getDiagnosticsError() : null;
         return {
           kind: 'success',
           text: statusText({
@@ -683,6 +701,8 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
             rootAudit,
             rootsView,
             rootCounts,
+            diagnosticsLogFile,
+            diagnosticsError,
             now,
             policy,
             earlyStatus: typeof getEarlyStatus === 'function' ? getEarlyStatus() : null,

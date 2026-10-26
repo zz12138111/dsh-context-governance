@@ -22,6 +22,7 @@ import path from 'node:path';
 
 import { atomicWriteFile, fileStamp, hashFile, hashText, readTextIfExists } from './atomic.js';
 import { acquireWriterLock } from './lock.js';
+import { checkWriteTarget } from '../roots/containment.js';
 import {
   ENTRY_STATUSES,
   ENTRY_TYPES,
@@ -134,12 +135,15 @@ export class MemoryStore {
       now: options.now,
       indexMaxChars: options.indexMaxChars,
     });
-    await fs.mkdir(path.join(rootDir, TOPICS_DIR_NAME), { recursive: true }).catch((error) => {
+    try {
+      store.#guardContainment(path.join(rootDir, TOPICS_DIR_NAME));
+      await fs.mkdir(path.join(rootDir, TOPICS_DIR_NAME), { recursive: true });
+    } catch (error) {
       store.#setReadOnly(
-        `root-not-writable:${error?.code ?? 'ERR'}`,
+        error?.code === 'CONTAINMENT' ? `containment:${error.message}` : `root-not-writable:${error?.code ?? 'ERR'}`,
         `memory root ${rootDir} is not writable: ${error.message}`,
       );
-    });
+    }
 
     // T6：装载时先做一次真实写探测；不可写就整体降级为只读（不抛给宿主）。
     if (!store.#readOnly) await store.probeWritable();
@@ -154,10 +158,12 @@ export class MemoryStore {
         store.#lockRelease = acquired.release;
       } else {
         store.#readOnly = true;
-        store.#readOnlyReason = `writer-lock:${acquired.holder?.pid ?? 'unknown'}`;
+        store.#readOnlyReason = acquired.reason ?? `writer-lock:${acquired.holder?.pid ?? 'unknown'}`;
         store.#warnings.push(
-          `another live writer (pid ${acquired.holder?.pid ?? '?'}, started ${acquired.holder?.startedAt ?? '?'}) ` +
-          'owns this project memory; this instance is read-only',
+          acquired.reason
+            ? `writer lock refused by containment (${acquired.reason}); this instance is read-only`
+            : `another live writer (pid ${acquired.holder?.pid ?? '?'}, started ${acquired.holder?.startedAt ?? '?'}) ` +
+              'owns this project memory; this instance is read-only',
         );
       }
     }
@@ -228,6 +234,15 @@ export class MemoryStore {
 
   #assertOpen() {
     if (this.#closed) throw new MemoryStoreError('CLOSED', 'memory store is closed');
+  }
+
+  /** v3：实际写入前 containment（目标路径，不是配置值）。 */
+  #guardContainment(file) {
+    const check = checkWriteTarget(this.#rootDir, file);
+    if (check.ok === true) return;
+    const reason = `containment:${check.reason}`;
+    this.#setReadOnly(reason, `write target ${file} is outside memory root (${check.reason})`);
+    throw new MemoryStoreError('CONTAINMENT', `write target outside memory root: ${check.reason}`);
   }
 
   #setReadOnly(reason, warning) {
@@ -350,6 +365,8 @@ export class MemoryStore {
     };
     const dir = path.join(this.#rootDir, PROTECTION_DIR_NAME);
     const file = this.#journalPath(key);
+    this.#guardContainment(dir);
+    this.#guardContainment(file);
     const temp = `${file}.${process.pid}.${Date.now()}.tmp`;
     try {
       fsSync.mkdirSync(dir, { recursive: true });
@@ -478,10 +495,13 @@ export class MemoryStore {
     if (this.#closed) return { ok: false, reason: 'closed', code: 'CLOSED' };
     const probe = path.join(this.#rootDir, `.write-probe-${process.pid}-${Date.now()}`);
     try {
+      this.#guardContainment(probe);
       await fs.writeFile(probe, 'ok', 'utf8');
       await fs.rm(probe, { force: true });
     } catch (error) {
-      const reason = `root-not-writable:${error?.code ?? 'ERR'}`;
+      const reason = error?.code === 'CONTAINMENT'
+        ? (this.#readOnlyReason ?? 'containment')
+        : `root-not-writable:${error?.code ?? 'ERR'}`;
       this.#setReadOnly(reason, `memory root ${this.#rootDir} is not writable: ${error.message}`);
       return { ok: false, reason, code: error?.code ?? null };
     }
@@ -545,6 +565,8 @@ export class MemoryStore {
       const entries = [...this.#entries.values()].filter((entry) => entry.type === type);
       const content = serializeTopicFile(type, this.#project, entries);
       const file = topicFile(this.#rootDir, type);
+      this.#guardContainment(file);
+      this.#guardContainment(`${file}.bak`);
       await atomicWriteFile(file, content, { backup: true });
       const rel = topicRel(type);
       this.#files.set(rel, {
@@ -563,7 +585,10 @@ export class MemoryStore {
       now: this.#now(),
       maxChars: this.#indexMaxChars,
     });
-    await atomicWriteFile(path.join(this.#rootDir, INDEX_FILE_NAME), content, { backup: true });
+    const indexFile = path.join(this.#rootDir, INDEX_FILE_NAME);
+    this.#guardContainment(indexFile);
+    this.#guardContainment(`${indexFile}.bak`);
+    await atomicWriteFile(indexFile, content, { backup: true });
   }
 
   #updateTimestamp() {

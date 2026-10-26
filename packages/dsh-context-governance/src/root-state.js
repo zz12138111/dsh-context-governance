@@ -16,11 +16,18 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { isWithin, normalizeRootPath, platformFold, rootIdOf, rootNameOf, samePath } from './roots/identity.js';
+import { checkWriteTarget } from './roots/containment.js';
 import { safeProfileName } from './roots/paths.js';
 
 const STATE_DIR = 'context-governance';
 const STATE_VERSION = 1;
 export const STATE_VERSION_V2 = 2;
+
+/** v3：实际写入前对目标路径做 containment（无 allowedBase = 旧单测直调，兼容）。 */
+function guardWrite(allowedBase, target) {
+  if (typeof allowedBase !== 'string' || allowedBase.trim() === '') return true;
+  return checkWriteTarget(allowedBase, target).ok === true;
+}
 
 // 兼容出口：2a 的调用方/测试仍从 root-state 导入这些纯函数。
 export { normalizeRootPath, samePath, isWithin, safeProfileName };
@@ -127,10 +134,11 @@ export function readRootState(stateFile) {
 
 /** 原子写 v1（tmp + rename）；失败返回 false，不抛错。会覆盖已有文件。 */
 export function writeRootState(stateFile, options = {}) {
-  const { root, inferredAt, inferredFromCwd, profile, configRoot } = options ?? {};
+  const { root, inferredAt, inferredFromCwd, profile, configRoot, allowedBase = null } = options ?? {};
   if (typeof stateFile !== 'string' || stateFile === '') return false;
   if (typeof root !== 'string' || root.trim() === '' || !path.isAbsolute(root)) return false;
   const target = path.resolve(stateFile);
+  if (!guardWrite(allowedBase, target)) return false;
   const temp = `${target}.${process.pid}.${Date.now()}.tmp`;
   try {
     fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -148,12 +156,13 @@ export function writeRootState(stateFile, options = {}) {
  * @returns {{ok:boolean, existed:boolean, root:string|null}}
  */
 export function persistInferredRoot(stateFile, options = {}) {
-  const { root, inferredFromCwd, profile } = options ?? {};
+  const { root, inferredFromCwd, profile, allowedBase = null } = options ?? {};
   if (typeof stateFile !== 'string' || stateFile === '' || typeof root !== 'string'
     || root.trim() === '' || !path.isAbsolute(root)) {
     return { ok: false, existed: false, root: null };
   }
   const target = path.resolve(stateFile);
+  if (!guardWrite(allowedBase, target)) return { ok: false, existed: false, root: null };
   const temp = `${target}.${process.pid}.${Date.now()}.tmp`;
   try {
     fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -342,9 +351,10 @@ function readStateFileRaw(stateFile) {
 }
 
 /** 把损坏的状态文件改名为 `.corrupt-<UTC>.json`（保留证据，不删除）。 */
-export function quarantineStateFile(stateFile, { now = new Date() } = {}) {
+export function quarantineStateFile(stateFile, { now = new Date(), allowedBase = null } = {}) {
   const target = path.resolve(stateFile);
   const quarantined = target.replace(/\.json$/i, `.corrupt-${utcStamp(now)}.json`);
+  if (!guardWrite(allowedBase, quarantined)) return null;
   try {
     fs.renameSync(target, quarantined);
     return quarantined;
@@ -354,10 +364,11 @@ export function quarantineStateFile(stateFile, { now = new Date() } = {}) {
 }
 
 /** 迁移前备份 v1：`root-state-X.v1.bak`；已存在则加时间戳，不覆盖旧备份。 */
-export function backupV1StateFile(stateFile, { now = new Date() } = {}) {
+export function backupV1StateFile(stateFile, { now = new Date(), allowedBase = null } = {}) {
   const source = path.resolve(stateFile);
   let target = source.replace(/\.json$/i, '.v1.bak');
   if (fs.existsSync(target)) target = source.replace(/\.json$/i, `.v1-${utcStamp(now)}.bak`);
+  if (!guardWrite(allowedBase, target)) return null;
   try {
     fs.copyFileSync(source, target);
     return target;
@@ -367,9 +378,10 @@ export function backupV1StateFile(stateFile, { now = new Date() } = {}) {
 }
 
 /** v2 清洗前留证：`root-state-X.v2-bad-<UTC>.json`（只在有条目损坏时）。 */
-function backupV2Bad(stateFile, { now = new Date() } = {}) {
+function backupV2Bad(stateFile, { now = new Date(), allowedBase = null } = {}) {
   const source = path.resolve(stateFile);
   const target = source.replace(/\.json$/i, `.v2-bad-${utcStamp(now)}.json`);
+  if (!guardWrite(allowedBase, target)) return null;
   try {
     fs.copyFileSync(source, target);
     return target;
@@ -379,13 +391,14 @@ function backupV2Bad(stateFile, { now = new Date() } = {}) {
 }
 
 /** 原子写 v2（tmp + rename）；失败返回 false。 */
-export function writeStateV2(stateFile, state) {
+export function writeStateV2(stateFile, state, { allowedBase = null } = {}) {
   if (typeof stateFile !== 'string' || stateFile === '') return false;
   if (state === null || typeof state !== 'object' || state.version !== STATE_VERSION_V2
     || state.roots === null || typeof state.roots !== 'object' || Array.isArray(state.roots)) {
     return false;
   }
   const target = path.resolve(stateFile);
+  if (!guardWrite(allowedBase, target)) return false;
   const temp = `${target}.${process.pid}.${Date.now()}.tmp`;
   try {
     fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -432,15 +445,20 @@ export function loadStateV2(stateFile, {
   profile = null,
   repair = true,
   hashFn = undefined,
+  allowedBase = null,
 } = {}) {
   const empty = emptyV2State(profile);
   if (typeof stateFile !== 'string' || stateFile === '') {
     return { state: empty, missing: true, writable: false };
   }
+  if (typeof allowedBase === 'string' && allowedBase.trim() !== ''
+    && checkWriteTarget(allowedBase, path.resolve(stateFile)).ok !== true) {
+    return { state: empty, containment: true, writable: false };
+  }
   const raw = readStateFileRaw(stateFile);
   if (raw.kind === 'missing') return { state: empty, missing: true, writable: true };
   if (raw.kind === 'corrupt') {
-    const corruptPath = repair ? quarantineStateFile(stateFile, { now }) : null;
+    const corruptPath = repair ? quarantineStateFile(stateFile, { now, allowedBase }) : null;
     return { state: empty, corrupt: true, corruptPath, writable: repair && corruptPath !== null };
   }
   const value = raw.value;
@@ -450,16 +468,16 @@ export function loadStateV2(stateFile, {
   if (value !== null && typeof value === 'object' && value.version === STATE_VERSION) {
     const v1 = validateV1Document(value);
     if (v1 === null) {
-      const corruptPath = repair ? quarantineStateFile(stateFile, { now }) : null;
+      const corruptPath = repair ? quarantineStateFile(stateFile, { now, allowedBase }) : null;
       return { state: empty, corrupt: true, corruptPath, writable: repair && corruptPath !== null };
     }
     const state = buildV2FromV1(v1, { now, profile, hashFn });
     if (state === null) {
-      const corruptPath = repair ? quarantineStateFile(stateFile, { now }) : null;
+      const corruptPath = repair ? quarantineStateFile(stateFile, { now, allowedBase }) : null;
       return { state: empty, corrupt: true, corruptPath, writable: repair && corruptPath !== null };
     }
-    const backupPath = repair ? backupV1StateFile(stateFile, { now }) : null;
-    const written = repair ? writeStateV2(stateFile, state) : false;
+    const backupPath = repair ? backupV1StateFile(stateFile, { now, allowedBase }) : null;
+    const written = repair ? writeStateV2(stateFile, state, { allowedBase }) : false;
     return {
       state,
       migrated: true,
@@ -471,17 +489,17 @@ export function loadStateV2(stateFile, {
   if (value !== null && typeof value === 'object' && value.version === STATE_VERSION_V2) {
     const validated = validateV2Document(value, { profile, hashFn });
     if (validated === null) {
-      const corruptPath = repair ? quarantineStateFile(stateFile, { now }) : null;
+      const corruptPath = repair ? quarantineStateFile(stateFile, { now, allowedBase }) : null;
       return { state: empty, corrupt: true, corruptPath, writable: repair && corruptPath !== null };
     }
     // 坏条目：非破坏性修复 —— 留证原文件后把清洗后的 v2 写回（只丢坏条目）。
     if (repair && validated.invalid.length > 0) {
-      backupV2Bad(stateFile, { now });
-      writeStateV2(stateFile, validated.state);
+      backupV2Bad(stateFile, { now, allowedBase });
+      writeStateV2(stateFile, validated.state, { allowedBase });
     }
     return { state: validated.state, invalidEntries: validated.invalid, writable: true };
   }
-  const corruptPath = repair ? quarantineStateFile(stateFile, { now }) : null;
+  const corruptPath = repair ? quarantineStateFile(stateFile, { now, allowedBase }) : null;
   return { state: empty, corrupt: true, corruptPath, writable: repair && corruptPath !== null };
 }
 
@@ -489,12 +507,13 @@ export function loadStateV2(stateFile, {
  * 合并写：读盘 → 以 incoming 的新根/主根/最近 seen 合并 → 原子写回。
  * 只用于磁盘已是 v2 的情况（registry 启动时已 load/migrate）。
  */
-export function writeStateV2Merged(stateFile, incoming, { hashFn = undefined } = {}) {
+export function writeStateV2Merged(stateFile, incoming, { hashFn = undefined, allowedBase = null } = {}) {
   if (incoming === null || typeof incoming !== 'object' || incoming.version !== STATE_VERSION_V2) return false;
-  const loaded = loadStateV2(stateFile, { repair: false, hashFn });
+  const loaded = loadStateV2(stateFile, { repair: false, hashFn, allowedBase });
   if (loaded.unsupported === true) return false;
+  if (loaded.containment === true) return false;
   if (loaded.corrupt === true) return false;
-  if (loaded.missing === true) return writeStateV2(stateFile, incoming);
+  if (loaded.missing === true) return writeStateV2(stateFile, incoming, { allowedBase });
   const disk = loaded.state;
   for (const [rootId, entry] of Object.entries(incoming.roots)) {
     const existing = disk.roots[rootId];
@@ -521,7 +540,7 @@ export function writeStateV2Merged(stateFile, incoming, { hashFn = undefined } =
   if (incoming.configRoot === null || typeof incoming.configRoot === 'string') {
     disk.configRoot = incoming.configRoot;
   }
-  return writeStateV2(stateFile, disk);
+  return writeStateV2(stateFile, disk, { allowedBase });
 }
 
 /**
@@ -537,8 +556,11 @@ export function persistPrimaryV2(stateFile, {
   project = null,
   now = new Date(),
   hashFn = undefined,
+  allowedBase = null,
 } = {}) {
   if (typeof stateFile !== 'string' || stateFile === '') return { ok: false, existed: false, state: null };
+  const target = path.resolve(stateFile);
+  if (!guardWrite(allowedBase, target)) return { ok: false, existed: false, state: null };
   const entry = makeV2Entry({
     root,
     origin: 'inferred',
@@ -554,7 +576,6 @@ export function persistPrimaryV2(stateFile, {
   state.primaryRootId = entry.rootId;
   state.primaryRoot = entry.root;
   state.configRoot = typeof configRoot === 'string' && configRoot !== '' ? normalizeRootPath(configRoot) : null;
-  const target = path.resolve(stateFile);
   const temp = `${target}.${process.pid}.${Date.now()}.tmp`;
   try {
     fs.mkdirSync(path.dirname(target), { recursive: true });

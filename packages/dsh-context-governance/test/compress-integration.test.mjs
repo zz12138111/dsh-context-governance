@@ -211,7 +211,7 @@ test('配置：bundle patch 的本机 config 能解析到工作区路径', () =>
 
 test('apply：provider 不可见也一定执行，并写 warn + 诊断行（不静默）', async () => {
   const rootDir = await tempDir();
-  const logFile = path.join(rootDir, 'logs', 'governance.log');
+  const logFile = path.join(rootDir, 'memory', 'governance', 'governance.log');
   const ctx = makeCtx(null);
   try {
     await apply(ctx, {
@@ -243,7 +243,7 @@ test('apply：provider 不可见也一定执行，并写 warn + 诊断行（不�
 
 test('diagnostics.logFile：写一行启动记录，含版本/adapter/mode，不含消息正文', async () => {
   const rootDir = await tempDir();
-  const logFile = path.join(rootDir, 'logs', 'governance.log');
+  const logFile = path.join(rootDir, 'memory', 'governance', 'governance.log');
   const ctx = makeCtx(new BasicCompactionEngine());
   try {
     await apply(ctx, {
@@ -269,7 +269,9 @@ test('diagnostics.logFile 不可写：只告警，不阻断装载', async () => 
   const rootDir = await tempDir();
   const ctx = makeCtx(new BasicCompactionEngine());
   try {
-    const blocker = path.join(rootDir, 'not-a-dir');
+    const memoryDir = path.join(rootDir, 'memory', 'governance');
+    await fs.mkdir(memoryDir, { recursive: true });
+    const blocker = path.join(memoryDir, 'not-a-dir');
     await fs.writeFile(blocker, 'x', 'utf8');
     const logFile = path.join(blocker, 'governance.log');
     await apply(ctx, {

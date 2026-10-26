@@ -12,8 +12,15 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { atomicWriteFile, readTextIfExists } from './atomic.js';
+import { checkWriteTarget } from '../roots/containment.js';
 
 export const LOCK_FILE_NAME = '.writer.json';
+
+/** v3：锁文件写入目标 containment（实际路径）。 */
+function lockContainment(rootDir, file) {
+  const check = checkWriteTarget(rootDir, file);
+  return check.ok ? null : `containment:writer-lock:${check.reason}`;
+}
 
 /** 进程是否存活；EPERM 视为存活（存在但无权限发信号）。 */
 export function isPidAlive(pid) {
@@ -49,8 +56,11 @@ export async function readWriterLock(rootDir) {
  * @returns {Promise<{ok:boolean, holder?:object, release?:() => Promise<void>}>}
  */
 export async function acquireWriterLock(rootDir, { project, pid = process.pid, now = () => new Date() }) {
+  const file = path.join(rootDir, LOCK_FILE_NAME);
+  const violation = lockContainment(rootDir, file);
+  if (violation !== null) return { ok: false, reason: violation };
   await fs.mkdir(rootDir, { recursive: true });
-  const { file, lock, corrupt } = await readWriterLock(rootDir);
+  const { lock, corrupt } = await readWriterLock(rootDir);
   // 同一进程内也视为冲突：一个进程只允许一个 store 写同一项目，
   // 否则两个独立队列会绕过"单写者"语义。
   if (lock !== null && isPidAlive(lock.pid)) {
@@ -60,10 +70,16 @@ export async function acquireWriterLock(rootDir, { project, pid = process.pid, n
   const mine = { pid, startedAt, project, version: 1 };
   if (corrupt) {
     // 损坏的锁不阻塞启动；覆盖前留一份 .bak 便于排查。
-    await fs.copyFile(file, `${file}.bak`).catch(() => {});
+    const backup = `${file}.bak`;
+    if (checkWriteTarget(rootDir, backup).ok === true) {
+      await fs.copyFile(file, backup).catch(() => {});
+    }
   }
+  const writeViolation = lockContainment(rootDir, file);
+  if (writeViolation !== null) return { ok: false, reason: writeViolation };
   await atomicWriteFile(file, JSON.stringify(mine, null, 2) + '\n', { backup: false });
   const release = async () => {
+    if (lockContainment(rootDir, file) !== null) return;
     const current = await readWriterLock(rootDir);
     if (current.lock === null) return;
     if (current.lock.pid !== pid || current.lock.startedAt !== startedAt) return;

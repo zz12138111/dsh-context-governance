@@ -114,7 +114,7 @@ test('能力探测行：单行、含版本与 probe 字段', () => {
 
 test('无事件订阅能力：perception=none，不得声称 event-level', async () => {
   const rootDir = await tempDir();
-  const logFile = path.join(rootDir, 'logs', 'governance.log');
+  const logFile = path.join(rootDir, 'memory', 'governance', 'governance.log');
   const ctx = fakeCtx({ withOn: false });
   try {
     await apply(ctx, {

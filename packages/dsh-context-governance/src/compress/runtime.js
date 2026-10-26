@@ -235,6 +235,7 @@ export class CompressionGuard {
         file: path.join(this.#store.rootDir, 'audit.jsonl'),
         now: this.#now,
         maxBytes: options.auditMaxBytes,
+        allowedBase: options.auditBase ?? this.#store.rootDir,
       }));
     this.#adapter = options.adapter ?? this.#detect();
     const eventApi = typeof this.#ctx?.on === 'function';

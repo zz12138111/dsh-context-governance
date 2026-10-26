@@ -48,6 +48,23 @@ test('P1/T17 status：roots 计数 + 全部根列表（active/idle/fail-closed�
   assert.match(result.text, /^ {2}root: id=cccccccccccccccc name=bad project=bad state=fail-closed reason=memory-root-escape memory=- audit=-$/m);
 });
 
+test('P1/T17 /cg roots：只输出根段（count + 列表），不进 status 其它段', async () => {
+  const command = createStatusCommand({
+    getRootsView: () => [{
+      rootId: 'a'.repeat(16), root: 'D:\\work\\demo', name: 'demo', project: 'demo',
+      state: 'active', active: true, memoryCount: 2,
+      auditLast: { ts: '2026-10-26T10:00:00.000Z', event: 'apply' }, failClosedReason: null,
+    }],
+    getRootCounts: () => ({ roots: 1, active: 1, idle: 0, failClosed: 0, warn: false }),
+  });
+  const result = await command.handler({ rawInput: 'roots' });
+  assert.match(result.text, /^roots: 1 \(active=1, idle=0, fail-closed=0\)$/m);
+  assert.match(result.text, /^ {2}root: id=aaaaaaaaaaaaaaaa name=demo project=demo state=active memory=2 audit=/m);
+  assert.doesNotMatch(result.text, /context-governance status|^memory:|^audit:/m);
+  const usage = await command.handler({ rawInput: 'bogus' });
+  assert.match(usage.text, /\/cg roots/);
+});
+
 test('P1/T17 registry.view：记忆条数/审计末行只读；无数不建目录；idle 来自 state', async () => {
   const base = await tempDir();
   const rootA = makeRoot(base, 'alpha');

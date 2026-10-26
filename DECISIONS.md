@@ -296,3 +296,10 @@
 - 选择（0.2.1 实现口径）：`W` 优先 `contextPressure.contextWindow`（取用前校验 `Number.isInteger(W) && W > 0`，host state 是原始值），缺失/投影不可用回退 `policy.windowTokens`；`O` 无宿主来源，保持 `policy.reservedTokens`；`native=floor(min(W×0.8, W−O−65536))/W`，`/cg status` 必须标来源 `window=…(projection|config-fallback)`；取数按需 `ctx.get('sessionProjections')`、**每次判断**、不硬 inject，且 **每次 status/判定只取一次并缓存**（`stateOf` 会 `materializeCells`，返回 live 引用只读不改）；**`native` 与压力分母必须同源同时改**（避免 native=0.6934 而 ratio 仍按 1e6 的混搭）；1,048,576 时 `native≈0.6934`（配置 1e6 会低估 ~1.5pt）。压力四段后续可把 `measured` 换 `pressureTokens/W`、`estimated` 用 `projectedTokens`，但必须标源。
 - 影响：0.2.0 不改（仍配置窗口）；0.2.1 起 native/分母随真实路由；provider 不广告窗口时回退配置并可辨识，不再猜值。多会话用哪个 W、W 中途变化、校验与显示是否同源（审核 ART-20261025-70 ①②③）由需求定，开发不自行拍。
 - 关联：`src/policy.js`（`nativeRatio`）、`src/index.js`（`buildPolicyState` 的 native）、`src/commands/cg-status.js`（pressure/policy 行）、`analysis/req-20261025-09/G4-窗口来源结论.md` + `g4-probe-src/` + `g4-probe.log.txt`；状态：active。
+
+## DEC-PLUGIN-20261026-41 [tech] P1 默认值变更（E4=A：默认值变更须记 DECISIONS + Release 说明）
+
+- 背景：v3 冻结口径要求目录/诊断固定；用户拍 E4=A（默认值变更须记 DECISIONS + Release 说明）。
+- 选择：`memoryRoot` 默认 `.dsh/memory` → `memory/governance`；`diagnostics.logFile` 默认空 → `<home>/context-governance/logs/governance.log`；logFile 只允许用户级或该根 `memory/governance`，旧 `<root>/logs/` 拒载；状态/审计/记忆/诊断的实际写入路径均做 realpath containment。
+- 影响：安装/升级后诊断默认产生用户级文件；旧 `<root>/logs/` 配置需迁移（本机已迁移，旧文件保留）；P4 Release 说明必须列这两项默认变更。
+- 关联：`src/index.js`、`src/roots/paths.js`、`src/diagnostics.js`、`docs/P1-交付说明.md`、`README.md`；状态：active。

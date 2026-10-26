@@ -13,6 +13,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
+
 /** rootId 默认十六进制长度（64 bit）；碰撞时按 ROOT_ID_HEX_LENGTHS 递增。 */
 export const ROOT_ID_HEX = 16;
 export const ROOT_ID_HEX_LENGTHS = Object.freeze([16, 20, 24, 32, 64]);
@@ -120,6 +121,9 @@ export function cwdWithinRoot(cwd, root) {
  * 按会话 cwd 上溯最近的含 `.git` 祖先（`.git` 文件或目录都算，worktree 兼容）。
  * cwd 先 realpath（符号链接/junction 按真实路径判根）；结果再过 normalizeRootPath。
  * 找不到/结果落在 exclude（DSH home）内返回 null。
+ *
+ * 注：v3 冻结口径下，显式 `configRoot` 的强制合并由 registry 先判定（configRoot 非空且
+ * cwd 在其下 → 直接用 configRoot，嵌套 .git 不另立根）；本函数只做纯 `.git` 上溯。
  *
  * @param {string} cwd
  * @param {{exclude?: string|null}} [options]

@@ -27,7 +27,7 @@
 - 记忆是**文件**：人可读、可 git、可人工修；无数据库、无向量检索、无第三方依赖。
 - 回注遵守一条硬规则：**详情永不回注**；摘要不可读时只放 ID+状态。
 - 压缩沿用宿主或 context-zip，不写第二个压缩引擎，也**不替换** `ctx.compaction`。
-- 默认只处理**本项目会话**（`onlyProject: true`，按 `session.header.cwd` 比对 `projectRoot`）；别的项目/工作区的压缩事件直接忽略并计数（`/cg status` 的 `scope:` 行）。
+- **P1（当前开发中）**：只做「可判定根登记 + 主根纳管骨架」——可判定根按会话 cwd 登记，但只有主根跑记忆/保护/回注/审计；其他根登记后 `P2` 起才纳管。**P1 不宣称“全纳管”**；其余根在 P1 零治理/零审计（仅 root audit 一条 `root-unmanaged` 汇总）。兼容旧 `onlyProject` 配置但已弃用（不再参与判定）。
 
 ### 隐私边界（准确口径）
 
@@ -80,7 +80,7 @@ packages/dsh-context-governance/
 
 ## 状态与审计（T5）
 
-- `/cg status`：后端/能力、mode/degraded/conflicts、记忆计数、上次压缩/回注、写盘 `p50/p95`、审计文件与最近失败。
+- `/cg status`：后端/能力、mode/degraded/conflicts、记忆计数、上次压缩/回注、写盘 `p50/p95`、审计文件与最近失败；P1 起另有 `roots:` 根清单、`root-audit:` 与 `diagnostics: file=…`。
 - 审计 `audit.jsonl`：显式字段白名单（`src/audit.js` 的 `AUDIT_FIELD_WHITELIST`）；只写元数据，不写正文/标题；敏感字符串替换为 `[redacted:kind]`。
 - 写盘耗时：每次 `protectSync` 的 `durationMs` 进 audit 与 guard 样本；`/cg status` 显示 p50/p95；判据 p95>50ms 才考虑减 fsync，**不改异步**。
 - M1.2：`capability@apply`/`capability@ready` 两行能力探测（诊断 + audit，只记类型）；`tokenMeter` 延迟获取 + `assistant/message.usage` 兜底；`compaction-cost` 增加 `tokensBefore/AfterSource`（`tokenMeter`/`usage`/`none`）与可选 parts，`auditVersion` 自 0.1.11 起为 `cost-v1.1`；`/cg status` 增加 `last-cost:` 行。
@@ -111,7 +111,7 @@ packages/dsh-context-governance/
 
 样例输出（带 fixture 头）见 `../../analysis/req-20261025-09/samples-0.2.1.txt`（**示意/裁剪，非实跑**）；完整口径见 `../../docs/T5-状态命令与审计.md` §1.1–§1.5。
 
-**命令可用性（1.0）**：`/cg status` / `/cg policy show` / `/cg set` / `/cg profile` / `/cg header` / `/cg compact`。`/cg compact now`、`/cg cost` 仍未实现——当前对未知参数只返回 usage，不假装执行。
+**命令可用性（1.0）**：`/cg status` / `/cg roots` / `/cg policy show` / `/cg set` / `/cg profile` / `/cg header` / `/cg compact`。`/cg compact now`、`/cg cost` 仍未实现——当前对未知参数只返回 usage，不假装执行。
 
 ## 配置（bundle patch）
 
@@ -125,7 +125,7 @@ config:
     hostVersion: ""                   # 空 = 自动探测
     backendVersion: ""                # 空 = 运行时识别，版本标 unknown
   diagnostics:
-    logFile: ""                       # 空=关闭；非空必须是绝对路径（相对路径 CONFIG 拒绝）
+    logFile: ""                       # 空=默认用户级 <home>/context-governance/logs/governance.log；显式必须是绝对路径且只允许用户级或该根 memory/governance（v3 containment）
     # 0.2.2 起：除启动/能力行外，保护失败也写一行（只记检查名，不记 detail/正文）
   audit:
     maxBytes: 8388608                 # 8 MiB 后轮转 audit-YYYYMMDD.jsonl
@@ -148,24 +148,28 @@ config:
 
 配置非法 → 插件不加载（DSH 继续默认行为）。`compression.enabled=false` 时只注册记忆工具，不订阅压缩事件。
 
-### 1.0 单根模型：根来源与持久化（2a）
+### P1 多根登记与主根纳管骨架（v3，当前开发中）
 
-- 项目根只有一个，来源优先级：**显式配置 `projectRoot` > 持久化状态 > 首次推断**。
-- 未配置时：在**首个带 cwd 的会话事件**上按 `session.header.cwd` 上溯最近含 `.git` 的祖先；结果 realpath + 盘符归一，且不得落在 DSH home 内 → 原子落盘（tmp + link 独占），重启沿用、不重新推断；推断不出 = `no-project-root`，不换根、等下个会话再试。
-- 状态文件：`<pc.home>/context-governance/root-state-<profile>.json`（拿不到绝对 home 则 `<pc.dir>/context-governance/root-state.json`）；身份来自宿主 `profileContext`，**不读 env**；字段 `{version, root, source:'inferred', inferredAt, inferredFromCwd, instance:{profile}, configRoot?}`；不写进仓库/发布包。
+- **定位**：P1 =「可判定根登记 + 主根纳管骨架」；**不是全纳管**。P2 起每根 store/`mem_*` 路由/保护/回注/header/提前压；P1 只有主根跑完整治理，其他根已登记但零治理/零审计（root audit 仅一条 `root-unmanaged` 汇总）。
+- **根判定**：`configRoot` 非空 → cwd 在其下即归该根、`source=config`，**嵌套 `.git` 不另立根**（**显式配置根内多根隔离不完整**，已知限制）；configRoot 外/默认空根 → 最近 `.git` 多根。
+- **状态文件 v2**：`<home>/context-governance/root-state-<profile>.json`，`roots` 以 `rootId`（路径 hash）为键；`primaryRootId` 为 P1 挂载锚点（P2 起只展示/移除）。v1 自动迁移并留 `.v1.bak`。
+- **`/cg roots`**：只读列出全部已登记根（`id`/`name`/`project`/`state`/`memory`/`audit` 末行）；`/cg status` 也含同一段。
+- **写入边界**：只有两处——`<home>/context-governance/`（状态/root audit/默认诊断）与 `<root>/memory/governance/`（记忆/每根 audit）；每次实际写入前做 realpath/`..`/符号链接/盘符归一 containment，白名单外 fail-closed。
+- **`logFile`**：只允许用户级或该根 `memory/governance/`；旧 `<root>/logs/` 路径会 CONFIG 拒绝、插件不加载该 profile（本机已迁移到用户级 `<home>/context-governance/logs/governance.log`，旧文件保留）。多根下只有用户级路径安全；根内路径只能作 per-root sink。
+- **`mem_*`**：只读写本会话根；`unmanaged/no-root/fail-closed/子会话写` 均拒绝并审计 `memory-tool-rejected`；跨根查询 1.0 不做。
 - 身份不可得 → fail-closed：不猜路径、不落盘、根保持 unknown。
-- 根未知时 `/cg status` 显示 `project-root: unknown (no-project-root)`；记忆工具/header/提前压全部不挂载，不写任何记忆。
-- 根变化可见：`/cg status` 的 `project-root:` 行带 `source=config|persisted|inferred`、`inferred-fresh` / `changed-from=`；审计写 `persistence-identity` / `inferred-fresh`（含 `inferredFromCwd`）/ `project-root-changed(from/to/source)`。
-- 配置覆盖持久化根时**不改写**持久化 `root`，只写 `configRoot` 镜像；移除配置后回落持久化根，并写 `project-root-changed(source=persisted)`（防“删配置后突然变根”）。
-- 状态文件损坏/版本不符按未持久化处理（重推 + `inferred-fresh`），旧记忆不迁移、不删除。
+- 根未知时 `/cg status` 显示 `project-root: unknown (no-project-root)`；根变化可见（`source=config|persisted|inferred`、`inferred-fresh` / `changed-from=`），根生命周期事件写用户级 root audit。
+- 状态文件损坏/版本不符按未持久化处理（重推 + `inferred-fresh`），旧记忆不迁移、不删除；多进程同根不合并（第二进程只读/锁提示）。
 
 ## 存储布局
 
 ```
-<projectRoot>/<memoryRoot>/
+<home>/context-governance/           用户级：root-state-<profile>.json、root-audit-<profile>.jsonl、
+                                     logs/governance.log（默认诊断；旧 <root>/logs/ 已废弃）
+<root>/memory/governance/             每根：记忆、保护 journal、.writer.json、audit.jsonl
 ├─ MEMORY.md      派生索引（一行一条，不手改；手改会在下次写入时被覆盖）
 ├─ .writer.json   进程间写者锁
-├─ audit.jsonl    审计（T4 起；只写元数据，不写正文）
+├─ audit.jsonl    审计（只写元数据，不写正文）
 ├─ protection/    压缩前同步落盘的保护 journal（物化成功后清理）
 └─ topics/*.md    每种类型一个主题文件，条目块可人工编辑
 ```

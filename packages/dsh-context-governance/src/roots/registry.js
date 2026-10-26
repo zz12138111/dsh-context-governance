@@ -116,9 +116,12 @@ export class RootRegistry {
   #loadedIds = new Set();
   #attachRootId = null;
   #writable;
+  #allowedBase = null;
   #lastPersistAt = 0;
   #warnedLimit = false;
   #driftWarned = new Set();
+  #unmanagedSeen = new Map();
+  #unmanagedAudited = new Map();
 
   constructor({
     stateFile,
@@ -133,11 +136,15 @@ export class RootRegistry {
     logger = null,
     hashFn = undefined,
     pinLimit = DEFAULT_PIN_LIMIT,
+    allowedBase = null,
   } = {}) {
     this.#stateFile = typeof stateFile === 'string' ? path.resolve(stateFile) : null;
     this.#state = state ?? emptyV2State(null);
     this.#loaded = loaded;
     this.#rootAudit = rootAudit;
+    this.#allowedBase = typeof allowedBase === 'string' && allowedBase !== ''
+      ? allowedBase
+      : (this.#stateFile === null ? null : path.dirname(this.#stateFile));
     this.#configRoot = normalizeRootPath(configRoot);
     this.#project = typeof project === 'string' && project.trim() !== '' ? project.trim() : null;
     this.#profile = typeof profile === 'string' && profile !== '' ? profile : null;
@@ -153,13 +160,17 @@ export class RootRegistry {
 
   static load(options = {}) {
     const now = typeof options.now === 'function' ? options.now : () => new Date();
+    const allowedBase = typeof options.stateFile === 'string' && options.stateFile !== ''
+      ? path.dirname(path.resolve(options.stateFile))
+      : null;
     const loaded = loadStateV2(options.stateFile, {
       now: now(),
       profile: options.profile ?? null,
       repair: options.repair !== false,
       hashFn: options.hashFn,
+      allowedBase,
     });
-    return new RootRegistry({ ...options, state: loaded.state, loaded, now });
+    return new RootRegistry({ ...options, state: loaded.state, loaded, now, allowedBase });
   }
 
   get stateFile() { return this.#stateFile; }
@@ -192,12 +203,31 @@ export class RootRegistry {
   }
 
   /**
-   * 根判定：**configRoot 优先匹配**（cwd 在其下 → 用配置根，即使更近处还有 `.git`），
-   * 否则按 cwd 上溯最近的 `.git` 祖先（需求 :460/:474）。
+   * 根判定（v3 冻结）：configRoot 非空 → cwd 在其下即归 configRoot（强制合并，嵌套
+   * `.git` 不另立根）；configRoot 外/默认空根 → 最近 `.git` 多根。
    */
   #rootForCwd(cwd) {
     if (this.#configRoot !== null && cwdWithinRoot(cwd, this.#configRoot)) return this.#configRoot;
     return inferRootFromCwd(cwd, { exclude: this.#home });
+  }
+
+  /**
+   * P1 折中诊断：每根最多一次 `root-unmanaged`（根状态变化时再一次）。
+   * 只写 root audit；字段仅 root/rootId/reason/count；绝不写 sessionId/正文。
+   */
+  #noteUnmanaged(entry) {
+    if (entry === null || entry === undefined) return;
+    const count = (this.#unmanagedSeen.get(entry.rootId) ?? 0) + 1;
+    this.#unmanagedSeen.set(entry.rootId, count);
+    const state = entry.state === 'fail-closed' ? 'fail-closed' : 'active';
+    if (this.#unmanagedAudited.get(entry.rootId) === state) return;
+    this.#unmanagedAudited.set(entry.rootId, state);
+    this.#audit('root-unmanaged', {
+      root: entry.root,
+      rootId: entry.rootId,
+      reason: state === 'fail-closed' ? (entry.failClosedReason ?? 'fail-closed') : 'unmanaged-root',
+      count,
+    });
   }
 
   #pin(sid, entry, source) {
@@ -304,6 +334,7 @@ export class RootRegistry {
         inferredFromCwd,
         hashFn: this.#hashFn,
         now: this.#now(),
+        allowedBase: this.#allowedBase,
       });
       if (published.ok && published.state !== null) {
         if (published.existed) {
@@ -381,8 +412,10 @@ export class RootRegistry {
           );
         }
       }
+      const managed = this.#isManaged(pinned.entry);
+      if (!managed) this.#noteUnmanaged(pinned.entry);
       return {
-        status: this.#isManaged(pinned.entry) ? 'managed' : 'unmanaged',
+        status: managed ? 'managed' : 'unmanaged',
         entry: pinned.entry,
         source: pinned.source,
         isSubagent,
@@ -395,8 +428,10 @@ export class RootRegistry {
       const parentPin = parentId === null || parentId === sid ? undefined : this.#pins.get(parentId);
       if (parentPin !== undefined) {
         this.#pin(sid, parentPin.entry, 'parent');
+        const managed = this.#isManaged(parentPin.entry);
+        if (!managed) this.#noteUnmanaged(parentPin.entry);
         return {
-          status: this.#isManaged(parentPin.entry) ? 'managed' : 'unmanaged',
+          status: managed ? 'managed' : 'unmanaged',
           entry: parentPin.entry,
           source: 'parent',
           isSubagent: true,
@@ -417,8 +452,10 @@ export class RootRegistry {
       return { status: 'no-root', entry: null, source: null, isSubagent, cwd, reason: 'root-invalid' };
     }
     this.#pin(sid, ensured.entry, ensured.source);
+    const managed = this.#isManaged(ensured.entry);
+    if (!managed) this.#noteUnmanaged(ensured.entry);
     return {
-      status: this.#isManaged(ensured.entry) ? 'managed' : 'unmanaged',
+      status: managed ? 'managed' : 'unmanaged',
       entry: ensured.entry,
       source: ensured.source,
       isSubagent,
@@ -477,7 +514,10 @@ export class RootRegistry {
     if (!this.#writable || this.#stateFile === null) return false;
     const stamp = this.#now().getTime();
     if (!force && this.#lastPersistAt > 0 && stamp - this.#lastPersistAt < LAST_SEEN_PERSIST_MS) return false;
-    const ok = writeStateV2Merged(this.#stateFile, this.#state, { hashFn: this.#hashFn });
+    const ok = writeStateV2Merged(this.#stateFile, this.#state, {
+      hashFn: this.#hashFn,
+      allowedBase: this.#allowedBase,
+    });
     if (ok) this.#lastPersistAt = stamp;
     return ok;
   }

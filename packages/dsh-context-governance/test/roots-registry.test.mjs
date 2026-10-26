@@ -191,6 +191,61 @@ test('P1/T16b registry：configRoot 优先匹配（cwd 在其下即用配置根�
   assert.equal(reg.counts().roots, 2);
 });
 
+test('P1/T16b2 registry：configRoot 比外层 .git 更具体时仍取 configRoot', async () => {
+  const base = await tempDir();
+  const outer = makeRoot(base, 'repo', { gitFile: true });
+  const config = path.join(outer, 'sub');
+  fs.mkdirSync(path.join(config, 'deep'), { recursive: true });
+  const clock = { value: new Date('2026-10-26T10:00:00Z') };
+  const reg = makeRegistry({ stateFile: stateFileIn(path.join(base, 'cfg')), clock, configRoot: config });
+  reg.setAttachRoot(config, { origin: 'config' });
+  const res = reg.resolveSessionRoot(session('s1', path.join(config, 'deep')));
+  assert.equal(res.entry.root, path.resolve(config), '配置根比外层 .git 更具体时优先');
+  assert.equal(res.source, 'config');
+  assert.equal(res.status, 'managed');
+});
+
+test('P1/T16c registry：首事件无 cwd 不永久 no-root；后续带 cwd 再定根（late-bind）', async () => {
+  const base = await tempDir();
+  const root = makeRoot(base, 'late');
+  const clock = { value: new Date('2026-10-26T10:00:00Z') };
+  const reg = makeRegistry({ stateFile: stateFileIn(base), clock });
+  reg.claimPrimary(root, { origin: 'inferred' });
+  const first = reg.resolveSessionRoot({ header: { id: 's-late' } });
+  assert.equal(first.status, 'no-root');
+  assert.equal(first.reason, 'cwd-missing');
+  const second = reg.resolveSessionRoot({ header: { id: 's-late', cwd: root } });
+  assert.equal(second.status, 'managed');
+  assert.equal(second.entry.root, root);
+  assert.equal(reg.counts().roots, 1);
+});
+
+test('P1/T12b root-unmanaged：每根一次、字段仅 root/rootId/reason/count、只写 root audit', async () => {
+  const base = await tempDir();
+  const rootA = makeRoot(base, 'alpha');
+  const rootB = makeRoot(base, 'beta');
+  const clock = { value: new Date('2026-10-26T10:00:00Z') };
+  const audit = [];
+  const reg = makeRegistry({ stateFile: stateFileIn(base), clock, rootAudit: audit });
+  reg.claimPrimary(rootA, { origin: 'inferred' });
+  const first = reg.resolveSessionRoot(session('s1', rootB));
+  reg.resolveSessionRoot(session('s2', rootB));
+  const lines = audit.filter((item) => item.event === 'root-unmanaged');
+  assert.equal(lines.length, 1, '同一根 active 状态最多一次');
+  assert.deepEqual(Object.keys(lines[0].details).sort(), ['count', 'reason', 'root', 'rootId']);
+  assert.equal(lines[0].details.reason, 'unmanaged-root');
+  assert.equal(lines[0].details.count, 1);
+  assert.equal('sessionId' in lines[0].details, false, '不得写 sessionId');
+  assert.equal(first.entry.root, rootB);
+
+  reg.failClosed(first.entry.rootId, 'memory-root-escape');
+  reg.resolveSessionRoot(session('s3', rootB));
+  const after = audit.filter((item) => item.event === 'root-unmanaged');
+  assert.equal(after.length, 2, '根状态变化后允许再一次');
+  assert.equal(after[1].details.reason, 'memory-root-escape');
+  assert.equal(after[1].details.count, 3);
+});
+
 test('P1/T19 registry：lastSeenAt 节流、pin 上限、hash 碰撞延长', async () => {
   const base = await tempDir();
   const rootA = makeRoot(base, 'alpha');

@@ -244,7 +244,7 @@ test('M1.2 /cg status：last-cost 显示 before/after 与来源', async () => {
 
 test('M1.2 能力探测双行：apply + ready，ready 能看到晚注册的 compaction/tokenMeter', async () => {
   const rootDir = await tempDir();
-  const logFile = path.join(rootDir, 'logs', 'governance.log');
+  const logFile = path.join(rootDir, 'memory', 'governance', 'governance.log');
   const handlers = [];
   const ctx = {
     tools: { register: () => {} },

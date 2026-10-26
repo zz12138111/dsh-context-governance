@@ -1,7 +1,7 @@
 # DSH 插件开发 · 当前状态
 
 > 只放"现在还活着"的：在做什么、卡在哪、待谁决策。过期项直接删。
-> 更新：2026-10-26 02:3x（**0.2.2 四项已落**：P3-1 `25268bc`、accepted `2fd4f6f`、ok 三字段 `aacea07`、logger `3179ddf`、audit `629a3a0`；全量 **297/297**；`armed=false`，第 5 步接线未动）
+> 更新：2026-10-26 14:0x（**P1（B 纳管）代码 A–D + E 文档已落**：rootId hash / state v2 / 审计双通道 / 主根纳管 / mem_* 拒绝 / `/cg roots` / v3 logFile+containment；全量 **461/461**；`1.0.0` 未发布、未 push；等审核验收）
 
 ## 已定（2026-10-26）
 
@@ -9,13 +9,21 @@
 - **T3 三会话归档**（`cs_zgPDSqjsDI` / `cs_wmu59tAofx` / `cs_luHlCpRZGO`，2026-10-26 · 开发执行）：已归档，工作区列表只剩 3 个（需求 / 开发 / 审核打包）。
 - **`ok=false` 口径 = 两个正交字段**（2026-10-26 · 00 定）：`compaction=committed|skipped|failed` + `protection=ok|failed` + `failures[]` + `reinjected`；`stats` 拆 `compactionFailures` / `protectionFailures`；status 改 `protection=` 或加 legend；early 返回值改名 `accepted`。原则：`protection=failed` 不得触发重试/关开关，只有 `compaction=failed` 或 `reinjected=false` 才升级。验收：① P3-1 fixture 用 G2-B 真实文案；② 单测覆盖「保护失败 + 回注成功 → 仍算可用、不重试」；③ 文案不得把 protection 失败渲染成「压缩失败」。
 
+## P1（B 纳管）· v3 冻结口径
+
+- **定位**：P1 =「可判定根登记 + 主根纳管骨架」，**不是全纳管**；其他根已登记但零治理/零审计（root audit 一条 `root-unmanaged` 汇总，无 sessionId/正文）；P2/P3 才补每根记忆与保护。
+- **已交付**：A `d3d1152`（rootId/state v2/registry）、B `e4d1c32`（审计双通道）、C `beae562`（去 foreign、只主根、containment）、D `88d48cf`（mem_* 拒绝、`/cg roots`、状态根视图）、E 文档（`docs/P1-交付说明.md`、README、本文件、`DEC-PLUGIN-20261026-41`）。
+- **v3 关键口径**：configRoot 强制合并（嵌套 `.git` 不另立根）；`root-unmanaged` 无 sessionId；授权两处白名单 + 实际写入 realpath containment；`logFile` 仅用户级/根 memory，旧 `<root>/logs/` CONFIG 拒载（本机已迁移到 `C:/Users/19091/.dsh/context-governance/logs/governance.log`，旧文件保留）；多进程同根不合并（第二进程只读/锁提示）。
+- **已知限制（P4 必须写）**：显式配置根内多根隔离不完整；P1 其他根零治理；`logFile` 严格白名单是破坏性变更（旧路径已迁移）；E4 两个默认值变更（memoryRoot、diagnostics.logFile）。
+- **验证**：`node --test "test/*.test.mjs"` → **461/461**；`npm pack --dry-run` → 34 文件/0 test/0 本机路径。
+
 ## 在办
 
 | 会话 | 当前任务 | 状态 |
 |---|---|---|
-| 需求 | M3 REQ-20261025-10 已收口至 0.3.1；REQ-20261025-11（T3 评测）/ REQ-20261025-12（发布就绪）推进中；0.2.2 四项已完成 | M3/0.2.2 收尾 |
-| 开发 | **0.2.2 四项已落**（`25268bc` P3-1 / `2fd4f6f` accepted / `aacea07` ok 三字段 / `3179ddf` logger 落点 / `629a3a0` audit）；全量 **297/297**；`armed=false`；第 5 步接线未动 | 0.2.2 待复核 |
-| 审核打包 | 0.2.2 复核清单已改四步对照（契约变更硬验证/logger 定性/header hash 不做（确认攻击）/armed 边界），①②③复核中、④待复验 | 复核中/待结论 |
+| 需求 | v3 冻结口径已落 `8eed1f8`；P1 分层条款/迁移/破坏性变更跟进 | 待与 P1 文档对账 |
+| 开发 | **P1 代码 A–D + E 文档已落**；461/461；`1.0.0` 未发布/未 push；`logFile` 已按 v3 严格校验并与 desktop 迁移路径一致 | 等审核验收 |
+| 审核打包 | P1 评审/验收签字（含 v3 logFile/containment/root-unmanaged 口径） | 待签字 |
 
 ## 进度
 
