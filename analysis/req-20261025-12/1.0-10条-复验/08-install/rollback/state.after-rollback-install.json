@@ -1,0 +1,6 @@
+{
+  "dependencies": 1,
+  "bundles": 3,
+  "pluginDep": true,
+  "pluginBundle": true
+}

@@ -1,0 +1,21 @@
+# cg-install-test：仅安装演练用（不提交、不参与发布）
+# 本机绝对路径只存在于隔离实例配置；包内/发布面仍为 0 绝对路径。
+- id: agent-default-model
+  config:
+    provider: deepseek-account
+    model: deepseek-flash
+    reasoningEffort: max
+- id: dsh-context-governance
+  config:
+    enabled: true
+    # D9=A：不设 projectRoot；由首个会话 cwd 推断并持久化
+    memoryRoot: "D:/DS-PROJECT/DSH插件开发/.tmp/cg-install-ws/memory/governance"
+    project: ""
+    compression:
+      enabled: true
+    diagnostics:
+      logFile: "D:/DS-PROJECT/DSH插件开发/.tmp/cg-install-ws/logs/governance.log"
+- id: ui-settings-general
+  name: "@deepseek-ai/dsh-client-ui-settings-general"
+  config:
+    welcomeNoticeVersion: 2026-09-28.1

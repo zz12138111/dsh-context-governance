@@ -1,0 +1,45 @@
+# D9=A 安装后 `/cg status` 原文（隔离实例 cg-install-test，2026-10-26T04:47Z）
+
+> 同一会话连发两次 `/cg status`（GUI 命令面）。原文（无裁剪；token 与正文不在内）：
+
+```
+context-governance status
+time: 2026-10-26T04:47:32.825Z
+project-root: D:\DS-PROJECT\DSH插件开发 (source=inferred, inferred-fresh)
+persistence-identity: source=profileContext name=cg-install-test dir=C:\Users\19091\.dsh\profiles\cg-install-test home=present anchor=home path=C:\Users\19091\.dsh\context-governance\root-state-cg-install-test.json
+policy: compact.at=0.60 (source=builtin) native=0.6785 (config-fallback) early=on (default; unvalidated)
+profile: (none) (source=default)
+window: current=unknown source=config-fallback conservative=unknown native-current=0.6785(config-fallback) native-conservative=- unvalidated (at 允许但未经保守窗口校验)
+last-early: none
+compression: mode=event-level adapter=none backend-kind=none perception=event event-api=on events=3 summary=unknown/unknown host=0.2.1-rc.3 backend=unknown
+capabilities: control=unknown hooks=best-effort/event protectionRole=validator
+pressure: measured=- estimated=0.000 adjusted=0.000(×1.35) effective=0.000 ratio=- window=1M (session 54c2bf4b) at=0.60 effective<at
+degraded: none
+conflicts: no-compaction-service(warning), self-check-failed(error), backend-version-unverified(warning)
+write-latency: n=0 p50=- p95=- max=-
+last-compaction: none
+last-cost: none
+protection: writes=0 writeFailures=0 reinjections=0 injectionFailures=0 pendingJournals=0 reinjection=enabled(streak=0,maxFailures=3)
+scope: project=D:\DS-PROJECT\DSH插件开发 only-project=on capture-title=on ignored-foreign=0/0 unattributed=0
+last-loss: none
+memory: project=DSH插件开发 root=D:\DS-PROJECT\DSH插件开发\.tmp\cg-install-ws\memory\governance active=0 proposed=0 total=0 pendingJournals=0
+audit: file=D:\DS-PROJECT\DSH插件开发\.tmp\cg-install-ws\memory\governance\audit.jsonl max=8388608 size=1908 rotations=0 recentFailures=none (this-process)
+```
+
+第二次（12:48:46.596Z）内容同上，`events=3`、其余不变。
+
+## 采集结论（事实）
+
+- `project-root: D:\DS-PROJECT\DSH插件开发 (source=inferred, inferred-fresh)`——D9=A 首次推断成立；
+- 状态文件：`C:\Users\19091\.dsh\context-governance\root-state-cg-install-test.json`
+  （`root`/`source:'inferred'`/`inferredFromCwd`/`instance.profile='cg-install-test'`；见同目录副本与 sha256）；
+- **`project=` basename 显示**：`memory: project=DSH插件开发`（`project` 配置为空、由推断根 basename 补）；
+- `memory: root=D:\…\.tmp\cg-install-ws\memory\governance`（隔离 memoryRoot 生效）；
+- `audit: file=…\.tmp\cg-install-ws\memory\governance\audit.jsonl`（隔离审计）；
+- `early=on (default; unvalidated)`（无窗口观测时如实标 unvalidated，未裸 on）；
+- `last-loss: none`（该测试 profile 无历史 loss）；
+- `version=1.0.0`（apply 日志）、无 `registration failed`/`perception=none`。
+
+> 说明：本隔离实例为取证配置了**显式绝对** `diagnostics.logFile`（仅 profile patch，非包内）；
+> 包默认空 logFile 的「不建文件/不报错/不写 cwd」由 `install-8` 单测覆盖，见
+> `packages/.../test/install-8.test.mjs` 与 `06` 包面证据。

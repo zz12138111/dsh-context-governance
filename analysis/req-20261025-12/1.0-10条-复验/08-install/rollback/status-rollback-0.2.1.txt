@@ -1,0 +1,17 @@
+# 回滚 v0.2.1 演练证据（隔离实例 cg-install-test，端口 18770）
+
+- 包来源：`git worktree .tmp/drill-v0.2.1` @ tag `v0.2.1`（f585434），`package.json version=0.2.1`。
+- 安装方式：junction → worktree 包；profile deps `file:…/.tmp/drill-v0.2.1/packages/dsh-context-governance`；
+  bundles 追加；不跑 pnpm。
+- 启动：`dsh --profile cg-install-test --port 18770 --no-open` → 监听 127.0.0.1:18770（pid 23948）。
+- 诊断原文：
+  ```
+  2026-10-26T04:51:00.345Z governance capability@apply version=0.2.1 pid=23948 …
+  2026-10-26T04:51:00.348Z governance apply version=0.2.1 pid=23948 adapter=none mode=event-level host=0.2.1-rc.3 backend=unknown compaction-service=absent(token=compaction) perception=event event-api=on audit=D:\DS-PROJECT\DSH插件开发\.tmp\cg-rollback-ws\memory\governance\audit.jsonl memory=D:\DS-PROJECT\DSH插件开发\.tmp\cg-rollback-ws\memory\governance warning=provider-unavailable
+  2026-10-26T04:52:14.466Z governance capability@ready version=0.2.1 pid=23948 …
+  ```
+- 命令面：`/cg` 已识别（误输入 `/cg status/cg status` 返回 Usage），`/cg status` 输出正常
+  （原文见 body；v0.2.1 的 status **不含 version 行**，版本以 apply 日志 `version=0.2.1` 为准）。
+- 记忆/header：`memory: project=cg-rollback-test root=…\.tmp\cg-rollback-ws\memory\governance active=0 …`；
+  audit 路径隔离；无版本/契约错误。
+- 停止后：18770 无监听；卸载 v0.2.1 后 profile 回 `state.before`；worktree 待移除。

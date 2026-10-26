@@ -1,0 +1,16 @@
+{
+  "name": "dsh-profile-cg-install-test",
+  "private": true,
+  "dependencies": {
+    "dsh-context-governance": "file:D:/DS-PROJECT/DSH插件开发/packages/dsh-context-governance"
+  },
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "@deepseek-ai/dsh-base",
+        "@deepseek-ai/dsh-web-app",
+        "dsh-context-governance"
+      ]
+    }
+  }
+}
