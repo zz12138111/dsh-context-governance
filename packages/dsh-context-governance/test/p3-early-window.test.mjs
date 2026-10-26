@@ -141,6 +141,56 @@ test('P3 G8：子会话保护 journal 只回注，不 materialize 成持久 topi
   }
 });
 
+test('P3 G5：early 按根 armed 隔离（A 触发不读 B 策略）', async () => {
+  const sessions = {
+    a: { id: 'session-early-a' },
+    b: { id: 'session-early-b' },
+  };
+  const engines = {
+    a: { calls: 0, async compactNow() { this.calls += 1; } },
+    b: { calls: 0, async compactNow() { this.calls += 1; } },
+  };
+  const ctx = {
+    get(name) {
+      if (name === 'agents') return { list: () => [{ session: sessions.a }, { session: sessions.b }] };
+      if (name === 'agentPresets') {
+        return {
+          serviceFor: (agent) => (agent.session.id === sessions.a.id ? engines.a : engines.b),
+        };
+      }
+      return null;
+    },
+  };
+  const policy = {
+    early: true,
+    values: { 'compact.at': 0.6, 'compact.estimateSafety': 1.35, 'compact.early.armed': true },
+    window: { currentTokens: 1_048_576, native: 0.6934 },
+  };
+  const guard = {
+    status: { pressure: { measuredTokens: 680_000, estimatedTokens: 400_000 }, stats: { pending: 0 }, readOnly: false },
+  };
+  const auditA = { rows: [], append(event, details) { this.rows.push({ event, ...details }); } };
+  const auditB = { rows: [], append(event, details) { this.rows.push({ event, ...details }); } };
+  const makeWiring = (audit, armed) => wireEarlyCompaction({
+    ctx,
+    subscribe: false,
+    getGuard: () => guard,
+    getPolicy: () => policy,
+    getAudit: () => audit,
+    audit,
+    getArmed: () => armed,
+    now: () => 0,
+  });
+  const wiringA = makeWiring(auditA, true);
+  const wiringB = makeWiring(auditB, false);
+  await wiringA.check(sessions.a);
+  await wiringB.check(sessions.b);
+  assert.equal(engines.a.calls, 1);
+  assert.equal(engines.b.calls, 0, 'B 未 armed，不得读/触发 A 的 early');
+  assert.ok(auditA.rows.some((row) => row.event === 'early-forced'));
+  assert.equal(auditB.rows.length, 0, 'B 未 armed 时完全静默');
+});
+
 test('B2f：预写失败不调用 compactNow（B-1 门禁）', async () => {
   const f = await makeFixture(10_000);
   try {
