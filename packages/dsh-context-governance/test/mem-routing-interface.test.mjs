@@ -2,6 +2,7 @@
  * P1 / T14：mem_* 根路由接口（resolver 拒绝 unmanaged/no-root；子会话只读）。
  */
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -9,6 +10,34 @@ import test from 'node:test';
 
 import { apply } from '../src/index.js';
 import { MEM_QUERY_NAME, MEM_WRITE_NAME, createMemoryTools } from '../src/tools/mem-tools.js';
+
+/** A/B 负向快照：MEMORY.md、topics/*.md、audit.jsonl 的 hash + mtime。 */
+async function snapshotGovernance(root) {
+  const dir = path.join(root, 'memory', 'governance');
+  const files = [path.join(dir, 'MEMORY.md'), path.join(dir, 'audit.jsonl')];
+  try {
+    for (const name of await fs.readdir(path.join(dir, 'topics'))) {
+      if (name.endsWith('.md')) files.push(path.join(dir, 'topics', name));
+    }
+  } catch {
+    /* 无 topics 目录也算快照 */
+  }
+  const snapshot = {};
+  for (const file of [...new Set(files)].sort()) {
+    const rel = path.relative(dir, file);
+    try {
+      const data = await fs.readFile(file);
+      const stat = await fs.stat(file);
+      snapshot[rel] = {
+        hash: createHash('sha256').update(data).digest('hex'),
+        mtimeMs: stat.mtimeMs,
+      };
+    } catch {
+      snapshot[rel] = null;
+    }
+  }
+  return snapshot;
+}
 
 function makeStore() {
   return {
@@ -100,7 +129,7 @@ test('P1/T14 默认单 store 行为不变（无 resolver 时）', async () => {
   assert.equal(store.calls.length, 2);
 });
 
-test('P1/T14 apply 接线：非主根/无根会话 mem_* 拒绝，主根会话放行', async () => {
+test('P2/T14 apply 接线：A/B 根各自读写、跨根 text 拒绝、project 强制、B 根 hash/mtime 不变', async () => {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), 'cg-mem-apply-'));
   const home = path.join(base, 'home');
   const profile = { name: 'prof', dir: path.join(base, 'profile'), home };
@@ -138,6 +167,7 @@ test('P1/T14 apply 接线：非主根/无根会话 mem_* 拒绝，主根会话�
     assert.match(otherWrite.id, /^MEM-/);
     const otherMemory = await fs.readFile(path.join(other, 'memory', 'governance', 'MEMORY.md'), 'utf8');
     assert.match(otherMemory, /other-root/);
+    const bBefore = await snapshotGovernance(other);
     const ownWrite = await write.execute(
       { op: 'create', type: 'fact', title: 'own-root', writer: 'rule' },
       exec({ id: 's-own', cwd: primary }),
@@ -162,6 +192,8 @@ test('P1/T14 apply 接线：非主根/无根会话 mem_* 拒绝，主根会话�
     const own = await query.execute({}, exec({ id: 's-own', cwd: primary }));
     assert.equal(own.count, 1);
     assert.equal(own.entries[0].title, 'own-root');
+    const bAfter = await snapshotGovernance(other);
+    assert.deepEqual(bAfter, bBefore, 'A 根写/查前后，B 根 MEMORY/topics/audit 的 hash 与 mtime 必须不变');
     await assert.rejects(
       write.execute(
         { op: 'create', type: 'fact', title: 'bad-project', writer: 'rule', project: 'not-this-root' },
