@@ -24,6 +24,15 @@ export const MAX_AUDIT_MAX_BYTES = 1024 * 1024 * 1024;
 export const AUDIT_FIELD_WHITELIST = Object.freeze({
   sessionId: 'id',
   sessionShortId: 'id',
+  root: 'text',
+  name: 'text',
+  dir: 'text',
+  home: 'text',
+  anchor: 'text',
+  path: 'text',
+  inferredFromCwd: 'text',
+  from: 'text',
+  to: 'text',
   compactionId: 'id',
   cycle: 'id',
   manual: 'boolean',
@@ -141,6 +150,10 @@ export const AUDIT_EVENTS = Object.freeze([
   'early-failed',
   'early-armed',
   'early-disarmed',
+  'persistence-identity',
+  'project-root-changed',
+  'inferred-fresh',
+  'no-project-root',
 ]);
 
 function redactText(value) {

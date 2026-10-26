@@ -13,6 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { registerStatusCommand } from './commands/cg-status.js';
+import { identityDiagnostic, inferRootFromCwd, persistInferredRoot, readRootState, resolvePersistenceIdentity, samePath, sessionCwd, writeRootState } from './root-state.js';
 import { POLICY_FILE_MAX_BYTES, nativeFromWindow, nativeRatio, profileLayer, resolvePolicy, shortSessionId, validateLayer } from './policy.js';
 import { detectHostVersion, normalizeBackendVersion } from './compress/adapters.js';
 import { CompressionGuard } from './compress/runtime.js';
@@ -143,7 +144,8 @@ export function resolveConfig(raw = {}) {
       `audit.maxBytes must be an integer in [${MIN_AUDIT_MAX_BYTES}, ${MAX_AUDIT_MAX_BYTES}]`,
     );
   }
-  const projectRoot = path.resolve(config.projectRoot === '' ? process.cwd() : config.projectRoot);
+  // 2a：未配置 = 根未知（不回落 process.cwd）；由持久化或首次推断决定。
+  const projectRoot = config.projectRoot.trim() === '' ? '' : path.resolve(config.projectRoot);
   if (config.memoryHeader === null || typeof config.memoryHeader !== 'object' || Array.isArray(config.memoryHeader)) {
     throw new MemoryStoreError('CONFIG', 'memoryHeader must be an object');
   }
@@ -176,8 +178,9 @@ export function resolveConfig(raw = {}) {
   return {
     enabled: config.enabled,
     projectRoot,
-    memoryRoot: path.resolve(projectRoot, config.memoryRoot),
-    project: config.project.trim() === '' ? path.basename(projectRoot) : config.project.trim(),
+    memoryRoot: projectRoot === '' ? '' : path.resolve(projectRoot, config.memoryRoot),
+    memoryRootRel: config.memoryRoot,
+    project: config.project.trim() === '' ? (projectRoot === '' ? '' : path.basename(projectRoot)) : config.project.trim(),
     readOnly: config.readOnly,
     indexMaxChars: config.indexMaxChars,
     compression: {
@@ -460,329 +463,540 @@ export function buildPolicyState(config, deps = {}) {
 
 export async function apply(ctx, rawConfig = {}) {
   const config = resolveConfig(rawConfig);
-  // 策略链只在这里算一次：profile 标签 → 插件配置 → 项目 .cg-policy.json（命令侧只读它）。
-  const policyState = buildPolicyState(config);
   if (!config.enabled) {
     ctx.logger?.info?.('[context-governance] disabled by config');
     return;
   }
-  const store = await openStore(config);
-  const registration = registerMemoryTools(ctx, store);
-  for (const failure of registration.failures) {
-    ctx.logger?.warn?.(`[context-governance] tool ${failure.name} was not registered: ${failure.message}`);
+  // 2a：根来源 显式配置 > 持久化 > 首次推断（首次推断在首个会话事件时做）。
+  const identity = resolvePersistenceIdentity(ctx);
+  const persisted = identity.ok ? readRootState(identity.stateFile) : null;
+  const configuredRoot = config.projectRoot === '' ? null : config.projectRoot;
+  // 根变化可见（§11.1-6）：config 覆盖持久化根，或 config 移除后回落持久化根。
+  let changedFrom = null;
+  if (configuredRoot !== null && persisted !== null && !samePath(configuredRoot, persisted.root)) {
+    changedFrom = persisted.root;
+  } else if (configuredRoot === null && persisted !== null && persisted.configRoot !== null
+    && !samePath(persisted.configRoot, persisted.root)) {
+    changedFrom = persisted.configRoot;
   }
-  ctx.logger?.info?.(
-    `[context-governance] memory store ready at ${config.memoryRoot} ` +
-    `(project=${config.project}, writers=${registration.registered.join(',') || 'none'}); ` +
-    `entries=${store.status.counts.active + store.status.counts.proposed} active/proposed`,
-  );
-  for (const warning of store.warnings) ctx.logger?.warn?.(`[context-governance] ${warning}`);
-  // M3 T2（0.3.1）：新会话记忆 header 默认开；注册放在 guard 之后（窗口检查回调先入，保持 session/event 优先的顺序）。
-  const ruleFilePresent = ['AGENTS.md', 'CLAUDE.md']
-    .some((fileName) => fs.existsSync(path.join(config.projectRoot, fileName)));
-  const storeReadOnlyReason = store.status.readOnlyReason;
-  if (storeReadOnlyReason !== null) {
-    // T6 只读降级：明确写原因；读与回注仍可用，压缩不被阻断。
-    ctx.logger?.warn?.(
-      `[context-governance] memory read-only (${storeReadOnlyReason}); ` +
-      'memory writes and audit appends are suspended, reads and reinjection remain available',
-    );
-  }
-
-  // T3：压缩观测 + 保护校验。失败只降级/告警，不影响已注册的工具与记忆库。
-  const hostVersion = config.compression.hostVersion === ''
-    ? detectHostVersion()
-    : config.compression.hostVersion;
-  const backendVersion = normalizeBackendVersion(config.compression.backendVersion);
-  // v0.1.3：先把事件面能力 dump 出来（只记类型），再决定感知层级。
-  // M1.2：apply 记一行；首个会话事件后再记 @ready（服务可能晚注册）。
-  const capability = probeCapability(ctx);
-  if (config.diagnostics.logFile !== '') {
-    const ok = appendDiagnosticLine(config.diagnostics.logFile, capabilityLine(capability.entries, 'apply'));
-    if (!ok) ctx.logger?.warn?.(`[context-governance] diagnostics log is not writable: ${config.diagnostics.logFile}`);
-  }
-  const capabilityProbeEntries = capability.entries.map(([name, value]) => `${name}=${value}`);
-  let compactionProbe = null;
-  try {
-    compactionProbe = ctx.compaction ??
-      (typeof ctx.get === 'function' ? ctx.get('compaction') : null) ??
-      null;
-  } catch {
-    compactionProbe = null;
-  }
-  const compactionService = compactionProbe === null ? 'absent' : 'present';
-  if (config.compression.enabled && compactionService === 'absent') {
-    ctx.logger?.warn?.(
-      '[context-governance] compaction service not mounted/visible (token="compaction"); ' +
-      'provider path unavailable, event-level perception via session/event remains active',
-    );
-  }
-  if (config.compression.enabled && !capability.eventApi) {
-    ctx.logger?.warn?.(
-      '[context-governance] ctx.on is unavailable; compaction observation disabled (perception=none). ' +
-      `capability probe: ${formatCapability(capability.entries)}`,
-    );
-  }
-  let guard = null;
-  let earlyWiring = null;
-  const probeReadyCapability = () => {
-    const ready = probeCapability(ctx);
-    const entries = ready.entries.map(([name, value]) => `${name}=${value}`);
-    if (config.diagnostics.logFile !== '') {
-      appendDiagnosticLine(config.diagnostics.logFile, capabilityLine(ready.entries, 'ready'));
-    }
-    if (guard?.readOnly !== true) {
-      guard?.auditLog?.append?.('capability@ready', { probe: entries });
-    }
-    const find = (name) => ready.entries.find(([key]) => key === name)?.[1] ?? 'absent';
-    ctx.logger?.info?.(
-      `[context-governance] capability@ready compaction=${find('compaction')} ` +
-      `get.compaction=${find('get.compaction')} tokenMeter=${find('tokenMeter')} ` +
-      `get.tokenMeter=${find('get.tokenMeter')}`,
-    );
+  const rootInfo = {
+    root: configuredRoot ?? (persisted === null ? null : persisted.root),
+    source: configuredRoot !== null ? 'config' : (persisted !== null ? 'persisted' : 'none'),
+    identity,
+    stateFile: identity.ok ? identity.stateFile : null,
+    persistedRoot: persisted === null ? null : persisted.root,
+    configRootMirror: persisted === null ? null : persisted.configRoot,
+    changedFrom,
+    inferredFromCwd: null,
+    statePersisted: null,
   };
-  if (config.compression.enabled) {
+
+  const startRuntime = async (root, source) => {
+    rootInfo.root = root;
+    rootInfo.source = source;
+    config.projectRoot = root;
+    config.memoryRoot = path.resolve(root, config.memoryRootRel ?? config.memoryRoot);
+    if (config.project === '') config.project = path.basename(root);
+    // 策略链只在 attach 时算：profile 标签 → 插件配置 → 项目 .cg-policy.json（命令侧只读它）。
+    const policyState = buildPolicyState(config);
+
+    const store = await openStore(config);
+    const registration = registerMemoryTools(ctx, store);
+    for (const failure of registration.failures) {
+      ctx.logger?.warn?.(`[context-governance] tool ${failure.name} was not registered: ${failure.message}`);
+    }
+    ctx.logger?.info?.(
+      `[context-governance] memory store ready at ${config.memoryRoot} ` +
+      `(project=${config.project}, writers=${registration.registered.join(',') || 'none'}); ` +
+      `entries=${store.status.counts.active + store.status.counts.proposed} active/proposed`,
+    );
+    for (const warning of store.warnings) ctx.logger?.warn?.(`[context-governance] ${warning}`);
+    // M3 T2（0.3.1）：新会话记忆 header 默认开；注册放在 guard 之后（窗口检查回调先入，保持 session/event 优先的顺序）。
+    const ruleFilePresent = ['AGENTS.md', 'CLAUDE.md']
+      .some((fileName) => fs.existsSync(path.join(config.projectRoot, fileName)));
+    const storeReadOnlyReason = store.status.readOnlyReason;
+    if (storeReadOnlyReason !== null) {
+      // T6 只读降级：明确写原因；读与回注仍可用，压缩不被阻断。
+      ctx.logger?.warn?.(
+        `[context-governance] memory read-only (${storeReadOnlyReason}); ` +
+        'memory writes and audit appends are suspended, reads and reinjection remain available',
+      );
+    }
+
+    // T3：压缩观测 + 保护校验。失败只降级/告警，不影响已注册的工具与记忆库。
+    const hostVersion = config.compression.hostVersion === ''
+      ? detectHostVersion()
+      : config.compression.hostVersion;
+    const backendVersion = normalizeBackendVersion(config.compression.backendVersion);
+    // v0.1.3：先把事件面能力 dump 出来（只记类型），再决定感知层级。
+    // M1.2：apply 记一行；首个会话事件后再记 @ready（服务可能晚注册）。
+    const capability = probeCapability(ctx);
+    if (config.diagnostics.logFile !== '') {
+      const ok = appendDiagnosticLine(config.diagnostics.logFile, capabilityLine(capability.entries, 'apply'));
+      if (!ok) ctx.logger?.warn?.(`[context-governance] diagnostics log is not writable: ${config.diagnostics.logFile}`);
+    }
+    const capabilityProbeEntries = capability.entries.map(([name, value]) => `${name}=${value}`);
+    let compactionProbe = null;
     try {
-      guard = new CompressionGuard({
-        ctx,
+      compactionProbe = ctx.compaction ??
+        (typeof ctx.get === 'function' ? ctx.get('compaction') : null) ??
+        null;
+    } catch {
+      compactionProbe = null;
+    }
+    const compactionService = compactionProbe === null ? 'absent' : 'present';
+    if (config.compression.enabled && compactionService === 'absent') {
+      ctx.logger?.warn?.(
+        '[context-governance] compaction service not mounted/visible (token="compaction"); ' +
+        'provider path unavailable, event-level perception via session/event remains active',
+      );
+    }
+    if (config.compression.enabled && !capability.eventApi) {
+      ctx.logger?.warn?.(
+        '[context-governance] ctx.on is unavailable; compaction observation disabled (perception=none). ' +
+        `capability probe: ${formatCapability(capability.entries)}`,
+      );
+    }
+    let guard = null;
+    let earlyWiring = null;
+    const probeReadyCapability = () => {
+      const ready = probeCapability(ctx);
+      const entries = ready.entries.map(([name, value]) => `${name}=${value}`);
+      if (config.diagnostics.logFile !== '') {
+        appendDiagnosticLine(config.diagnostics.logFile, capabilityLine(ready.entries, 'ready'));
+      }
+      if (guard?.readOnly !== true) {
+        guard?.auditLog?.append?.('capability@ready', { probe: entries });
+      }
+      const find = (name) => ready.entries.find(([key]) => key === name)?.[1] ?? 'absent';
+      ctx.logger?.info?.(
+        `[context-governance] capability@ready compaction=${find('compaction')} ` +
+        `get.compaction=${find('get.compaction')} tokenMeter=${find('tokenMeter')} ` +
+        `get.tokenMeter=${find('get.tokenMeter')}`,
+      );
+    };
+    if (config.compression.enabled) {
+      try {
+        guard = new CompressionGuard({
+          ctx,
+          hostVersion,
+          backendVersion,
+          logger: ctx.logger,
+          diagnosticsLogFile: config.diagnostics.logFile,
+          store,
+          auditMaxBytes: config.audit.maxBytes,
+          projectRoot: config.projectRoot,
+          onlyProject: config.onlyProject,
+          captureTitle: config.captureTitle,
+          project: config.project,
+          reinjection: { maxFailures: config.reinjection.maxFailures },
+          onFirstEvent: probeReadyCapability,
+        });
+        guard.start();
+        // 0.2.2 第 5 步：turn/end 门禁接线（armed=false：不审计、不取服务、不调用）。
+        if (earlyWiring === null) {
+          earlyWiring = wireEarlyCompaction({
+            ctx,
+            getGuard: () => guard,
+            getPolicy: (session) => {
+              try {
+                return policyState.resolve(session?.id ?? null);
+              } catch {
+                return null;
+              }
+            },
+            getArmed: (session) => {
+              try {
+                return policyState.resolve(session?.id ?? null).values['compact.early.armed'] === true;
+              } catch {
+                return false;
+              }
+            },
+            audit: guard.auditLog ?? null,
+            logger: ctx.logger,
+          });
+        }
+        const status = guard.status;
+        ctx.logger?.info?.(
+          `[context-governance] compression observer: adapter=${status.adapter.kind} ` +
+          `mode=${status.mode} perception=${status.perception} host=${hostVersion} ` +
+          `backend=${status.adapter.versions.backend} compaction-service=${compactionService} ` +
+          `only-project=${config.onlyProject} capture-title=${config.captureTitle}`,
+        );
+        for (const conflict of status.conflicts) {
+          const log = conflict.severity === 'error' ? 'warn' : 'info';
+          ctx.logger?.[log]?.(`[context-governance] compression conflict ${conflict.code}: ${conflict.message}`);
+        }
+        if (guard.readOnly !== true) {
+          guard?.auditLog?.append?.('apply', {
+            status: 'applied',
+            version: PLUGIN_VERSION,
+            mode: status.mode,
+            adapter: status.adapter.kind,
+            host: hostVersion,
+            backend: status.adapter.versions.backend,
+            perception: status.perception,
+            eventApi: status.eventApi,
+            readOnly: false,
+          });
+          guard?.auditLog?.append?.('capability@apply', { probe: capabilityProbeEntries });
+        } else {
+          ctx.logger?.warn?.(`[context-governance] audit not initialized: memory read-only (${guard.readOnlyReason ?? 'unknown'})`);
+        }
+      } catch (error) {
+        ctx.logger?.warn?.(`[context-governance] compression observer failed to start: ${String(error?.message ?? error)}`);
+        guard = null;
+      }
+    }
+
+    // 0.2.1（DEC-20261025-66）：窗口由运行时观察；每次 resolve 现算 native（不锁 apply）。
+    if (typeof policyState.setWindowProvider === 'function') {
+      policyState.setWindowProvider(() => guard?.windowState ?? null);
+    }
+    // 窗口变化导致 at 不可用：拒绝该层 + 审计一次（不静默降级、不每事件刷审计）。
+    // 退化（DEC-20261025-68 A）reason 是 native-uncomputable，必须与 over-native-runtime 一样落审计。
+    if (guard !== null && typeof guard.onWindowChange === 'function') {
+      const windowViolations = new Set();
+      const WINDOW_REJECT_REASONS = new Set(['over-native-runtime', 'native-uncomputable']);
+      const checkWindowViolations = () => {
+        try {
+          // 1a：会话层按会话逐桶检查（窗口收缩也要让会话覆盖失效，不再只看全局链）。
+          const sessionIds = typeof policyState.sessionIds === 'function' ? policyState.sessionIds() : [];
+          const targets = [null, ...sessionIds];
+          const seenThisPass = new Set();
+          for (const target of targets) {
+            const resolved = policyState.resolve(target);
+            for (const item of resolved.invalid) {
+              if (!WINDOW_REJECT_REASONS.has(item.reason)) continue;
+              const key = `${target ?? 'global'}|${item.source}|${item.key}|${item.reason}`;
+              seenThisPass.add(key);
+              if (windowViolations.has(key)) continue;
+              windowViolations.add(key);
+              guard?.auditLog?.append?.('policy-invalid', {
+                source: item.source,
+                reason: item.reason,
+                code: item.key,
+                ...(target === null ? {} : { sessionId: target, sessionShortId: shortSessionId(target) }),
+              });
+              ctx.logger?.warn?.(
+                `[context-governance] policy layer rejected at runtime: ${item.source}/${item.key}:${item.reason}` +
+                `${item.detail === undefined ? '' : ` ${item.detail}`}`,
+              );
+            }
+          }
+          // P3-7/P2-3：本轮不再出现的拒绝项清出去重 Set，下一 episode 能再写审计。
+          if (seenThisPass.size === 0) windowViolations.clear();
+          else for (const key of [...windowViolations]) if (!seenThisPass.has(key)) windowViolations.delete(key);
+        } catch (error) {
+          ctx.logger?.warn?.(`[context-governance] runtime window check failed: ${String(error?.message ?? error)}`);
+        }
+      };
+      guard.onWindowChange(checkWindowViolations);
+      checkWindowViolations();
+    }
+
+    // M3 T2（0.3.1）：新会话 header（默认开）。放在 guard 之后注册，保持 session/event 处理顺序稳定。
+    const header = registerMemoryHeader(ctx, store, {
+      enabled: config.memoryHeader.enabled,
+      isEnabled: (session) => config.memoryHeader.enabled &&
+        policyState.resolve(session?.id ?? null).values['header.enabled'] !== false,
+      hasRuleFile: ruleFilePresent,
+      maxLines: config.memoryHeader.maxLines,
+      maxChars: config.memoryHeader.maxChars,
+      oldAgeDays: config.memoryHeader.oldAgeDays,
+      oldLimit: config.memoryHeader.oldLimit,
+      onInjected: (built, injection = {}) => {
+        guard?.auditLog?.append?.('header-injected', {
+          count: built.count,
+          lines: built.count,
+          mode: built.mode,
+          source: 'memory',
+          tokensInjected: Math.ceil(built.text.length / 4),
+          // 0.2.2：不记裸 messages.length（基线+1 会被误读成“注入 1 条”）；
+          // 只记前后长度，由两值差得 injected（0/1）+ header 指纹。
+          injected: Number.isFinite(injection.messagesAfter) && Number.isFinite(injection.messagesBefore)
+            ? injection.messagesAfter - injection.messagesBefore
+            : null,
+          messagesBefore: injection.messagesBefore ?? null,
+          messagesAfter: injection.messagesAfter ?? null,
+          // 审核定论（2026-10-26）：不做 header hash（32 bit 指纹对低熵 header 不抗猜测；需公开比对时用 HMAC/加盐另立项）。
+        });
+      },
+    });
+    if (header.registered) {
+      ctx.logger?.info?.(
+        `[context-governance] memory header enabled for new sessions (first step only; rules=${ruleFilePresent ? 'present' : 'absent'})`,
+      );
+    } else if (config.memoryHeader.enabled) {
+      ctx.logger?.warn?.(`[context-governance] memory header was not registered: ${header.reason}`);
+    }
+
+    if (config.diagnostics.logFile !== '') {
+      const ok = appendDiagnosticLine(config.diagnostics.logFile, startupLine({
+        adapterKind: guard?.adapter.kind ?? 'disabled',
+        mode: guard?.mode ?? 'disabled',
         hostVersion,
         backendVersion,
-        logger: ctx.logger,
-        diagnosticsLogFile: config.diagnostics.logFile,
-        store,
-        auditMaxBytes: config.audit.maxBytes,
-        projectRoot: config.projectRoot,
-        onlyProject: config.onlyProject,
-        captureTitle: config.captureTitle,
-        project: config.project,
-        reinjection: { maxFailures: config.reinjection.maxFailures },
-        onFirstEvent: probeReadyCapability,
-      });
-      guard.start();
-      // 0.2.2 第 5 步：turn/end 门禁接线（armed=false：不审计、不取服务、不调用）。
-      if (earlyWiring === null) {
-        earlyWiring = wireEarlyCompaction({
-          ctx,
-          getGuard: () => guard,
-          getPolicy: (session) => {
-            try {
-              return policyState.resolve(session?.id ?? null);
-            } catch {
-              return null;
-            }
-          },
-          getArmed: (session) => {
-            try {
-              return policyState.resolve(session?.id ?? null).values['compact.early.armed'] === true;
-            } catch {
-              return false;
-            }
-          },
-          audit: guard.auditLog ?? null,
-          logger: ctx.logger,
-        });
-      }
-      const status = guard.status;
-      ctx.logger?.info?.(
-        `[context-governance] compression observer: adapter=${status.adapter.kind} ` +
-        `mode=${status.mode} perception=${status.perception} host=${hostVersion} ` +
-        `backend=${status.adapter.versions.backend} compaction-service=${compactionService} ` +
-        `only-project=${config.onlyProject} capture-title=${config.captureTitle}`,
-      );
-      for (const conflict of status.conflicts) {
-        const log = conflict.severity === 'error' ? 'warn' : 'info';
-        ctx.logger?.[log]?.(`[context-governance] compression conflict ${conflict.code}: ${conflict.message}`);
-      }
-      if (guard.readOnly !== true) {
-        guard.auditLog?.append?.('apply', {
-          status: 'applied',
-          version: PLUGIN_VERSION,
-          mode: status.mode,
-          adapter: status.adapter.kind,
-          host: hostVersion,
-          backend: status.adapter.versions.backend,
-          perception: status.perception,
-          eventApi: status.eventApi,
-          readOnly: false,
-        });
-        guard.auditLog?.append?.('capability@apply', { probe: capabilityProbeEntries });
-      } else {
-        ctx.logger?.warn?.(`[context-governance] audit not initialized: memory read-only (${guard.readOnlyReason ?? 'unknown'})`);
-      }
-    } catch (error) {
-      ctx.logger?.warn?.(`[context-governance] compression observer failed to start: ${String(error?.message ?? error)}`);
-      guard = null;
+        memoryRoot: config.memoryRoot,
+        compactionService,
+        perception: guard?.perception ?? 'none',
+        eventApi: capability.eventApi ? 'on' : 'off',
+        auditFile: guard?.auditLog?.file ?? '',
+        readOnly: guard?.readOnlyReason ?? storeReadOnlyReason ?? '',
+        warning: compactionService === 'absent' && config.compression.enabled ? 'provider-unavailable' : '',
+      }));
+      if (!ok) ctx.logger?.warn?.(`[context-governance] diagnostics log is not writable: ${config.diagnostics.logFile}`);
     }
-  }
 
-  // 0.2.1（DEC-20261025-66）：窗口由运行时观察；每次 resolve 现算 native（不锁 apply）。
-  if (typeof policyState.setWindowProvider === 'function') {
-    policyState.setWindowProvider(() => guard?.windowState ?? null);
-  }
-  // 窗口变化导致 at 不可用：拒绝该层 + 审计一次（不静默降级、不每事件刷审计）。
-  // 退化（DEC-20261025-68 A）reason 是 native-uncomputable，必须与 over-native-runtime 一样落审计。
-  if (guard !== null && typeof guard.onWindowChange === 'function') {
-    const windowViolations = new Set();
-    const WINDOW_REJECT_REASONS = new Set(['over-native-runtime', 'native-uncomputable']);
-    const checkWindowViolations = () => {
-      try {
-        // 1a：会话层按会话逐桶检查（窗口收缩也要让会话覆盖失效，不再只看全局链）。
-        const sessionIds = typeof policyState.sessionIds === 'function' ? policyState.sessionIds() : [];
-        const targets = [null, ...sessionIds];
-        const seenThisPass = new Set();
-        for (const target of targets) {
-          const resolved = policyState.resolve(target);
-          for (const item of resolved.invalid) {
-            if (!WINDOW_REJECT_REASONS.has(item.reason)) continue;
-            const key = `${target ?? 'global'}|${item.source}|${item.key}|${item.reason}`;
-            seenThisPass.add(key);
-            if (windowViolations.has(key)) continue;
-            windowViolations.add(key);
-            guard.auditLog?.append?.('policy-invalid', {
-              source: item.source,
-              reason: item.reason,
-              code: item.key,
-              ...(target === null ? {} : { sessionId: target, sessionShortId: shortSessionId(target) }),
-            });
-            ctx.logger?.warn?.(
-              `[context-governance] policy layer rejected at runtime: ${item.source}/${item.key}:${item.reason}` +
-              `${item.detail === undefined ? '' : ` ${item.detail}`}`,
-            );
-          }
-        }
-        // P3-7/P2-3：本轮不再出现的拒绝项清出去重 Set，下一 episode 能再写审计。
-        if (seenThisPass.size === 0) windowViolations.clear();
-        else for (const key of [...windowViolations]) if (!seenThisPass.has(key)) windowViolations.delete(key);
-      } catch (error) {
-        ctx.logger?.warn?.(`[context-governance] runtime window check failed: ${String(error?.message ?? error)}`);
+    // T5：/cg status（只读；不依赖压缩服务是否可用）。
+    // P3-1（三轮复核）：commands 可能在治理插件之后挂载——首次失败不静默，`ctx.inject` 或下个 tick 重试一次。
+    for (const invalid of policyState.invalid) {
+      guard?.auditLog?.append?.('policy-invalid', {
+        source: invalid.source,
+        reason: invalid.reason,
+        code: invalid.key,
+      });
+    }
+    if (policyState.invalid.length > 0) {
+      // 用户日常只看 /cg status：apply 时也留一行，别让被拒的层静默退回。
+      const summary = policyState.invalid
+        .slice(0, 5)
+        .map((invalid) => `${invalid.source}/${invalid.key}:${invalid.reason}`)
+        .join(', ');
+      ctx.logger?.warn?.(
+        `[context-governance] policy layer rejected (${policyState.invalid.length}): ${summary}` +
+        `${policyState.invalid.length > 5 ? ', ...' : ''}`,
+      );
+    }
+    const commandOptions = {
+      store,
+      getGuard: () => guard,
+      audit: guard?.auditLog ?? null,
+      policy: policyState,
+      logger: ctx.logger,
+      getEarlyStatus: () => (earlyWiring === null ? null : earlyWiring.getLast()),
+      // 2a：根来源与持久化身份在 status 中可见（运行期数值，用 getter 不复制快照）。
+      getRootInfo: () => rootInfo,
+      getPersistenceIdentity: () => identity,
+    };
+    const commandRef = { current: registerStatusCommand(ctx, commandOptions) };
+    const retryStatusCommand = () => {
+      if (commandRef.current.registered) return;
+      const retried = registerStatusCommand(ctx, commandOptions);
+      if (retried.registered) {
+        commandRef.current = retried;
+        ctx.logger?.info?.('[context-governance] /cg status registered after commands became available');
       }
     };
-    guard.onWindowChange(checkWindowViolations);
-    checkWindowViolations();
-  }
+    if (!commandRef.current.registered) {
+      ctx.logger?.warn?.(
+        `[context-governance] /cg status was not registered: ${commandRef.current.reason}; ` +
+        'will retry once when the commands service becomes available',
+      );
+      if (typeof ctx.inject === 'function') {
+        try {
+          ctx.inject(['commands'], retryStatusCommand);
+        } catch {
+          setTimeout(retryStatusCommand, 0);
+        }
+      } else {
+        setTimeout(retryStatusCommand, 0);
+      }
+    }
 
-  // M3 T2（0.3.1）：新会话 header（默认开）。放在 guard 之后注册，保持 session/event 处理顺序稳定。
-  const header = registerMemoryHeader(ctx, store, {
-    enabled: config.memoryHeader.enabled,
-    isEnabled: (session) => config.memoryHeader.enabled &&
-      policyState.resolve(session?.id ?? null).values['header.enabled'] !== false,
-    hasRuleFile: ruleFilePresent,
-    maxLines: config.memoryHeader.maxLines,
-    maxChars: config.memoryHeader.maxChars,
-    oldAgeDays: config.memoryHeader.oldAgeDays,
-    oldLimit: config.memoryHeader.oldLimit,
-    onInjected: (built, injection = {}) => {
-      guard?.auditLog?.append?.('header-injected', {
-        count: built.count,
-        lines: built.count,
-        mode: built.mode,
-        source: 'memory',
-        tokensInjected: Math.ceil(built.text.length / 4),
-        // 0.2.2：不记裸 messages.length（基线+1 会被误读成“注入 1 条”）；
-        // 只记前后长度，由两值差得 injected（0/1）+ header 指纹。
-        injected: Number.isFinite(injection.messagesAfter) && Number.isFinite(injection.messagesBefore)
-          ? injection.messagesAfter - injection.messagesBefore
-          : null,
-        messagesBefore: injection.messagesBefore ?? null,
-        messagesAfter: injection.messagesAfter ?? null,
-        // 审核定论（2026-10-26）：不做 header hash（32 bit 指纹对低熵 header 不抗猜测；需公开比对时用 HMAC/加盐另立项）。
+    if (typeof ctx.effect === 'function') {
+      ctx.effect(() => async () => {
+        commandRef.current.dispose?.();
+        earlyWiring?.stop();
+        guard?.stop();
+        await store.close();
+      }, 'context-governance cleanup');
+    } else {
+      // cordis 没有 `dispose` 事件（app.asar 全量扫描 0 命中），旧兜底是死代码。
+      // 没有 effect 意味着宿主不支持按插件生命周期清理：明说，锁随进程退出释放。
+      ctx.logger?.warn?.(
+        '[context-governance] ctx.effect is unavailable; writer lock and subscriptions will only be released when the process exits',
+      );
+    }
+
+    // 2a：身份与根变化留痕（有 audit 时；无 store 时由 diagnostics 行承担）。
+    try {
+      guard?.auditLog?.append?.('persistence-identity', {
+        source: identity.ok ? 'profileContext' : 'unavailable',
+        name: identity.name ?? null,
+        dir: identity.dir ?? null,
+        home: identity.home === null || identity.home === undefined ? 'absent' : 'present',
+        anchor: identity.anchor ?? null,
+        path: rootInfo.stateFile ?? null,
+        reason: identity.reason ?? null,
       });
-    },
-  });
-  if (header.registered) {
-    ctx.logger?.info?.(
-      `[context-governance] memory header enabled for new sessions (first step only; rules=${ruleFilePresent ? 'present' : 'absent'})`,
-    );
-  } else if (config.memoryHeader.enabled) {
-    ctx.logger?.warn?.(`[context-governance] memory header was not registered: ${header.reason}`);
-  }
-
-  if (config.diagnostics.logFile !== '') {
-    const ok = appendDiagnosticLine(config.diagnostics.logFile, startupLine({
-      adapterKind: guard?.adapter.kind ?? 'disabled',
-      mode: guard?.mode ?? 'disabled',
-      hostVersion,
-      backendVersion,
-      memoryRoot: config.memoryRoot,
-      compactionService,
-      perception: guard?.perception ?? 'none',
-      eventApi: capability.eventApi ? 'on' : 'off',
-      auditFile: guard?.auditLog?.file ?? '',
-      readOnly: guard?.readOnlyReason ?? storeReadOnlyReason ?? '',
-      warning: compactionService === 'absent' && config.compression.enabled ? 'provider-unavailable' : '',
-    }));
-    if (!ok) ctx.logger?.warn?.(`[context-governance] diagnostics log is not writable: ${config.diagnostics.logFile}`);
-  }
-
-  // T5：/cg status（只读；不依赖压缩服务是否可用）。
-  // P3-1（三轮复核）：commands 可能在治理插件之后挂载——首次失败不静默，`ctx.inject` 或下个 tick 重试一次。
-  for (const invalid of policyState.invalid) {
-    guard?.auditLog?.append?.('policy-invalid', {
-      source: invalid.source,
-      reason: invalid.reason,
-      code: invalid.key,
-    });
-  }
-  if (policyState.invalid.length > 0) {
-    // 用户日常只看 /cg status：apply 时也留一行，别让被拒的层静默退回。
-    const summary = policyState.invalid
-      .slice(0, 5)
-      .map((invalid) => `${invalid.source}/${invalid.key}:${invalid.reason}`)
-      .join(', ');
-    ctx.logger?.warn?.(
-      `[context-governance] policy layer rejected (${policyState.invalid.length}): ${summary}` +
-      `${policyState.invalid.length > 5 ? ', ...' : ''}`,
-    );
-  }
-  const commandOptions = {
-    store,
-    getGuard: () => guard,
-    audit: guard?.auditLog ?? null,
-    policy: policyState,
-    logger: ctx.logger,
-    getEarlyStatus: () => (earlyWiring === null ? null : earlyWiring.getLast()),
+      if (source === 'inferred') {
+        guard?.auditLog?.append?.('inferred-fresh', {
+          root,
+          path: rootInfo.stateFile ?? null,
+          ...(rootInfo.inferredFromCwd === null ? {} : { inferredFromCwd: rootInfo.inferredFromCwd }),
+          ...(rootInfo.statePersisted === false ? { reason: 'state-write-failed' } : {}),
+        });
+      }
+      if (rootInfo.changedFrom !== null) {
+        guard?.auditLog?.append?.('project-root-changed', { from: rootInfo.changedFrom, to: root, source });
+      }
+    } catch {
+      /* 审计失败不影响主流程 */
+    }
+    // §11.1-6：config 只写镜像，不改持久化 root；移除配置后回落到持久化 root 并留痕。
+    if (identity.ok && persisted !== null) {
+      const mirrorRoot = source === 'config' && !samePath(root, persisted.root) ? root : null;
+      if (mirrorRoot !== null || persisted.configRoot !== null) {
+        const mirrored = writeRootState(identity.stateFile, {
+          root: persisted.root,
+          inferredAt: persisted.inferredAt,
+          inferredFromCwd: persisted.inferredFromCwd,
+          profile: identity.name,
+          ...(mirrorRoot === null ? {} : { configRoot: mirrorRoot }),
+        });
+        if (!mirrored) ctx.logger?.warn?.(`[context-governance] root state mirror write failed: ${identity.stateFile}`);
+      }
+    }
+    if (config.diagnostics.logFile !== '') appendDiagnosticLine(config.diagnostics.logFile, identityDiagnostic(identity));
   };
-  const commandRef = { current: registerStatusCommand(ctx, commandOptions) };
-  const retryStatusCommand = () => {
-    if (commandRef.current.registered) return;
-    const retried = registerStatusCommand(ctx, commandOptions);
-    if (retried.registered) {
-      commandRef.current = retried;
+
+  if (rootInfo.root !== null) {
+    await startRuntime(rootInfo.root, rootInfo.source);
+    return;
+  }
+
+  // 根未知（未配置且无持久化状态）：先不建 store/guard；注册最小状态命令，等首个带 cwd 的会话事件推断。
+  // 推断失败 = 该会话 no-project-root skip，根保持未知；不盲猜路径、不换根。
+  const diag = (line, level = 'info') => {
+    if (config.diagnostics.logFile !== '') appendDiagnosticLine(config.diagnostics.logFile, line);
+    const message = `[context-governance] ${line}`;
+    if (level === 'warn') ctx.logger?.warn?.(message); else ctx.logger?.info?.(message);
+  };
+  diag(identityDiagnostic(identity), identity.ok ? 'info' : 'warn');
+  diag('persistence: root=unknown (awaiting first inference)');
+  const commandRef = { current: null };
+  const registerMinimal = () => {
+    commandRef.current = registerStatusCommand(ctx, {
+      store: null,
+      policy: null,
+      getGuard: () => null,
+      audit: null,
+      getEarlyStatus: () => null,
+      getRootInfo: () => rootInfo,
+      getPersistenceIdentity: () => identity,
+      logger: ctx.logger,
+    });
+  };
+  registerMinimal();
+  // 与正式路径一致：commands 可能晚挂载，首次失败不静默，注入后重试一次。
+  const retryMinimalCommand = () => {
+    if (commandRef.current?.registered) return;
+    registerMinimal();
+    if (commandRef.current?.registered) {
       ctx.logger?.info?.('[context-governance] /cg status registered after commands became available');
     }
   };
-  if (!commandRef.current.registered) {
+  if (!commandRef.current?.registered) {
     ctx.logger?.warn?.(
-      `[context-governance] /cg status was not registered: ${commandRef.current.reason}; ` +
+      `[context-governance] /cg status was not registered: ${commandRef.current?.reason ?? 'unknown'}; ` +
       'will retry once when the commands service becomes available',
     );
     if (typeof ctx.inject === 'function') {
       try {
-        ctx.inject(['commands'], retryStatusCommand);
+        ctx.inject(['commands'], retryMinimalCommand);
       } catch {
-        setTimeout(retryStatusCommand, 0);
+        setTimeout(retryMinimalCommand, 0);
       }
     } else {
-      setTimeout(retryStatusCommand, 0);
+      setTimeout(retryMinimalCommand, 0);
     }
   }
-
+  let watcherDispose = null;
+  let attaching = false;
+  let stopped = false;
+  const noRootSeen = new Set();
+  const watch = () => {
+    if (typeof ctx.on !== 'function') {
+      diag('persistence: ctx.on unavailable; first inference cannot start', 'warn');
+      return;
+    }
+    try {
+      // 具名函数：测试据此断言“根已确定时没有挂首次推断 watcher”。
+      const firstInferenceRootWatcher = (session) => attachFirst(session);
+      watcherDispose = ctx.on('session/event', firstInferenceRootWatcher);
+      diag('persistence: watching session/event for first cwd');
+    } catch (error) {
+      diag(`persistence: session/event subscription failed: ${String(error?.message ?? error)}`, 'warn');
+    }
+  };
+  const attachFirst = (session) => {
+    if (stopped || attaching || rootInfo.root !== null) return;
+    const cwd = sessionCwd(session);
+    // 结果 realpath + 盘符归一；不允许把 DSH 自己的 home 当项目根（§11.1-2）。
+    const inferred = inferRootFromCwd(cwd, { exclude: identity.home ?? identity.dir });
+    if (inferred === null) {
+      // 同一 cwd 只报一次，避免每个事件刷日志；根保持未知。
+      if (!noRootSeen.has(cwd)) {
+        noRootSeen.add(cwd);
+        const sessionId = typeof session?.id === 'string' ? session.id : 'unknown';
+        diag(`persistence: no-project-root session=${sessionId} cwd=${cwd === '' ? 'unknown' : cwd}`, 'warn');
+      }
+      return;
+    }
+    attaching = true;
+    try { watcherDispose?.(); } catch { /* ignore */ }
+    try { commandRef.current?.dispose?.(); } catch { /* ignore */ }
+    // §11.1-8：独占发布；已有状态（另一进程/另一会话先写）→ 读回既有根，不覆盖。
+    const published = persistInferredRoot(identity.stateFile, {
+      root: inferred,
+      inferredFromCwd: cwd,
+      profile: identity.name,
+    });
+    let chosenRoot = inferred;
+    if (!published.ok) {
+      rootInfo.statePersisted = false;
+      diag(`persistence: root state write failed path=${identity.stateFile}`, 'warn');
+    } else if (published.existed && published.root !== null && !samePath(published.root, inferred)) {
+      chosenRoot = published.root;
+      rootInfo.statePersisted = true;
+      diag(`persistence: another process already persisted root=${chosenRoot}; keeping it`, 'warn');
+    } else if (published.existed && published.root === null) {
+      // 已存在但文件损坏：本次重建（损坏按未持久化处理，§11.1-5）。
+      rootInfo.statePersisted = writeRootState(identity.stateFile, {
+        root: inferred,
+        inferredFromCwd: cwd,
+        profile: identity.name,
+      });
+      if (!rootInfo.statePersisted) diag(`persistence: root state write failed path=${identity.stateFile}`, 'warn');
+    } else {
+      rootInfo.statePersisted = true;
+    }
+    const attachSource = samePath(chosenRoot, inferred) ? 'inferred' : 'persisted';
+    if (attachSource === 'inferred') rootInfo.inferredFromCwd = cwd;
+    void startRuntime(chosenRoot, attachSource).catch((error) => {
+      // 挂载失败：回落到“根未知”，恢复最小命令并重新等下一次会话事件。
+      rootInfo.root = null;
+      rootInfo.source = 'none';
+      rootInfo.inferredFromCwd = null;
+      attaching = false;
+      diag(`persistence: runtime attach failed root=${chosenRoot}: ${String(error?.message ?? error)}`, 'warn');
+      if (stopped) return;
+      registerMinimal();
+      watch();
+    });
+  };
+  // 身份不可用 = fail-closed：不写盘、不猜路径、根保持未知（status 明示 persistence-identity-unavailable）。
+  if (identity.ok) watch();
+  else diag('persistence: first inference disabled (persistence identity unavailable)', 'warn');
   if (typeof ctx.effect === 'function') {
     ctx.effect(() => async () => {
-      commandRef.current.dispose?.();
-      earlyWiring?.stop();
-      guard?.stop();
-      await store.close();
-    }, 'context-governance cleanup');
-  } else {
-    // cordis 没有 `dispose` 事件（app.asar 全量扫描 0 命中），旧兜底是死代码。
-    // 没有 effect 意味着宿主不支持按插件生命周期清理：明说，锁随进程退出释放。
-    ctx.logger?.warn?.(
-      '[context-governance] ctx.effect is unavailable; writer lock and subscriptions will only be released when the process exits',
-    );
+      stopped = true;
+      try { watcherDispose?.(); } catch { /* ignore */ }
+      try { commandRef.current?.dispose?.(); } catch { /* ignore */ }
+    }, 'context-governance deferred cleanup');
   }
 }
-
 export {
   DEFAULT_MEMORY_DIR,
   MEM_QUERY_NAME,

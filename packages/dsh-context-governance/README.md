@@ -146,6 +146,17 @@ config:
 
 配置非法 → 插件不加载（DSH 继续默认行为）。`compression.enabled=false` 时只注册记忆工具，不订阅压缩事件。
 
+### 1.0 单根模型：根来源与持久化（2a）
+
+- 项目根只有一个，来源优先级：**显式配置 `projectRoot` > 持久化状态 > 首次推断**。
+- 未配置时：在**首个带 cwd 的会话事件**上按 `session.header.cwd` 上溯最近含 `.git` 的祖先；结果 realpath + 盘符归一，且不得落在 DSH home 内 → 原子落盘（tmp + link 独占），重启沿用、不重新推断；推断不出 = `no-project-root`，不换根、等下个会话再试。
+- 状态文件：`<pc.home>/context-governance/root-state-<profile>.json`（拿不到绝对 home 则 `<pc.dir>/context-governance/root-state.json`）；身份来自宿主 `profileContext`，**不读 env**；字段 `{version, root, source:'inferred', inferredAt, inferredFromCwd, instance:{profile}, configRoot?}`；不写进仓库/发布包。
+- 身份不可得 → fail-closed：不猜路径、不落盘、根保持 unknown。
+- 根未知时 `/cg status` 显示 `project-root: unknown (no-project-root)`；记忆工具/header/提前压全部不挂载，不写任何记忆。
+- 根变化可见：`/cg status` 的 `project-root:` 行带 `source=config|persisted|inferred`、`inferred-fresh` / `changed-from=`；审计写 `persistence-identity` / `inferred-fresh`（含 `inferredFromCwd`）/ `project-root-changed(from/to/source)`。
+- 配置覆盖持久化根时**不改写**持久化 `root`，只写 `configRoot` 镜像；移除配置后回落持久化根，并写 `project-root-changed(source=persisted)`（防“删配置后突然变根”）。
+- 状态文件损坏/版本不符按未持久化处理（重推 + `inferred-fresh`），旧记忆不迁移、不删除。
+
 ## 存储布局
 
 ```

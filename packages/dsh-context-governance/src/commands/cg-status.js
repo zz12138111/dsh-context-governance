@@ -6,6 +6,7 @@
  */
 
 import { resolveBackendFields } from '../compress/adapters.js';
+import { identityDiagnostic } from '../root-state.js';
 import {
   CONFIG_ONLY_KEYS,
   PROFILE_NAMES,
@@ -80,11 +81,24 @@ function formatEarlyStatus(earlyStatus) {
   return `last-early: ${event}${reason}${effective}${at}`;
 }
 
-function statusText({ store, guard, audit, now, policy = null, earlyStatus = null, sessionId = null }) {
+function statusText({ store, guard, audit, now, policy = null, earlyStatus = null, sessionId = null, rootInfo = null, identity = null }) {
   const lines = [];
   const status = guard?.status ?? null;
   lines.push('context-governance status');
   lines.push(`time: ${now().toISOString()}`);
+  // 2a 单根模型：根来源与持久化身份必须可见（未知根时明示 no-project-root）。
+  if (rootInfo !== null) {
+    if (rootInfo.root === null) {
+      // §11.1-10：根未知必须明示 no-project-root（不是空值或猜一个根）。
+      lines.push('project-root: unknown (no-project-root)');
+    } else {
+      const fresh = rootInfo.source === 'inferred' ? ', inferred-fresh' : '';
+      const persistFailed = rootInfo.source === 'inferred' && rootInfo.statePersisted === false ? ', state-write-failed' : '';
+      const changed = rootInfo.changedFrom ? `, changed-from=${rootInfo.changedFrom}` : '';
+      lines.push(`project-root: ${rootInfo.root} (source=${rootInfo.source}${fresh}${persistFailed}${changed})`);
+    }
+  }
+  if (identity !== null) lines.push(identityDiagnostic(identity));
   // 策略链与观察器无关：观察器没挂时也要能看到生效阈值与被拒的层。
   let resolvedPolicy = null;
   if (policy !== null && typeof policy.resolve === 'function') {
@@ -234,7 +248,7 @@ function statusText({ store, guard, audit, now, policy = null, earlyStatus = nul
  *
  * @param {{store?:object|null, guard?:object|null, getGuard?:() => object|null, audit?:object|null, now?:() => Date}} options
  */
-export function createStatusCommand({ store = null, guard = null, getGuard = null, audit = null, policy = null, now = () => new Date(), logger = null, getEarlyStatus = null, sessionIdOf = defaultSessionIdOf } = {}) {
+export function createStatusCommand({ store = null, guard = null, getGuard = null, audit = null, policy = null, now = () => new Date(), logger = null, getEarlyStatus = null, sessionIdOf = defaultSessionIdOf, getRootInfo = null, getPersistenceIdentity = null } = {}) {
   const currentGuard = () => (typeof getGuard === 'function' ? getGuard() : guard);
 
   const parseBoolean = (text) => {
@@ -403,6 +417,8 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
       const raw = String(invocation.rawInput ?? '').trim();
       const resolvedSessionId = typeof sessionIdOf === 'function' ? sessionIdOf(invocation) : null;
       const sessionId = typeof resolvedSessionId === 'string' && resolvedSessionId !== '' ? resolvedSessionId : null;
+      const rootInfo = typeof getRootInfo === 'function' ? getRootInfo() : null;
+      const identity = typeof getPersistenceIdentity === 'function' ? getPersistenceIdentity() : null;
       // 1b：profile 按会话（入口为本命令；不持久化，重启回配置/默认）。
       if (raw === 'profile' || raw.startsWith('profile ')) {
         if (policy === null || typeof policy.resolve !== 'function' || typeof policy.profileInfo !== 'function') {
@@ -571,6 +587,8 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
             policy,
             earlyStatus: typeof getEarlyStatus === 'function' ? getEarlyStatus() : null,
             sessionId,
+            rootInfo,
+            identity,
           }),
         };
       } catch (error) {
