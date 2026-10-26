@@ -89,6 +89,8 @@ test('P2 pool 只读：第二 store writer-lock → readOnly；mem_write 拒绝�
     const handle = await pool.get(entryFor(root, 'd'.repeat(16), 'p'));
     assert.match(handle.store.status.readOnlyReason ?? '', /^writer-lock:/);
     assert.ok(audit.entries.some((item) => item.event === 'memory-store-readonly'));
+    const perRootAudit = await fs.promises.readFile(path.join(memoryDir, 'audit.jsonl'), 'utf8').catch(() => '');
+    assert.equal(perRootAudit.includes('memory-store-readonly'), false, 'readonly 审计只进 root audit，不进 per-root sink');
     const tools = createMemoryTools(handle.store);
     await assert.rejects(
       tools[MEM_WRITE_NAME].definition.execute({ op: 'create', type: 'fact', title: 'x', writer: 'rule' }),
