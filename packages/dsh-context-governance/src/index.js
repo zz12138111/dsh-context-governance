@@ -878,6 +878,8 @@ export async function apply(ctx, rawConfig = {}) {
         diagnosticsLogFile: config.diagnostics.logFile,
         store: resources.store,
         audit: resources.audit,
+        rootAudit,
+        rootId: entry.rootId,
         auditMaxBytes: config.audit.maxBytes,
         auditBase: resources.store.rootDir,
         projectRoot: entry.root,

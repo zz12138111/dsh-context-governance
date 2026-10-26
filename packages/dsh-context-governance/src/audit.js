@@ -145,6 +145,7 @@ export const AUDIT_EVENTS = Object.freeze([
   'protection-materialized',
   'protection-materialize-failed',
   'protection-materialize-skipped',
+  'b1-host-native-unprotected',
   'protection-skip',
   'reinjection',
   'reinjection-skipped',

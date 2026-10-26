@@ -197,6 +197,12 @@ function statusText({ store, guard, audit, rootAudit = null, rootsView = null, r
         `checkpoint=${last.checkpointSeq ?? '-'} failures=${last.failures?.map((failure) => failure.name).join(',') || 'none'}`,
       );
       const reinjection = last.reinjection;
+      if (last.protection === 'unavailable') {
+        lines.push(
+          `b1-host-native-unprotected: true compaction=${last.compaction ?? 'unknown'} ` +
+          `reason=${last.protectionReason ?? 'read-only-root'}`,
+        );
+      }
       if (reinjection === undefined) lines.push('last-reinjection: not-recorded');
       else {
         lines.push(

@@ -1,0 +1,3 @@
+context-governance status
+last-compaction: id=cmp-1 manual=false compaction=committed protection=unavailable shadowed=10 checkpoint=102 failures=none
+b1-host-native-unprotected: true compaction=committed reason=root-not-writable:ENOTDIR

@@ -103,6 +103,8 @@ function coveredBySummary(meta, summaryText) {
  * @property {boolean} [enabled]
  * @property {object} [store] MemoryStore；缺省时只做 T3 观测，不做固化/回注。
  * @property {object} [audit] AuditLog；缺省时按 store.rootDir 创建。
+ * @property {object} [rootAudit] 用户级 root audit；只读根不可写 per-root audit 时的披露落点。
+ * @property {string} [rootId] 根标识（root audit 归因）。
  * @property {{enabled?:boolean,maxLines?:number,maxChars?:number}} [reinjection]
  */
 export class CompressionGuard {
@@ -121,6 +123,7 @@ export class CompressionGuard {
   #selection;
   #store;
   #audit;
+  #rootAudit;
   #reinjection;
   #pending = new Map();
   /** P3：early 预写 journal（按 session），start 到达前不删；超时只标 unknown。 */
@@ -169,6 +172,7 @@ export class CompressionGuard {
   #readOnlyReason = null;
   #readOnlyWarnedFor = new Set();
   #projectRoot = '';
+  #rootId = '';
   #onlyProject = false;
   /** 1.0 #1：会话归域判定（由 index 注入 resolveScope；缺省用根边界兜底）。 */
   #scopeResolver = null;
@@ -222,6 +226,7 @@ export class CompressionGuard {
     this.#projectName = typeof options.project === 'string' ? options.project.trim() : '';
     // P2-1：只处理本项目会话。projectRoot 为空时无法判定，保持旧行为（不过滤）。
     this.#projectRoot = typeof options.projectRoot === 'string' ? options.projectRoot.trim() : '';
+    this.#rootId = typeof options.rootId === 'string' ? options.rootId : '';
     this.#onlyProject = options.onlyProject !== false && this.#projectRoot !== '';
     this.#scopeResolver = typeof options.resolveScope === 'function' ? options.resolveScope : null;
     this.#captureTitle = options.captureTitle !== false;
@@ -249,6 +254,7 @@ export class CompressionGuard {
         maxBytes: options.auditMaxBytes,
         allowedBase: options.auditBase ?? this.#store.rootDir,
       }));
+    this.#rootAudit = options.rootAudit ?? null;
     this.#adapter = options.adapter ?? this.#detect();
     const eventApi = typeof this.#ctx?.on === 'function';
     this.#eventApi = eventApi;
@@ -746,6 +752,19 @@ export class CompressionGuard {
       this.#logger?.warn?.(`[context-governance] audit write failed for ${event}${suffix}`);
     }
     return ok;
+  }
+
+  /** P3：根不可写时 per-root audit 也写不进去；B-1 披露走用户级 root audit。 */
+  #auditRoot(event, details) {
+    try {
+      return this.#rootAudit?.append(event, {
+        root: this.#projectRoot === '' ? null : this.#projectRoot,
+        ...(this.#rootId === '' ? {} : { rootId: this.#rootId }),
+        ...details,
+      }) ?? false;
+    } catch {
+      return false;
+    }
   }
 
   #degradeProtection(reason) {
@@ -1301,6 +1320,7 @@ export class CompressionGuard {
     this.#auditEvent('compaction-cost', {
       sessionId: state.sessionId,
       compactionId: state.compactionId,
+      ...(state.protectionUnavailable === true ? { protection: 'unavailable' } : {}),
       project: this.#projectName,
       ...backendFields,
       model: cost.model,
@@ -1391,7 +1411,10 @@ export class CompressionGuard {
       // 0.2.2（DEC-20261025-86）：ok 三处混用拆分——compaction 与 protection 两个正交字段。
       // compactNow/事务到达 end 才 record：有 start 就是 committed；start 未观测（插件中途挂载）为 skipped。
       compaction: state === null ? 'skipped' : 'committed',
-      protection: report.ok === false ? 'failed' : 'ok',
+      protection: state?.protectionUnavailable === true
+        ? 'unavailable'
+        : (report.ok === false ? 'failed' : 'ok'),
+      protectionReason: state?.protectionUnavailableReason ?? null,
       reinjected: null,
       startedAt: state?.snapshot?.capturedAt ?? null,
       lateSnapshot: state?.lateSnapshot === true,
@@ -1419,6 +1442,25 @@ export class CompressionGuard {
     return enriched;
   }
 
+  #markHostNativeUnprotected(state, id) {
+    const reason = state.protectionUnavailableReason ?? this.#readOnlyReason ?? 'read-only';
+    const details = {
+      sessionId: state.sessionId ?? null,
+      compactionId: id,
+      compaction: 'unknown',
+      reason: `read-only-root:${reason}`,
+      protection: 'unavailable',
+      count: 0,
+    };
+    // per-root audit 此时也不可写；用户级 root audit 是唯一可留的持久证据。
+    this.#auditRoot('b1-host-native-unprotected', details);
+    this.#auditEvent('protection-skip', details);
+    this.#logger?.warn?.(
+      `[context-governance] b1-host-native-unprotected protection=unavailable ` +
+      `session=${state.sessionId ?? 'unknown'} compactionId=${id} reason=${reason}`,
+    );
+  }
+
   #protectBeforeSummary(session, state, id) {
     if (this.#store === null || !this.#reinjection.enabled) {
       state.protectionWrite = 'disabled';
@@ -1438,10 +1480,13 @@ export class CompressionGuard {
       return;
     }
     if (this.#readOnly) {
-      // T6 只读降级：不写记忆、不写审计；压缩照常走完，回注走内存可读条目。
+      // T6 只读降级：不写记忆、不写 per-root 审计；压缩照常走完，回注走内存可读条目。
       state.protectionWrite = 'read-only';
       state.entries = [];
+      state.protectionUnavailable = true;
+      state.protectionUnavailableReason = this.#readOnlyReason ?? 'read-only';
       this.#setReadOnly(this.#readOnlyReason ?? 'unknown');
+      this.#markHostNativeUnprotected(state, id);
       return;
     }
     try {
@@ -1499,9 +1544,15 @@ export class CompressionGuard {
       this.#logger?.warn?.(`[context-governance] protection write failed: ${String(error?.message ?? error)}`);
       if (['EACCES', 'EPERM', 'EROFS', 'ENOSPC', 'EBUSY'].includes(code) || error?.name === 'MemoryReadOnlyError') {
         // 写不进去 ≠ 压缩失败：转只读，本周期继续，下周期不再尝试写。
+        state.protectionUnavailable = true;
+        state.protectionUnavailableReason = `write-failed:${code}`;
         this.#setReadOnly(`write-failed:${code}`, String(error?.message ?? error));
+        this.#markHostNativeUnprotected(state, id);
       } else if (error?.name === 'ExternalModificationError' || error?.code === 'EXTERNAL_MODIFICATION') {
+        state.protectionUnavailable = true;
+        state.protectionUnavailableReason = 'external-change';
         this.#setReadOnly('external-change', String(error?.message ?? error));
+        this.#markHostNativeUnprotected(state, id);
       } else {
         this.#degradeProtection('protection-write-failed');
       }
@@ -2114,6 +2165,7 @@ export class CompressionGuard {
             this.#auditEvent('compaction-loss', {
               sessionId: state.sessionId,
               compactionId: id,
+              ...(state.protectionUnavailable === true ? { protection: 'unavailable' } : {}),
               manual,
               trigger: manual ? 'manual' : 'auto',
               ...(state.manual === null ? { reason: 'late-mount' } : {}),
