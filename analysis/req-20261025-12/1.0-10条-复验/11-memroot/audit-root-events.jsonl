@@ -1,0 +1,2 @@
+{"ts":"2026-10-26T03:37:54.938Z","event":"persistence-identity","source":"profileContext","name":"desktop","dir":"C:\\Users\\19091\\.dsh\\profiles\\desktop","home":"present","anchor":"home","path":"C:\\Users\\19091\\.dsh\\context-governance\\root-state-desktop.json"}
+{"ts":"2026-10-26T03:37:54.938Z","event":"inferred-fresh","root":"D:\\DS-PROJECT\\DSH插件开发","path":"C:\\Users\\19091\\.dsh\\context-governance\\root-state-desktop.json","inferredFromCwd":"D:\\DS-PROJECT\\DSH插件开发"}
