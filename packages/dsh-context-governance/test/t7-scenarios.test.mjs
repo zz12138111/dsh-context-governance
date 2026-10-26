@@ -281,7 +281,7 @@ test('S4-A 自动压缩 5 类零丢失（可恢复、回注全 ID）', async () 
   });
 });
 
-test('S4-M 手动压缩（真实样本）：允许丢原文，但必须 audit 告警 + 指针可回 + 能看出最后一句', async () => {
+test('S4-M 手动压缩（真实样本）：latest/rule 重建后不再写 loss，指针可回', async () => {
   const fixture = JSON.parse(await fs.readFile(path.join(FIXTURES, 'replay-compaction-manual.json'), 'utf8'));
   assert.equal(fixture.meta.manual, true);
   assert.equal(fixture.meta.synthetic, false);
@@ -303,11 +303,7 @@ test('S4-M 手动压缩（真实样本）：允许丢原文，但必须 audit �
 
     const audit = await readAudit(store);
     assert.ok(guard.status.lastReport !== null, 'S4-M 失败：报告缺失');
-    const loss = audit.find((entry) => entry.event === 'compaction-loss');
-    assert.ok(loss, 'S4-M 失败：缺 compaction-loss 告警');
-    assert.equal(loss.manual, true);
-    assert.equal(loss.trigger, 'manual');
-    assert.equal(loss.auditVersion, 'loss-v1.0');
+    assert.equal(audit.some((entry) => entry.event === 'compaction-loss'), false, 'latest/rule 重建后不得再写 loss');
     assert.equal(audit.some((entry) => entry.event === 'manual-compaction-loss'), false, '旧事件名不得新写');
     const [injected] = injectedOf(session);
     assert.ok(injected, 'S4-M 失败：没有回注');

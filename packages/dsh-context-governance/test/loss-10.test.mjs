@@ -31,7 +31,7 @@ function scopeResolver() {
   return { mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false };
 }
 
-function liveSession(built) {
+function liveSession(built, { appendFails = false } = {}) {
   const bySeq = new Map(built.events.map((event) => [event.seq, event]));
   let nextSeq = 1000;
   return {
@@ -39,6 +39,7 @@ function liveSession(built) {
     surface: { nodes: [...built.session.surface.nodes] },
     eventAt(seq) { return bySeq.get(seq); },
     append(type, data, opts) {
+      if (appendFails) throw new Error('append rejected by host');
       const event = { seq: nextSeq++, type, data, time: Date.now(), ...opts };
       bySeq.set(event.seq, event);
       if (type === 'user/message' && opts?.surfaceOp === 'append') this.surface.nodes.push(event.seq);
@@ -115,7 +116,7 @@ function lossBuilt(compactionId, { manual = false, startSeq = 100 } = {}) {
 test('#10 auto（manual:false）保护失败 → compaction-loss(auto) 恰 1 条', async () => {
   await withStore(async (store) => {
     const built = lossBuilt('loss-auto-1');
-    const session = liveSession(built);
+    const session = liveSession(built, { appendFails: true });
     const ctx = makeCtx();
     const guard = new CompressionGuard({ resolveScope: scopeResolver, ctx, store, hostVersion: '0.2.1-rc.2' });
     guard.start();
@@ -153,7 +154,7 @@ test('#10 auto（manual:false）保护失败 → compaction-loss(auto) 恰 1 条
 test('#10 manual 保护失败 → compaction-loss(manual)，不写旧名', async () => {
   await withStore(async (store) => {
     const built = lossBuilt('loss-manual-1', { manual: true, startSeq: 200 });
-    const session = liveSession(built);
+    const session = liveSession(built, { appendFails: true });
     const ctx = makeCtx();
     const guard = new CompressionGuard({ resolveScope: scopeResolver, ctx, store, hostVersion: '0.2.1-rc.2' });
     guard.start();
@@ -181,11 +182,11 @@ test('#10 两个周期（auto+manual）各一条 loss，不串', async () => {
     guard.start();
     try {
       const auto = lossBuilt('loss-pair-auto', { startSeq: 300 });
-      const session = liveSession(auto);
+      const session = liveSession(auto, { appendFails: true });
       emitThroughEnd(ctx, session, auto);
       await flush();
       const manual = lossBuilt('loss-pair-manual', { manual: true, startSeq: 500 });
-      const manualSession = liveSession(manual);
+      const manualSession = liveSession(manual, { appendFails: true });
       emitThroughEnd(ctx, manualSession, manual);
       await flush();
       await guard.flush();
@@ -228,7 +229,7 @@ test('#10 保护通过（无 failures）→ 不写 loss', async () => {
 test('#10 晚挂载（未观测 start）→ manual:false/trigger:auto', async () => {
   await withStore(async (store) => {
     const built = lossBuilt('loss-late-1', { startSeq: 600 });
-    const session = liveSession(built);
+    const session = liveSession(built, { appendFails: true });
     const ctx = makeCtx();
     const guard = new CompressionGuard({ resolveScope: scopeResolver, ctx, store, hostVersion: '0.2.1-rc.2' });
     guard.start();

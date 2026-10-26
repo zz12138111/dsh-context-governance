@@ -161,7 +161,7 @@ test('T4-2：自动压缩完整周期只回注一次；ID+状态+标题，不含
   });
 });
 
-test('T4-3：手动压缩允许丢原文，但 audit 告警 + 回注最后用户消息标题', async () => {
+test('T4-3：手动压缩 latest-user 被 shadow → 内容副本重建，不再写 loss', async () => {
   await withStore(async (store) => {
     const built = buildCompaction({ before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 13, end: 13 });
     eventOf(built, 'compaction/start').data.sourceCommandId = 'cmd-manual';
@@ -174,16 +174,19 @@ test('T4-3：手动压缩允许丢原文，但 audit 告警 + 回注最后用户
       await flush();
       await guard.flush();
       const audit = await readAudit(store);
-      const loss = audit.find((entry) => entry.event === 'compaction-loss');
-      assert.ok(loss);
-      assert.equal(loss.manual, true);
-      assert.equal(loss.trigger, 'manual');
-      assert.equal(loss.auditVersion, 'loss-v1.0');
-      assert.ok(loss.failures.includes('latest-user-message'));
+      assert.equal(audit.some((entry) => entry.event === 'compaction-loss'), false);
       assert.equal(audit.some((entry) => entry.event === 'manual-compaction-loss'), false, '旧事件名不得新写');
-      const text = session.appended[0].data.content.map((block) => block.text).join('\n');
-      assert.match(text, /最新一条用户消息/);
+      const rebuilt = session.appended.find((message) => message.data?.content?.some(
+        (block) => block.type === 'text' && block.text === '最新一条用户消息：继续。',
+      ));
+      assert.ok(rebuilt, '必须重建 latest user 内容');
+      const pointer = session.appended.find((message) => message.data?.content?.some(
+        (block) => block.type === 'text' && block.text.includes('压缩后受保护指针'),
+      ));
+      assert.ok(pointer, '必须仍回注保护指针');
+      assert.match(pointer.data.content.map((block) => block.text).join('\n'), /最新用户消息|最后用户消息/);
       assert.equal(guard.status.lastReport.manual, true);
+      assert.equal(guard.status.lastReport.checks.find((check) => check.name === 'latest-user-message').status, 'pass');
     } finally {
       guard.stop();
     }
@@ -348,7 +351,11 @@ test('T4-7：自动压缩受保护内容“可恢复”口径（5 类都有指�
         assert.notEqual(entry, null);
         assert.match(entry.source, /^session:session-t4#\d+$/);
       }
-      const text = session.appended[0].data.content.map((block) => block.text).join('\n');
+      const pointer = session.appended.find((message) => message.data?.content?.some(
+        (block) => block.type === 'text' && block.text.includes('压缩后受保护指针'),
+      ));
+      assert.ok(pointer, '必须回注保护指针');
+      const text = pointer.data.content.map((block) => block.text).join('\n');
       for (const id of write.ids) assert.ok(text.includes(id), `missing ${id} in reinjection`);
     } finally {
       guard.stop();

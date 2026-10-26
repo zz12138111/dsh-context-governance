@@ -55,7 +55,9 @@ function emitAll(ctx, { session, events, postSurface }) {
   }
 }
 
-test('宿主默认：完整压缩事务产生 full 模式与通过报告', () => {
+const flushEnd = () => new Promise((resolve) => setImmediate(resolve));
+
+test('宿主默认：完整压缩事务产生 full 模式与通过报告', async () => {
   const ctx = makeCtx(new BasicCompactionEngine());
   const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.2' });
   guard.start();
@@ -65,6 +67,7 @@ test('宿主默认：完整压缩事务产生 full 模式与通过报告', () =>
 
   const built = buildCompaction({ before: healthyMessages(), summary: FREE_FORM_SUMMARY, start: 2, end: 11 });
   emitAll(ctx, built);
+  await flushEnd();
   const status = guard.status;
   assert.equal(status.stats.starts, 1);
   assert.equal(status.stats.summaries, 1);
@@ -77,24 +80,26 @@ test('宿主默认：完整压缩事务产生 full 模式与通过报告', () =>
   guard.stop();
 });
 
-test('context-zip：识别五段摘要并保持 full', () => {
+test('context-zip：识别五段摘要并保持 full', async () => {
   const ctx = makeCtx(new ContextZipEngine());
   const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.2', backendVersion: '0.1.10' });
   guard.start();
   assert.equal(guard.adapter.kind, 'context-zip');
   const built = buildCompaction({ before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 11 });
   emitAll(ctx, built);
+  await flushEnd();
   assert.equal(guard.adapter.summary.style, 'five-section');
   assert.equal(guard.status.lastReport.protection, 'ok');
   assert.equal(guard.status.adapter.selfCheck.state, 'pass');
 });
 
-test('保护失败：报告 fail、写 warn，但不向宿主抛错', () => {
+test('保护失败：报告 fail、写 warn，但不向宿主抛错', async () => {
   const ctx = makeCtx(new BasicCompactionEngine());
   const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.2' });
   guard.start();
   const built = buildCompaction({ before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 13 });
   assert.doesNotThrow(() => emitAll(ctx, built));
+  await flushEnd();
   const report = guard.status.lastReport;
   assert.equal(report.protection, 'failed');
   assert.equal(report.compaction, 'committed');
@@ -112,6 +117,7 @@ test('0.2.2 保护失败：diagnostics 文件留一行（宿主 logger 之外的
   guard.start();
   const built = buildCompaction({ before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 13 });
   emitAll(ctx, built);
+  await flushEnd();
   const text = await fs.readFile(file, 'utf8');
   const line = text.split('\n').find((item) => item.includes('compaction protection failed'));
   assert.ok(line, 'diagnostics 文件必须有保护失败行');
@@ -121,7 +127,7 @@ test('0.2.2 保护失败：diagnostics 文件留一行（宿主 logger 之外的
   await fs.rm(dir, { recursive: true, force: true });
 });
 
-test('插件在压缩事务中途挂上：用 summary 时补快照并标 lateSnapshot', () => {
+test('插件在压缩事务中途挂上：用 summary 时补快照并标 lateSnapshot', async () => {
   const ctx = makeCtx(new BasicCompactionEngine());
   const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.2' });
   guard.start();
@@ -134,6 +140,7 @@ test('插件在压缩事务中途挂上：用 summary 时补快照并标 lateSna
   handler(built.session, checkpointEvent);
   built.session.surface.nodes = built.postSurface;
   handler(built.session, endEvent);
+  await flushEnd();
   const report = guard.status.lastReport;
   assert.equal(report.lateSnapshot, true);
   assert.equal(report.protection, 'ok', JSON.stringify(report.failures));
@@ -161,7 +168,7 @@ test('畸形事件被忽略而不是抛错', () => {
   assert.equal(guard.status.stats.compactionFailures, 0);
 });
 
-test('两个会话的压缩事务互不串报告', () => {
+test('两个会话的压缩事务互不串报告', async () => {
   const ctx = makeCtx(new BasicCompactionEngine());
   const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.2' });
   guard.start();
@@ -186,6 +193,7 @@ test('两个会话的压缩事务互不串报告', () => {
   b.session.surface.nodes = b.postSurface;
   handler(a.session, endA);
   handler(b.session, endB);
+  await flushEnd();
   assert.equal(guard.reports().length, 2);
   assert.equal(guard.status.stats.pending, 0);
   assert.ok(guard.reports().every((report) => report.protection === 'ok'));
@@ -215,7 +223,7 @@ test('不替换 provider：引擎实例与自有配置保持原样', () => {
   assert.deepEqual(engine.config, { thresholdRatio: 0.65 });
 });
 
-test('报告区分手动压缩与自动压缩', () => {
+test('报告区分手动压缩与自动压缩', async () => {
   const ctx = makeCtx(new BasicCompactionEngine());
   const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.2' });
   guard.start();
@@ -224,5 +232,6 @@ test('报告区分手动压缩与自动压缩', () => {
   const start = built.events.find((item) => item.type === 'compaction/start');
   start.data.sourceCommandId = 'cmd-test';
   emitAll(ctx, built);
+  await flushEnd();
   assert.equal(guard.status.lastReport.manual, true);
 });

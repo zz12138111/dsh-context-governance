@@ -34,7 +34,7 @@ import {
 } from './adapters.js';
 import { buildProtectionItems } from './protection-memory.js';
 import { formatPointer } from '../memory/contract.js';
-import { snapshotProtection, sourceKindOf, summaryTextOf, verifyProtection } from './protection.js';
+import { snapshotProtection, sourceKindOf, summaryTextOf, verifyProtection, shadowedSeqsOf, rebuildProtectionSurface } from './protection.js';
 import { selectMode } from './selection.js';
 
 const MAX_REPORTS = 20;
@@ -2133,11 +2133,29 @@ export class CompressionGuard {
             }, null);
             return;
           }
+          if (state.finalized === true) return;
+          state.finalized = true;
+          this.#pending.delete(id);
+          // 宿主在 compaction/end 发布期仍会拒绝同步 session.append（与回注同因）。
+          // 因此把 surface 重建 + 校验整体推迟到 end 发布后的首个 microtask；
+          // 这样 rebuild 的 append 与既有回注 append 走同一安全窗口。
+          queueMicrotask(() => {
+            try {
+          const postSurfaceBeforeRebuild = Array.isArray(session?.surface?.nodes) ? [...session.surface.nodes] : null;
+          const rebuilt = rebuildProtectionSurface(session, state.snapshot, {
+            shadowedSeqs: shadowedSeqsOf(state.summaryEvent, state.snapshot),
+            postSurfaceNodes: postSurfaceBeforeRebuild,
+            compactionId: id,
+          });
+          if (rebuilt.failures.length > 0) {
+            this.#logger?.warn?.(`[context-governance] surface rebuild incomplete: ${rebuilt.failures.join('; ')}`);
+          }
+          const postSurfaceNodes = Array.isArray(session?.surface?.nodes) ? [...session.surface.nodes] : null;
           const report = verifyProtection({
             snapshot: state.snapshot,
             summaryEvent: state.summaryEvent,
             checkpointSeq: state.checkpointSeq,
-            postSurfaceNodes: Array.isArray(session?.surface?.nodes) ? [...session.surface.nodes] : null,
+            postSurfaceNodes,
             adapterKind: this.#adapter.kind,
             manual: state.manual ?? null,
           });
@@ -2174,7 +2192,6 @@ export class CompressionGuard {
               auditVersion: 'loss-v1.0',
             });
           }
-          this.#pending.delete(id);
           this.#completedCycles.add(id);
           this.#completedOrder.push(id);
           while (this.#completedOrder.length > 200) {
@@ -2225,6 +2242,11 @@ export class CompressionGuard {
               }
             } catch (error) {
               this.#logger?.warn?.(`[context-governance] cost audit failed: ${String(error?.message ?? error)}`);
+            }
+          });
+            } catch (error) {
+              this.#stats.observerErrors += 1;
+              this.#logger?.warn?.(`[context-governance] compaction finalize error: ${String(error?.message ?? error)}`);
             }
           });
           return;

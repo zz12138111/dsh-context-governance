@@ -77,7 +77,8 @@ export function buildProtectionItems(snapshot, {
   // ② 本回合规则注入：每种注入取最新一条，列出在册路径。
   const latestRules = new Map();
   for (const rule of snapshot.rules ?? []) {
-    if (!latestRules.has(rule.source) || latestRules.get(rule.source).seq < rule.seq) latestRules.set(rule.source, rule);
+    const key = rule.kind ?? rule.source?.kind ?? 'unknown';
+    if (!latestRules.has(key) || latestRules.get(key).seq < rule.seq) latestRules.set(key, rule);
   }
   if (latestRules.size > 0) {
     const rules = [...latestRules.values()];

@@ -14,8 +14,11 @@
  *   - rollback-point       含回滚/备份/还原点的消息
  *   - artifact             摘要 + checkpoint 产物存在
  *
- * 快照只保留 seq/类型/标记数字与路径，不保存消息正文。
+ * 快照保留 seq/类型/标记数字与路径；P3 修复另在内存中保留 latest-user/rule 的**重建载荷**
+ * （text/source），仅用于压缩后 surface 重建，不写记忆、不写审计、不落盘。
  */
+
+import { randomUUID } from 'node:crypto';
 
 export const PROTECTION_CHECKS = Object.freeze([
   'artifact',
@@ -267,10 +270,21 @@ export function snapshotProtection(session) {
     if (event === null) continue;
     const text = textOf(event);
     if (event.type === 'user/message' && sourceKindOf(event) === 'user') {
-      latestUser = { ...summarizeNode(event), title: titleOfText(text) };
+      latestUser = {
+        ...summarizeNode(event),
+        title: titleOfText(text),
+        text,
+        source: messageOf(event)?.source ?? null,
+      };
     }
     if (event.type === 'system/message' || (event.type === 'user/message' && RULE_SOURCE_KINDS.includes(sourceKindOf(event)))) {
-      rules.push({ ...summarizeNode(event), kind: sourceKindOf(event), paths: rulePathsOf(event) });
+      rules.push({
+        ...summarizeNode(event),
+        kind: sourceKindOf(event),
+        paths: rulePathsOf(event),
+        text,
+        source: messageOf(event)?.source ?? null,
+      });
     }
     const batchInfo = batchMarkers(event);
     if (batchInfo !== null) {
@@ -320,6 +334,100 @@ export function expectedSurface(snapshot, shadowedSeqs, checkpointSeq) {
     nodes.splice(position, 0, checkpointSeq);
   }
   return nodes;
+}
+
+/** 从 summary 事件求 shadowed seq；供 runtime 在校验前重建 surface 时复用。 */
+export function shadowedSeqsOf(summaryEvent, snapshot) {
+  return shadowedNodesFrom(summaryEvent?.data, snapshot);
+}
+
+function rebuildMessage(source, text, compactionId) {
+  const base = source !== null && typeof source === 'object' ? { ...source } : {};
+  return {
+    role: base.kind === 'system-prompt' ? 'system' : 'user',
+    id: randomUUID(),
+    content: [{ type: 'text', text }],
+    source: {
+      ...base,
+      plugin: 'context-governance',
+      form: 'surface-rebuild',
+      cycle: compactionId,
+    },
+  };
+}
+
+/**
+ * P3 修复：宿主压缩后 latest-user / rule-injection 被 shadow 时，用压缩前保留的
+ * 同源内容 append 一个新副本，再让 verifyProtection 按新 seq 核对。
+ *
+ * 只重建被 shadow 且没有更新副本的项；append 失败不抛，保留原 seq，由 loss 审计暴露。
+ * 返回实际 append 的 seq，供测试断言“内容级重建”，不是只看 memory 条数。
+ */
+export function rebuildProtectionSurface(session, snapshot, {
+  shadowedSeqs = [],
+  postSurfaceNodes = null,
+  compactionId = null,
+} = {}) {
+  const rebuilt = { latestUser: null, rules: [], failures: [] };
+  if (snapshot === null || typeof snapshot !== 'object') return rebuilt;
+  if (typeof session?.append !== 'function') {
+    rebuilt.failures.push('session-append-unavailable');
+    return rebuilt;
+  }
+  const shadowed = new Set(shadowedSeqs);
+  const after = new Set(Array.isArray(postSurfaceNodes) ? postSurfaceNodes : snapshot.nodes);
+  const append = (type, message) => {
+    try {
+      const appended = session.append(type, message, { surfaceOp: 'append' });
+      const seq = appended?.seq;
+      if (Number.isInteger(seq)) return seq;
+      rebuilt.failures.push('append-returned-no-seq');
+      return null;
+    } catch (error) {
+      rebuilt.failures.push(`append-threw:${String(error?.message ?? error).slice(0, 120)}`);
+      return null;
+    }
+  };
+
+  const latest = snapshot.latestUser;
+  if (latest !== null && latest !== undefined
+    && (shadowed.has(latest.seq) || !after.has(latest.seq))
+    && typeof latest.text === 'string' && latest.text !== '') {
+    const seq = append('user/message', rebuildMessage(latest.source, latest.text, compactionId));
+    if (seq !== null) {
+      const originalSeq = latest.seq;
+      snapshot.latestUser = { ...latest, originalSeq, seq, rebuilt: true };
+      rebuilt.latestUser = { seq, originalSeq, chars: latest.text.length };
+    }
+  } else if (latest !== null && latest !== undefined
+    && (shadowed.has(latest.seq) || !after.has(latest.seq))) {
+    rebuilt.failures.push('latest-user-payload-missing');
+  }
+
+  for (const rule of [...snapshot.rules]) {
+    const isShadowed = shadowed.has(rule.seq) || !after.has(rule.seq);
+    if (!isShadowed) continue;
+    const hasNewer = snapshot.rules.some((candidate) => candidate.seq > rule.seq
+      && (candidate.kind ?? candidate.source?.kind) === (rule.kind ?? rule.source?.kind)
+      && candidate.seq !== rule.seq
+      && !shadowed.has(candidate.seq)
+      && after.has(candidate.seq));
+    if (hasNewer) continue;
+    if (typeof rule.text !== 'string' || rule.text === '') {
+      rebuilt.failures.push('rule-payload-missing');
+      continue;
+    }
+    const type = rule.type === 'system/message' ? 'system/message' : 'user/message';
+    const message = rebuildMessage(rule.source, rule.text, compactionId);
+    const seq = type === 'system/message'
+      ? append(type, { message })
+      : append(type, message);
+    if (seq === null) continue;
+    const copy = { ...rule, originalSeq: rule.seq, seq, rebuilt: true };
+    snapshot.rules.push(copy);
+    rebuilt.rules.push({ seq, originalSeq: rule.seq, chars: rule.text.length, kind: rule.kind });
+  }
+  return rebuilt;
 }
 
 function shadowedNodesFrom(summaryData, snapshot) {
@@ -436,7 +544,7 @@ export function verifyProtection({
   const shadowedRules = snapshot.rules.filter((rule) => shadowedSet.has(rule.seq));
   const lostRules = shadowedRules.filter((rule) => {
     const hasNewer = snapshot.rules.some((candidate) => candidate.seq > rule.seq &&
-      candidate.source === rule.source &&
+      (candidate.kind ?? candidate.source?.kind) === (rule.kind ?? rule.source?.kind) &&
       !shadowedSet.has(candidate.seq) &&
       afterSet.has(candidate.seq));
     return !hasNewer;

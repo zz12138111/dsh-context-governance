@@ -3,11 +3,14 @@ import test from 'node:test';
 
 import {
   expectedSurface,
+  rebuildProtectionSurface,
+  shadowedSeqsOf,
   snapshotProtection,
   stripStructuredPayload,
   summaryTextOf,
   verifyProtection,
 } from '../src/compress/protection.js';
+import { buildProtectionItems } from '../src/compress/protection-memory.js';
 import {
   FIVE_SECTION_SUMMARY,
   FREE_FORM_SUMMARY,
@@ -64,16 +67,83 @@ test('健康压缩（宿主自由摘要）：五项保护全部通过', () => {
   assert.equal(built.postSurface.includes(built.checkpointSeq), true);
 });
 
-test('健康压缩（context-zip 五段摘要）：同样全部通过', () => {
-  const { report } = reportFor({
+test('P3 规则标题：source 为对象时按 kind 归并，标题精确为字符串而非 [object Object]', () => {
+  const built = buildCompaction({
     before: healthyMessages(),
-    summary: FIVE_SECTION_SUMMARY,
+    summary: FREE_FORM_SUMMARY,
     start: 2,
     end: 11,
   });
-  assert.equal(report.ok, true, JSON.stringify(report.failures));
-  assert.equal(report.summaryChars, FIVE_SECTION_SUMMARY.length);
+  const snapshot = snapshotProtection(built.session);
+  const { items } = buildProtectionItems(snapshot, {
+    sessionId: 'session-p3-title',
+    compactionId: built.compactionId,
+  });
+  const criterion = items.find((item) => item.type === 'criterion');
+  assert.ok(criterion);
+  assert.equal(criterion.title, '规则在场：system-prompt、agent-instructions');
+  assert.equal(criterion.title.includes('[object Object]'), false);
 });
+
+test('P3 surface 重建：latest-user/rule-injection 被 shadow 后 append 内容副本并通过校验', () => {
+  const built = buildCompaction({
+    before: healthyMessages(),
+    summary: FIVE_SECTION_SUMMARY,
+    start: 0,
+    end: 13,
+    manual: true,
+  });
+  const bySeq = new Map(built.events.map((item) => [item.seq, item]));
+  let next = 200;
+  const appended = [];
+  const live = {
+    id: 'session-surface-rebuild',
+    surface: { nodes: [...built.postSurface] },
+    eventAt(seq) { return bySeq.get(seq); },
+    append(type, data) {
+      const seq = next;
+      next += 1;
+      const item = event(seq, type, data);
+      bySeq.set(seq, item);
+      live.surface.nodes.push(seq);
+      appended.push(item);
+      return { seq };
+    },
+  };
+  const snapshot = snapshotProtection(built.session);
+  const shadowedSeqs = shadowedSeqsOf(built.summaryEvent, snapshot);
+  assert.ok(shadowedSeqs.includes(13), 'latest user 必须在 shadow 区间');
+  assert.ok(shadowedSeqs.includes(0) && shadowedSeqs.includes(1), 'rules 必须在 shadow 区间');
+
+  const rebuilt = rebuildProtectionSurface(live, snapshot, {
+    shadowedSeqs,
+    postSurfaceNodes: [...live.surface.nodes],
+    compactionId: built.compactionId,
+  });
+  assert.notEqual(rebuilt.latestUser, null);
+  assert.equal(rebuilt.rules.length, 2);
+
+  const report = verifyProtection({
+    snapshot,
+    summaryEvent: built.summaryEvent,
+    checkpointSeq: built.checkpointSeq,
+    postSurfaceNodes: [...live.surface.nodes],
+    adapterKind: built.source,
+    manual: true,
+  });
+  assert.equal(report.ok, true, JSON.stringify(report.failures));
+  assert.equal(report.checks.find((check) => check.name === 'latest-user-message').status, 'pass');
+  assert.equal(report.checks.find((check) => check.name === 'rule-injection').status, 'pass');
+
+  const latest = bySeq.get(rebuilt.latestUser.seq);
+  assert.equal(latest.data.content[0].text, '最新一条用户消息：继续。');
+  const ruleTexts = appended
+    .filter((item) => item.type === 'system/message')
+    .map((item) => item.data.message.content[0].text);
+  assert.deepEqual(ruleTexts, ['SYSTEM PROMPT']);
+  assert.equal(appended.some((item) => item.data?.content?.[0]?.text === 'AGENTS.md rules'), true);
+});
+
 
 test('最新用户消息被吞：fail，即使摘要写了它', () => {
   const { report } = reportFor({
