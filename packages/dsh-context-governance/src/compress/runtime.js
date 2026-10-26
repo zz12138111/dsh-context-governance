@@ -39,6 +39,16 @@ import { selectMode } from './selection.js';
 
 const MAX_REPORTS = 20;
 const REINJECTION_SOURCE_KIND = 'plugin:context-governance';
+/**
+ * S1.1：`waitForReport` / `early-forced` 等本 cycle 报告的上限（唯一数字定义点，
+ * `early-wiring.js` 从这里引用，两处不得再各自写字面量）。
+ *
+ * 依据：0.2.1-rc.3 桌面真机（pid 34728）一次真实触发中，`early-forced` 在 500ms 上限处
+ * 超时，仅比本 cycle 报告 ready 早约 16ms（16:44:06.533Z 超时 / .549Z 报告 ready），
+ * 属"差一点"而不是过滤不匹配；报告链实测约 520ms，故取 3000ms（约 6 倍余量）。
+ * 等待只发生在 turn/end 之后的异步 check 里，不阻塞对话、不占 turn。
+ */
+export const EARLY_REPORT_WAIT_MS = 3000;
 
 function cloneJson(value) {
   try {
@@ -744,46 +754,74 @@ export class CompressionGuard {
   }
 
   /**
-   * S1：等待本 cycle 的完整报告（保护校验 + 回注结果已写回），供 early 审计使用。
+   * S1/S1.1：等待本 cycle 的完整报告（保护校验 + 回注结果已写回），供 early 审计使用。
    *
-   * 只在 `compaction/end` 的收尾 microtask 完成后才 resolve；最多等 500ms。
-   * 超时/被其他会话抢先报告都返回 null，由调用方写 `unknown`；不抛错、不阻塞 turn。
+   * 只在 `compaction/end` 的收尾 microtask 完成后才 resolve；最多等 `EARLY_REPORT_WAIT_MS`。
+   * 返回 `{ ok, reason, report, waitedMs }`，`reason ∈ 'timeout' | 'mismatch' | 'none'`：
+   * - `none`：拿到本 cycle 的新报告（`ok=true`）；
+   * - `timeout`：等待窗口内没有出现任何新候选报告；
+   * - `mismatch`：出现过新候选报告，但会话/周期/ready 过滤不匹配（被别的会话抢先等）。
+   * 失败只返回 `ok=false`，不抛错、不阻塞 turn；由调用方写 `unknown` + 诊断审计。
    *
    * @param {{previousCompactionId?: string|null, sessionId?: string|null, cycleKey?: string|null, timeoutMs?: number}} [input]
-   * @returns {Promise<object|null>}
+   * @returns {Promise<{ok: boolean, reason: 'timeout'|'mismatch'|'none', report: object|null, waitedMs: number}>}
    */
-  waitForReport({ previousCompactionId = null, sessionId = null, cycleKey = null, timeoutMs = 500 } = {}) {
+  waitForReport({ previousCompactionId = null, sessionId = null, cycleKey = null, timeoutMs = EARLY_REPORT_WAIT_MS } = {}) {
     const rawTimeout = Number(timeoutMs);
-    const limit = Number.isFinite(rawTimeout) ? Math.min(500, Math.max(0, rawTimeout)) : 500;
-    const isFresh = (report) => {
-      if (report === null || typeof report !== 'object') return false;
+    const limit = Number.isFinite(rawTimeout)
+      ? Math.min(EARLY_REPORT_WAIT_MS, Math.max(0, rawTimeout))
+      : EARLY_REPORT_WAIT_MS;
+    const startedAt = Date.now();
+    const waited = () => Math.max(0, Math.round(Date.now() - startedAt));
+    const newId = (report) => {
+      if (report === null || typeof report !== 'object') return null;
       const id = report.compactionId;
-      if (id === null || id === undefined || String(id) === '') return false;
+      if (id === null || id === undefined || String(id) === '') return null;
       if (previousCompactionId !== null && previousCompactionId !== undefined
-        && String(id) === String(previousCompactionId)) return false;
+        && String(id) === String(previousCompactionId)) return null;
+      return String(id);
+    };
+    // 候选 = 本轮新 id；ready 之外的候选只用于区分 timeout / mismatch，不能替代本 cycle 报告。
+    const isCandidate = (report) => newId(report) !== null;
+    const isFresh = (report) => {
+      const id = newId(report);
+      if (id === null) return false;
       if (sessionId !== null && sessionId !== undefined && report.sessionId !== sessionId) return false;
       if (cycleKey !== null && cycleKey !== undefined && report.cycle !== cycleKey) return false;
       return this.#readyReports.has(id);
     };
+    let sawCandidate = false;
     for (let index = this.#reports.length - 1; index >= 0; index -= 1) {
       const report = this.#reports[index];
-      if (isFresh(report)) return Promise.resolve(cloneJson(report));
+      if (isFresh(report)) {
+        return Promise.resolve({ ok: true, reason: 'none', report: cloneJson(report), waitedMs: waited() });
+      }
+      if (isCandidate(report)) sawCandidate = true;
     }
     return new Promise((resolve) => {
       let timer = null;
       let settled = false;
-      const finish = (report) => {
+      const finish = (report, reason) => {
         if (settled) return;
         settled = true;
         if (timer !== null) clearTimeout(timer);
         this.#reportWaiters.delete(waiter);
-        resolve(report === null ? null : cloneJson(report));
+        resolve({
+          ok: report !== null && report !== undefined,
+          reason,
+          report: report === null || report === undefined ? null : cloneJson(report),
+          waitedMs: waited(),
+        });
       };
       const waiter = (report) => {
-        if (isFresh(report)) finish(report);
+        if (isFresh(report)) {
+          finish(report, 'none');
+          return;
+        }
+        if (isCandidate(report)) sawCandidate = true;
       };
       this.#reportWaiters.add(waiter);
-      timer = setTimeout(() => finish(null), limit);
+      timer = setTimeout(() => finish(null, sawCandidate ? 'mismatch' : 'timeout'), limit);
     });
   }
 

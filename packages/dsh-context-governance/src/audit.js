@@ -78,6 +78,8 @@ export const AUDIT_FIELD_WHITELIST = Object.freeze({
   reinjected: 'boolean',
   accepted: 'boolean',
   delayMs: 'number',
+  /** S1.1：early 等本 cycle 报告的实际耗时（毫秒整数，只作诊断）。 */
+  waitedMs: 'number',
   phase: 'text',
   materialized: 'boolean',
   late: 'boolean',
@@ -167,6 +169,8 @@ export const AUDIT_EVENTS = Object.freeze([
   'early-forced',
   'early-aborted',
   'early-failed',
+  // S1.1：early 等本 cycle 报告未命中时的诊断行（reason=timeout|mismatch|error）。
+  'early-report-wait',
   'early-start-timeout',
   'early-start-reused',
   'early-start-missing',

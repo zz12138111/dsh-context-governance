@@ -87,7 +87,11 @@ test('S1：waitForReport 在回注收尾后返回本 cycle 报告', async () => 
   const built = buildCompaction({ before: healthyMessages(), summary: FREE_FORM_SUMMARY, start: 2, end: 11 });
   const pending = guard.waitForReport({ previousCompactionId: 'old', sessionId: built.session.id, timeoutMs: 200 });
   emitAll(ctx, built);
-  const report = await pending;
+  const outcome = await pending;
+  assert.equal(outcome.ok, true);
+  assert.equal(outcome.reason, 'none');
+  assert.equal(Number.isInteger(outcome.waitedMs), true);
+  const report = outcome.report;
   assert.equal(report.compactionId, built.compactionId);
   assert.equal(report.sessionId, built.session.id);
   assert.equal(report.compaction, 'committed');
@@ -95,29 +99,66 @@ test('S1：waitForReport 在回注收尾后返回本 cycle 报告', async () => 
   guard.stop();
 });
 
-test('S1：waitForReport 的默认硬上限是 500ms', async (t) => {
+test('S1.1：waitForReport 的默认上限是 3000ms', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const ctx = makeCtx(new BasicCompactionEngine());
   const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.2' });
   let result = 'pending';
   const pending = guard.waitForReport().then((value) => { result = value; });
-  t.mock.timers.tick(499);
+  t.mock.timers.tick(2999);
   await Promise.resolve();
-  assert.equal(result, 'pending', '499ms 不得提前超时');
+  assert.equal(result, 'pending', '2999ms 不得提前超时');
   t.mock.timers.tick(1);
   await pending;
-  assert.equal(result, null);
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'timeout');
+  assert.equal(result.report, null);
   guard.stop();
 });
 
-test('S1：waitForReport 不命中其他会话的报告', async () => {
+test('S1.1：waitForReport 的 timeoutMs 也被夹到 3000ms 上限', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const ctx = makeCtx(new BasicCompactionEngine());
+  const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.2' });
+  let result = 'pending';
+  // 传 60000 也只能等 3000：大于 500 的旧上限也证明 clamp 与常量同源。
+  const pending = guard.waitForReport({ timeoutMs: 60000 }).then((value) => { result = value; });
+  t.mock.timers.tick(2999);
+  await Promise.resolve();
+  assert.equal(result, 'pending');
+  t.mock.timers.tick(1);
+  await pending;
+  assert.equal(result.reason, 'timeout');
+  guard.stop();
+});
+
+test('S1.1：报告 600ms 后才 ready 仍能等到（旧 500ms 上限会漏）', async () => {
+  const ctx = makeCtx(new BasicCompactionEngine());
+  const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.2' });
+  guard.start();
+  const built = buildCompaction({ before: healthyMessages(), summary: FREE_FORM_SUMMARY, start: 2, end: 11 });
+  const pending = guard.waitForReport({ previousCompactionId: 'old', sessionId: built.session.id });
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  emitAll(ctx, built);
+  const outcome = await pending;
+  assert.equal(outcome.ok, true, '600ms 后才 ready 也必须等到');
+  assert.equal(outcome.report.compactionId, built.compactionId);
+  assert.equal(outcome.waitedMs >= 600, true, `waitedMs=${outcome.waitedMs} 应覆盖真实等待`);
+  await flushEnd();
+  guard.stop();
+});
+
+test('S1.1：waitForReport 区分 mismatch（别的会话抢先报告）', async () => {
   const ctx = makeCtx(new BasicCompactionEngine());
   const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.2' });
   guard.start();
   const built = buildCompaction({ before: healthyMessages(), summary: FREE_FORM_SUMMARY, start: 2, end: 11 });
   const pending = guard.waitForReport({ previousCompactionId: 'old', sessionId: 'session-other', timeoutMs: 20 });
   emitAll(ctx, built);
-  assert.equal(await pending, null);
+  const outcome = await pending;
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.reason, 'mismatch', '有候选报告但不属于本会话 → mismatch');
+  assert.equal(outcome.report, null);
   await flushEnd();
   guard.stop();
 });

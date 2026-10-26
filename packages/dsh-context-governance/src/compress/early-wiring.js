@@ -11,10 +11,14 @@ import { computePressure, shortSessionId } from '../policy.js';
 import { SCOPE_SKIP } from '../scope.js';
 import { EarlyCompactor } from './early.js';
 import { EARLY_DECISION, decideEarly } from './early-gate.js';
+import { EARLY_REPORT_WAIT_MS } from './runtime.js';
 
 export const EARLY_DELAY_MS = 50;
-/** S1：early-forced 等待本 cycle 报告的上限；超时仍写 unknown，不阻塞 turn。 */
-export const EARLY_REPORT_WAIT_MS = 500;
+/**
+ * S1.1：`early-forced` 等待本 cycle 报告的上限。唯一数字定义点在 `runtime.js`（`waitForReport`
+ * 的宿主），这里只引用并再导出，两处不得各自写字面量；超时仍写 unknown、不阻塞 turn。
+ */
+export { EARLY_REPORT_WAIT_MS };
 /** 冷却期默认值（policy `compact.cooldownMin` 生效时按其分钟数换算）。 */
 export const EARLY_COOLDOWN_MS = 10 * 60 * 1000;
 /** 增量门槛默认值（policy `compact.minDeltaTokens` 生效时按窗口换算成比例）。 */
@@ -63,7 +67,7 @@ function engineFor(ctx, agent) {
  * @param {(fn: Function, ms: number) => unknown} [options.schedule]
  * @param {number} [options.cooldownMs]
  * @param {number} [options.minDeltaRatio]
- * @param {number} [options.reportWaitMs] S1：等本 cycle 报告的上限（默认 500，最大 500）
+ * @param {number} [options.reportWaitMs] S1.1：等本 cycle 报告的上限（默认/最大均为 `EARLY_REPORT_WAIT_MS`）
  * @returns {{stop: () => void, check: (session: object) => Promise<void>}}
  */
 export function wireEarlyCompaction(options = {}) {
@@ -271,23 +275,39 @@ export function wireEarlyCompaction(options = {}) {
       ? preProtect.cycleKey
       : null;
     let report = null;
+    // S1.1：等待结论只用于诊断审计，不参与 accepted 判定、不增加 compactNow 调用。
+    let waitOutcome = null;
     if (result.accepted === true) {
       try {
         // S1：有 guard 的 waitForReport 就等本 cycle 的完整报告；老 guard/旧测试无此方法时保留即时读取。
         if (typeof guard?.waitForReport === 'function') {
-          report = await guard.waitForReport({
+          const awaited = await guard.waitForReport({
             previousCompactionId: prevReport?.compactionId ?? null,
             sessionId,
             cycleKey,
             timeoutMs: reportWaitMs,
           });
+          // S1.1：新形状 { ok, reason, report, waitedMs }；旧 guard/桩仍可能返回裸报告或 null。
+          if (awaited !== null && typeof awaited === 'object' && typeof awaited.ok === 'boolean' && 'report' in awaited) {
+            report = awaited.report ?? null;
+            waitOutcome = {
+              reason: awaited.reason ?? (report === null ? 'timeout' : 'none'),
+              waitedMs: Number(awaited.waitedMs) || 0,
+            };
+          } else {
+            report = awaited ?? null;
+            waitOutcome = { reason: report === null ? 'timeout' : 'none', waitedMs: 0 };
+          }
         } else {
           report = guard?.status?.lastReport ?? null;
+          waitOutcome = { reason: 'none', waitedMs: 0 };
         }
       } catch (error) {
         // 等报告失败不能影响压缩结论/主流程；按无报告写 unknown。
         logger?.warn?.(`[context-governance] early report wait failed: ${String(error?.message ?? error)}`);
         report = null;
+        // 只有该异常分支会写 'error'（不属于 waitForReport 的 timeout/mismatch/none 枚举）。
+        waitOutcome = { reason: 'error', waitedMs: 0 };
       }
     }
     // 双保险：即使 guard 返回了别的会话/周期，也不能写进本会话的 early-forced。
@@ -304,6 +324,15 @@ export function wireEarlyCompaction(options = {}) {
       && cycleMatches
       ? report
       : null;
+    // S1.1：没等到（timeout/mismatch，或异常兜底 error）时留一条可诊断审计，只记 id/毫秒，不记正文。
+    if (waitOutcome !== null && waitOutcome.reason !== 'none') {
+      auditForSession?.append?.('early-report-wait', {
+        sessionId,
+        cycle: cycleKey,
+        reason: waitOutcome.reason,
+        waitedMs: Math.max(0, Math.round(Number(waitOutcome.waitedMs) || 0)),
+      });
+    }
     const fields = {
       sessionId,
       accepted: result.accepted === true,
