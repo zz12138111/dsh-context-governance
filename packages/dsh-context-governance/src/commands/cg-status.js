@@ -225,6 +225,29 @@ function statusText({ store, guard, audit, now, policy = null, earlyStatus = nul
       );
     }
   }
+  // 1.0 #10：最近一条 protection loss（新 compaction-loss 优先；旧 manual-compaction-loss 只读兼容）。
+  const lossEntries = audit !== null && typeof audit.entries === 'function'
+    ? audit.entries().filter((entry) => entry.event === 'compaction-loss' || entry.event === 'manual-compaction-loss')
+    : [];
+  const lastLoss = lossEntries.length === 0 ? null : lossEntries[lossEntries.length - 1];
+  if (lastLoss === null) {
+    lines.push('last-loss: none');
+  } else {
+    const legacy = lastLoss.event === 'manual-compaction-loss';
+    const manual = legacy ? true : lastLoss.manual === true;
+    const trigger = legacy
+      ? 'manual'
+      : (lastLoss.trigger === 'manual' || lastLoss.trigger === 'auto'
+        ? lastLoss.trigger
+        : (manual ? 'manual' : 'auto'));
+    const failures = Array.isArray(lastLoss.failures) && lastLoss.failures.length > 0
+      ? lastLoss.failures.join(',')
+      : 'none';
+    lines.push(
+      `last-loss: id=${String(lastLoss.compactionId ?? '?').slice(0, 8)} manual=${manual} ` +
+      `trigger=${trigger} failures=${failures} reason=${lastLoss.reason ?? '-'}`,
+    );
+  }
   if (store !== null) {
     const counts = store.status.counts;
     lines.push(

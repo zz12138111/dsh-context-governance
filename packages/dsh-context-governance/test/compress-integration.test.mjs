@@ -137,7 +137,8 @@ test('0.1.14：无批次语义的比例 → protection-skip(no-batch-semantics)�
 
     const auditFile = path.join(rootDir, '.dsh', 'memory', 'audit.jsonl');
     const lines = (await fs.readFile(auditFile, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
-    assert.equal(lines.some((entry) => entry.event === 'manual-compaction-loss'), false, 'skip 不得升级为 manual-compaction-loss');
+    assert.equal(lines.some((entry) => entry.event === 'manual-compaction-loss'), false, 'skip 不得升级为旧 loss 事件');
+    assert.equal(lines.some((entry) => entry.event === 'compaction-loss'), false, 'skip 不得升级为 compaction-loss');
     const skip = lines.find((entry) => entry.event === 'protection-skip');
     assert.ok(skip, 'protection-skip 审计缺失');
     assert.equal(skip.reason, 'no-batch-semantics');

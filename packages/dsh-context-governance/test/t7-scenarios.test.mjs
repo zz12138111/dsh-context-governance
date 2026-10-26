@@ -303,7 +303,12 @@ test('S4-M 手动压缩（真实样本）：允许丢原文，但必须 audit �
 
     const audit = await readAudit(store);
     assert.ok(guard.status.lastReport !== null, 'S4-M 失败：报告缺失');
-    assert.ok(audit.some((entry) => entry.event === 'manual-compaction-loss'), 'S4-M 失败：缺 manual-compaction-loss 告警');
+    const loss = audit.find((entry) => entry.event === 'compaction-loss');
+    assert.ok(loss, 'S4-M 失败：缺 compaction-loss 告警');
+    assert.equal(loss.manual, true);
+    assert.equal(loss.trigger, 'manual');
+    assert.equal(loss.auditVersion, 'loss-v1.0');
+    assert.equal(audit.some((entry) => entry.event === 'manual-compaction-loss'), false, '旧事件名不得新写');
     const [injected] = injectedOf(session);
     assert.ok(injected, 'S4-M 失败：没有回注');
     const text = injected.data.content.map((block) => block.text).join('\n');

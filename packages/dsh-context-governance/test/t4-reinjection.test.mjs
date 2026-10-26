@@ -174,9 +174,13 @@ test('T4-3：手动压缩允许丢原文，但 audit 告警 + 回注最后用户
       await flush();
       await guard.flush();
       const audit = await readAudit(store);
-      const loss = audit.find((entry) => entry.event === 'manual-compaction-loss');
+      const loss = audit.find((entry) => entry.event === 'compaction-loss');
       assert.ok(loss);
+      assert.equal(loss.manual, true);
+      assert.equal(loss.trigger, 'manual');
+      assert.equal(loss.auditVersion, 'loss-v1.0');
       assert.ok(loss.failures.includes('latest-user-message'));
+      assert.equal(audit.some((entry) => entry.event === 'manual-compaction-loss'), false, '旧事件名不得新写');
       const text = session.appended[0].data.content.map((block) => block.text).join('\n');
       assert.match(text, /最新一条用户消息/);
       assert.equal(guard.status.lastReport.manual, true);

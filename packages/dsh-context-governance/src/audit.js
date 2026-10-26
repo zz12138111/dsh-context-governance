@@ -138,7 +138,9 @@ export const AUDIT_EVENTS = Object.freeze([
   'reinjection-recovered',
   'reinjection-degraded',
   'compaction-cost',
+  'compaction-loss',
   'prune-observed',
+  // 历史别名：只读兼容，不再新写。
   'manual-compaction-loss',
   'duplicate-cycle-start',
   'cycle-interrupted',

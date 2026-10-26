@@ -1858,18 +1858,22 @@ export class CompressionGuard {
               names: explainedSkips.map((item) => item.name),
             });
           }
-          if (state.manual === true) {
-            const protectedFailures = report.failures
-              .map((failure) => failure.name)
-              .filter((name) => ['latest-user-message', 'batch-list', 'rollback-point', 'rule-injection'].includes(name));
-            if (protectedFailures.length > 0) {
-              this.#auditEvent('manual-compaction-loss', {
-                sessionId: state.sessionId,
-                compactionId: id,
-                failures: protectedFailures,
-                entries: state.entries?.length ?? 0,
-              });
-            }
+          const protectedFailures = report.failures
+            .map((failure) => failure.name)
+            .filter((name) => ['latest-user-message', 'batch-list', 'rollback-point', 'rule-injection'].includes(name));
+          if (protectedFailures.length > 0) {
+            // 1.0 #10：auto/manual 的保护失败都落统一 compaction-loss（旧名只读、不双写）。
+            const manual = state.manual === true;
+            this.#auditEvent('compaction-loss', {
+              sessionId: state.sessionId,
+              compactionId: id,
+              manual,
+              trigger: manual ? 'manual' : 'auto',
+              ...(state.manual === null ? { reason: 'late-mount' } : {}),
+              failures: protectedFailures,
+              entries: state.entries?.length ?? 0,
+              auditVersion: 'loss-v1.0',
+            });
           }
           this.#pending.delete(id);
           this.#completedCycles.add(id);
