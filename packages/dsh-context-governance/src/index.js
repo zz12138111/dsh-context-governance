@@ -1320,6 +1320,8 @@ export async function apply(ctx, rawConfig = {}) {
       return;
     }
     try {
+      // P3 例外：apply 时根未知，RootGuardPool 尚未建立；这份 watcher 只负责首个 cwd 推断，
+      // 根确定后立即退订并进入 startRuntime 的 RootGuardPool（正常有根路径不再保留第二份订阅）。
       // 具名函数：测试据此断言“根已确定时没有挂首次推断 watcher”。
       const firstInferenceRootWatcher = (session) => attachFirst(session);
       watcherDispose = ctx.on('session/event', firstInferenceRootWatcher);

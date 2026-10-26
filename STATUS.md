@@ -1,7 +1,14 @@
 # DSH 插件开发 · 当前状态
 
 > 只放"现在还活着"的：在做什么、卡在哪、待谁决策。过期项直接删。
-> 更新：2026-10-26 14:0x（**P1（B 纳管）代码 A–D + E 文档已落**：rootId hash / state v2 / 审计双通道 / 主根纳管 / mem_* 拒绝 / `/cg roots` / v3 logFile+containment；全量 **461/461**；`1.0.0` 未发布、未 push；等审核验收）
+> 更新：2026-10-26 15:1x（**P3 代码/测试面已落，待审核复核**：RootGuardPool/四件套/header/early 按根；全量 **484/484 ×3**；`1.0.0` 未发布、未 push；**未闭环**）
+
+## P3（B 方案）· 当前口径
+
+- **代码**：`61fbfa3`（RootGuardPool）、`70657cf`（四件套/header/early 接线）、`4bec6ff`+`8f69114`（专项测试）、`97a4214`（实现说明）；详见 `docs/P3-实现说明.md`。
+- **订阅口径（验收用）**：生产有两份 `session/event`，职责不同且不并存——`firstInferenceRootWatcher` 仅 no-root 首推期间（只推断根/写 root-state，不建 guard/不写记忆），推断成功后立即退订；`RootGuardPool` 仅根已知路径（常规 guard 路由）；旧 `early-wiring` 订阅为 0。root 已知 apply 时为 1（pool），root 未知 apply 时为 1（watcher），推断完成后先 0 再 1（pool）。
+- **门禁**：`startWaitMs` timer unref + dispose/closeAll 清理；B2c/B2d（+B1/B2e/B2f）；orphan 只归档不 discard（TTL/GC 留 P4）。
+- **未闭环**：P4 安装/迁移/发布口径、真机验收未做；不宣称功能闭环。
 
 ## 已定（2026-10-26）
 
