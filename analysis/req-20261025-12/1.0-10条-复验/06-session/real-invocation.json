@@ -1,0 +1,285 @@
+{
+  "ts": "2026-10-26T02:35:56.301Z",
+  "sessionId": "session-53ece2c2-6726-4550-8d89-e7ac24e4ebc6",
+  "initial": {
+    "armed": false,
+    "profile": {
+      "profile": "",
+      "source": "default"
+    }
+  },
+  "steps": [
+    {
+      "line": "/cg compact status",
+      "ok": true,
+      "commandId": "cmd-dc117694-1",
+      "kind": "success",
+      "resultKeys": [
+        "commandId",
+        "result"
+      ],
+      "text": "context-governance compact\narmed: off (source=config/default)"
+    },
+    {
+      "line": "/cg profile status",
+      "ok": true,
+      "commandId": "cmd-dc117694-2",
+      "kind": "success",
+      "resultKeys": [
+        "commandId",
+        "result"
+      ],
+      "text": "context-governance profile\nprofile: (none) (source=default)"
+    },
+    {
+      "line": "/cg compact disarm",
+      "ok": true,
+      "commandId": "cmd-dc117694-3",
+      "kind": "success",
+      "resultKeys": [
+        "commandId",
+        "result"
+      ],
+      "text": "context-governance compact\narmed: off (source=session)"
+    },
+    {
+      "line": "/cg status",
+      "ok": true,
+      "commandId": "cmd-dc117694-4",
+      "kind": "success",
+      "resultKeys": [
+        "commandId",
+        "result"
+      ],
+      "text": "context-governance status\ntime: 2026-10-26T02:35:56.305Z\npolicy: compact.at=0.60 (source=builtin) native=0.6785 (config-fallback) early=off (session)\nprofile: (none) (source=default)\nwindow: current=unknown source=config-fallback conservative=unknown native-current=0.6785(config-fallback) native-conservative=- unvalidated (at 允许但未经保守窗口校验)\npolicy-session: compact.early.armed=off\nlast-early: none\ncompression: mode=event-level adapter=none backend-kind=none perception=event event-api=on events=0(no session/event observed yet) summary=unknown/unknown host=0.2.1-rc.3 backend=unknown\ncapabilities: control=unknown hooks=best-effort/event protectionRole=validator\npressure: measured=- estimated=0.000 adjusted=0.000(×1.35) effective=0.000 ratio=- window=1M (session 53ece2c2) at=0.60 effective<at\ndegraded: none\nconflicts: no-compaction-service(warning), self-check-failed(error), backend-version-unverified(warning)\nwrite-latency: n=0 p50=- p95=- max=-\nlast-compaction: none\nlast-cost: none\nprotection: writes=0 writeFailures=0 reinjections=0 injectionFailures=0 pendingJournals=0 reinjection=enabled(streak=0,maxFailures=3)\nscope: project=D:\\DS-PROJECT\\DSH插件开发 only-project=on capture-title=on ignored-foreign=7/1 unattributed=0\nmemory: project=DSH插件开发 root=D:\\DS-PROJECT\\DSH插件开发\\memory\\governance active=14 proposed=25 total=51 pendingJournals=0\naudit: file=D:\\DS-PROJECT\\DSH插件开发\\memory\\governance\\audit.jsonl max=8388608 size=78040 rotations=0 recentFailures=none (this-process)"
+    },
+    {
+      "line": "/cg profile review",
+      "ok": true,
+      "commandId": "cmd-dc117694-5",
+      "kind": "success",
+      "resultKeys": [
+        "commandId",
+        "result"
+      ],
+      "text": "context-governance profile\nprofile: review (source=session)"
+    },
+    {
+      "line": "/cg status",
+      "ok": true,
+      "commandId": "cmd-dc117694-6",
+      "kind": "success",
+      "resultKeys": [
+        "commandId",
+        "result"
+      ],
+      "text": "context-governance status\ntime: 2026-10-26T02:35:56.306Z\npolicy: compact.at=0.55 (source=profile=review) native=0.6785 (config-fallback) early=off (session)\nprofile: review (source=session)\nwindow: current=unknown source=config-fallback conservative=unknown native-current=0.6785(config-fallback) native-conservative=- unvalidated (at 允许但未经保守窗口校验)\npolicy-session: compact.early.armed=off\nlast-early: none\ncompression: mode=event-level adapter=none backend-kind=none perception=event event-api=on events=0(no session/event observed yet) summary=unknown/unknown host=0.2.1-rc.3 backend=unknown\ncapabilities: control=unknown hooks=best-effort/event protectionRole=validator\npressure: measured=- estimated=0.000 adjusted=0.000(×1.35) effective=0.000 ratio=- window=1M (session 53ece2c2) at=0.55 effective<at\ndegraded: none\nconflicts: no-compaction-service(warning), self-check-failed(error), backend-version-unverified(warning)\nwrite-latency: n=0 p50=- p95=- max=-\nlast-compaction: none\nlast-cost: none\nprotection: writes=0 writeFailures=0 reinjections=0 injectionFailures=0 pendingJournals=0 reinjection=enabled(streak=0,maxFailures=3)\nscope: project=D:\\DS-PROJECT\\DSH插件开发 only-project=on capture-title=on ignored-foreign=11/1 unattributed=0\nmemory: project=DSH插件开发 root=D:\\DS-PROJECT\\DSH插件开发\\memory\\governance active=14 proposed=25 total=51 pendingJournals=0\naudit: file=D:\\DS-PROJECT\\DSH插件开发\\memory\\governance\\audit.jsonl max=8388608 size=78147 rotations=0 recentFailures=none (this-process)"
+    },
+    {
+      "line": "/cg profile reset",
+      "ok": true,
+      "commandId": "cmd-dc117694-7",
+      "kind": "success",
+      "resultKeys": [
+        "commandId",
+        "result"
+      ],
+      "text": "context-governance profile\nprofile: (none) (source=default)"
+    },
+    {
+      "line": "/cg compact arm",
+      "ok": true,
+      "commandId": "cmd-dc117694-8",
+      "kind": "success",
+      "resultKeys": [
+        "commandId",
+        "result"
+      ],
+      "text": "context-governance compact\narmed: on (source=session)"
+    },
+    {
+      "line": "/cg compact disarm",
+      "ok": true,
+      "commandId": "cmd-dc117694-9",
+      "kind": "success",
+      "resultKeys": [
+        "commandId",
+        "result"
+      ],
+      "text": "context-governance compact\narmed: off (source=session)"
+    },
+    {
+      "line": "/cg profile reset",
+      "ok": true,
+      "commandId": "cmd-dc117694-10",
+      "kind": "success",
+      "resultKeys": [
+        "commandId",
+        "result"
+      ],
+      "text": "context-governance profile\nprofile: (none) (source=default)"
+    }
+  ],
+  "commandEvents": [
+    {
+      "type": "command/run",
+      "commandId": "cmd-dc117694-1",
+      "name": "cg",
+      "seq": 42079,
+      "time": 1792982156301,
+      "sourceKind": "user"
+    },
+    {
+      "type": "command/done",
+      "commandId": "cmd-dc117694-1",
+      "name": null,
+      "seq": 42080,
+      "time": 1792982156303,
+      "sourceKind": null
+    },
+    {
+      "type": "command/run",
+      "commandId": "cmd-dc117694-2",
+      "name": "cg",
+      "seq": 42081,
+      "time": 1792982156304,
+      "sourceKind": "user"
+    },
+    {
+      "type": "command/done",
+      "commandId": "cmd-dc117694-2",
+      "name": null,
+      "seq": 42082,
+      "time": 1792982156304,
+      "sourceKind": null
+    },
+    {
+      "type": "command/run",
+      "commandId": "cmd-dc117694-3",
+      "name": "cg",
+      "seq": 42083,
+      "time": 1792982156304,
+      "sourceKind": "user"
+    },
+    {
+      "type": "command/done",
+      "commandId": "cmd-dc117694-3",
+      "name": null,
+      "seq": 42084,
+      "time": 1792982156304,
+      "sourceKind": null
+    },
+    {
+      "type": "command/run",
+      "commandId": "cmd-dc117694-4",
+      "name": "cg",
+      "seq": 42085,
+      "time": 1792982156304,
+      "sourceKind": "user"
+    },
+    {
+      "type": "command/done",
+      "commandId": "cmd-dc117694-4",
+      "name": null,
+      "seq": 42086,
+      "time": 1792982156305,
+      "sourceKind": null
+    },
+    {
+      "type": "command/run",
+      "commandId": "cmd-dc117694-5",
+      "name": "cg",
+      "seq": 42087,
+      "time": 1792982156306,
+      "sourceKind": "user"
+    },
+    {
+      "type": "command/done",
+      "commandId": "cmd-dc117694-5",
+      "name": null,
+      "seq": 42088,
+      "time": 1792982156306,
+      "sourceKind": null
+    },
+    {
+      "type": "command/run",
+      "commandId": "cmd-dc117694-6",
+      "name": "cg",
+      "seq": 42089,
+      "time": 1792982156306,
+      "sourceKind": "user"
+    },
+    {
+      "type": "command/done",
+      "commandId": "cmd-dc117694-6",
+      "name": null,
+      "seq": 42090,
+      "time": 1792982156306,
+      "sourceKind": null
+    },
+    {
+      "type": "command/run",
+      "commandId": "cmd-dc117694-7",
+      "name": "cg",
+      "seq": 42091,
+      "time": 1792982156306,
+      "sourceKind": "user"
+    },
+    {
+      "type": "command/done",
+      "commandId": "cmd-dc117694-7",
+      "name": null,
+      "seq": 42092,
+      "time": 1792982156307,
+      "sourceKind": null
+    },
+    {
+      "type": "command/run",
+      "commandId": "cmd-dc117694-8",
+      "name": "cg",
+      "seq": 42093,
+      "time": 1792982156307,
+      "sourceKind": "user"
+    },
+    {
+      "type": "command/done",
+      "commandId": "cmd-dc117694-8",
+      "name": null,
+      "seq": 42094,
+      "time": 1792982156307,
+      "sourceKind": null
+    },
+    {
+      "type": "command/run",
+      "commandId": "cmd-dc117694-9",
+      "name": "cg",
+      "seq": 42095,
+      "time": 1792982156307,
+      "sourceKind": "user"
+    },
+    {
+      "type": "command/done",
+      "commandId": "cmd-dc117694-9",
+      "name": null,
+      "seq": 42096,
+      "time": 1792982156307,
+      "sourceKind": null
+    },
+    {
+      "type": "command/run",
+      "commandId": "cmd-dc117694-10",
+      "name": "cg",
+      "seq": 42097,
+      "time": 1792982156307,
+      "sourceKind": "user"
+    },
+    {
+      "type": "command/done",
+      "commandId": "cmd-dc117694-10",
+      "name": null,
+      "seq": 42098,
+      "time": 1792982156308,
+      "sourceKind": null
+    }
+  ]
+}
