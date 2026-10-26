@@ -122,16 +122,19 @@ function statusText({ store, guard, audit, now, policy = null, earlyStatus = nul
       `protectionRole=${adapter.protectionRole ?? 'validator'}`,
     );
     // 0.2.0 压力四段：只展示（不据此压缩）；safety 系数只从配置文件读。
+    // 1a/#9：按当前会话取压力，避免 A 会话显示 B（#lastSession）的压力。
+    const pressureBySession = sessionId !== null && typeof guard.pressureFor === 'function';
+    const shownPressure = pressureBySession ? guard.pressureFor({ id: sessionId }) : status.pressure;
     lines.push(summarizePressure(
       computePressure({
-        measuredTokens: status.pressure?.measuredTokens ?? null,
-        estimatedTokens: status.pressure?.estimatedTokens ?? null,
+        measuredTokens: shownPressure?.measuredTokens ?? null,
+        estimatedTokens: shownPressure?.estimatedTokens ?? null,
         windowTokens: resolvedPolicy?.window?.currentTokens ?? policy?.windowTokens,
         estimateSafety: resolvedPolicy?.values?.['compact.estimateSafety'],
       }),
       {
         at: resolvedPolicy?.values?.['compact.at'] ?? null,
-        sessionId: resolvedPolicy?.window?.currentSessionId ?? null,
+        sessionId: pressureBySession ? sessionId : (resolvedPolicy?.window?.currentSessionId ?? null),
         windowSource: resolvedPolicy?.window?.currentSource ?? null,
       },
     ));

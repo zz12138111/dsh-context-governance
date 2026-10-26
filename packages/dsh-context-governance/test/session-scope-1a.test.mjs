@@ -56,9 +56,57 @@ function makeGuard({ bySession = null, statusPressure = null } = {}) {
       ? { sessionId: target?.id ?? null, measuredTokens: null, estimatedTokens: null }
       : bySession(target)),
     status: {
+      started: true,
+      mode: 'event-level',
+      perception: 'event',
+      eventApi: true,
+      readOnly: false,
+      readOnlyReason: null,
+      reasons: [],
+      degradedReasons: [],
+      conflicts: [],
+      fallback: null,
       pressure: statusPressure ?? { measuredTokens: null, estimatedTokens: null },
-      stats: { pending: 0 },
+      adapter: {
+        kind: 'none',
+        label: 'no-compaction-service',
+        versions: { host: '0.2.1-rc.3', backend: 'unknown' },
+        perception: 'none',
+        control: 'unknown',
+        hooks: { before: 'best-effort', after: 'event' },
+        protectionRole: 'validator',
+        summary: { readability: 'unknown', style: 'unknown' },
+        inference: { kind: 'unknown', label: 'unknown', inferred: false, styles: [] },
+        matrix: { host: 'in', backend: 'unknown' },
+        selfCheck: { state: 'pending', checks: [] },
+        notes: [],
+      },
+      protection: {
+        enabled: false,
+        storeRoot: null,
+        auditFile: null,
+        auditMaxBytes: null,
+        auditSizeBytes: 0,
+        auditRotations: 0,
+        pendingJournals: 0,
+        reinjectionFailureStreak: 0,
+        reinjectionSuspended: false,
+        maxReinjectionFailures: 3,
+      },
+      memory: { enabled: false, counts: {} },
+      stats: {
+        events: 0,
+        protectionWrites: 0,
+        protectionWriteFailures: 0,
+        reinjections: 0,
+        reinjectionFailures: 0,
+        auditWriteFailures: 0,
+        auditSkippedReadOnly: 0,
+        pending: 0,
+      },
+      writeLatency: { count: 0, p50Ms: null, p95Ms: null, maxMs: null, minMs: null },
       lastReport: null,
+      lastCost: null,
     },
   };
 }
@@ -250,4 +298,44 @@ test('1a：compact.minDeltaTokens 真消费（1M 窗口下 2 万 tokens = 2pp）
   clock.now += 61_000;
   await wiring.check(session(SID_A));
   assert.equal(audit.list.filter((entry) => entry.event === 'early-decision').at(-1).action, 'force');
+});
+
+test('1a：/cg status 压力按当前会话显示（A 显示 A、B 显示 B，不串 #lastSession）', async () => {
+  const state = makePolicy();
+  const guard = makeGuard({
+    bySession: (target) => ({
+      sessionId: target.id,
+      measuredTokens: target.id === SID_A ? 650_000 : 100_000,
+      estimatedTokens: null,
+    }),
+    // 全局 status.pressure 故意设成干扰值：若仍读它，断言会失败。
+    statusPressure: { measuredTokens: 990_000, estimatedTokens: null },
+  });
+  const command = createStatusCommand({
+    policy: state,
+    getGuard: () => guard,
+    now: () => new Date('2026-10-26T00:00:00Z'),
+  });
+
+  const a = await command.handler({ rawInput: 'status', agent: { session: { id: SID_A } } });
+  assert.equal(a.kind, 'success');
+  assert.match(a.text, /measured=0\.650/);
+  assert.match(a.text, new RegExp(`session ${shortSessionId(SID_A)}`));
+  assert.doesNotMatch(a.text, /measured=0\.990/, 'A 不得显示全局 #lastSession 的压力');
+
+  const b = await command.handler({ rawInput: 'status', agent: { session: { id: SID_B } } });
+  assert.equal(b.kind, 'success');
+  assert.match(b.text, /measured=0\.100/);
+  assert.match(b.text, new RegExp(`session ${shortSessionId(SID_B)}`));
+});
+
+test('1a：旧形状 invocation.sessionId 不再被识别（拒绝且不写桶）', async () => {
+  const state = makePolicy();
+  const audit = makeAudit();
+  const command = makeCommand(state, audit);
+  const result = await command.handler({ rawInput: 'compact disarm', sessionId: SID_A });
+  assert.equal(result.kind, 'error');
+  assert.match(result.text, /会话级不可用/);
+  assert.deepEqual(state.sessionIds(), [], '旧形状不得建桶');
+  assert.equal(audit.list.length, 0, '旧形状不得写审计');
 });
