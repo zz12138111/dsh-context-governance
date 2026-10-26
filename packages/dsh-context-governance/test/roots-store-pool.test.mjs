@@ -83,3 +83,37 @@ test('P2 pool：懒打开/refCount/TTL audit close/closeAll 清 timer', async ()
     await fs.promises.rm(base, { recursive: true, force: true });
   }
 });
+
+test('P2 pool：P3 guard pin 期间不被 TTL 关闭，release 后恢复回收', async () => {
+  const base = await tempDir();
+  const rootA = makeRoot(base, 'alpha');
+  const rootB = makeRoot(base, 'beta');
+  const stateFile = path.join(base, 'context-governance', 'root-state-pin.json');
+  const clock = { value: new Date('2026-10-26T10:00:00Z') };
+  const reg = RootRegistry.load({ stateFile, profile: 'pool', now: () => clock.value });
+  reg.claimPrimary(rootA, { origin: 'inferred' });
+  const entryB = reg.resolveSessionRoot({ header: { id: 'b1', cwd: rootB } }).entry;
+  const memoryA = path.join(rootA, 'memory', 'governance');
+  const storeA = await MemoryStore.open({ rootDir: memoryA, project: 'alpha' });
+  const pool = new RootStorePool({
+    registry: reg,
+    logger: null,
+    now: () => clock.value,
+    ttlMs: 30_000,
+    sweepMs: 60_000,
+  });
+  try {
+    pool.seed(reg.attach, storeA, new AuditLog({ file: path.join(memoryA, 'audit.jsonl'), allowedBase: memoryA }));
+    const pinned = await pool.pin(entryB);
+    assert.equal(pool.stats().pinned, 2, 'seed + guard pin');
+    clock.value = new Date(clock.value.getTime() + 31_000);
+    assert.equal(await pool.closeIdle(), 0, 'pinned guard store 不得被 TTL 关闭');
+    pinned.release();
+    assert.equal(pool.stats().refs, 1, 'release 只退 guard ref，主根 seed 仍保留');
+    clock.value = new Date(clock.value.getTime() + 31_000);
+    assert.equal(await pool.closeIdle(), 1, 'release 后超 TTL 可回收');
+  } finally {
+    await pool.closeAll().catch(() => {});
+    await fs.promises.rm(base, { recursive: true, force: true });
+  }
+});

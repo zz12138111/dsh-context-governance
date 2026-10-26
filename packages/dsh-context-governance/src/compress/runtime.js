@@ -355,10 +355,18 @@ export class CompressionGuard {
     }
   }
 
-  /** 开始订阅；重复调用安全。 */
-  start() {
+  /**
+   * 开始观测；重复调用安全。
+   * P3：RootGuardPool 自己持有唯一 `session/event` 订阅，此时传 `{subscribe:false}`，
+   * 只初始化 tokenMeter/感知状态，不再各自订阅。
+   */
+  start(options = {}) {
     if (this.#started) return this;
     this.#tryInjectTokenMeter();
+    if (options?.subscribe === false) {
+      this.#started = typeof this.#ctx?.on === 'function';
+      return this;
+    }
     if (typeof this.#ctx?.on !== 'function') {
       this.#logger?.warn?.('[context-governance] ctx.on is unavailable; compaction observation disabled');
       return this;
@@ -370,6 +378,11 @@ export class CompressionGuard {
       this.#logger?.warn?.(`[context-governance] compaction observer registration failed: ${String(error?.message ?? error)}`);
     }
     return this;
+  }
+
+  /** P3：由 RootGuardPool 路由的单事件入口；不改变 #handle 的既有语义。 */
+  handleEvent(session, event) {
+    return this.#handle(session, event);
   }
 
   /** 停止订阅（插件卸载时调用）。 */

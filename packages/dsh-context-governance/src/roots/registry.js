@@ -111,6 +111,7 @@ export class RootRegistry {
   #logger;
   #hashFn;
   #pinLimit;
+  #manageAllRoots;
   #pins = new Map();
   #seen = new Set();
   #loadedIds = new Set();
@@ -137,6 +138,7 @@ export class RootRegistry {
     hashFn = undefined,
     pinLimit = DEFAULT_PIN_LIMIT,
     allowedBase = null,
+    manageAllRoots = false,
   } = {}) {
     this.#stateFile = typeof stateFile === 'string' ? path.resolve(stateFile) : null;
     this.#state = state ?? emptyV2State(null);
@@ -153,6 +155,8 @@ export class RootRegistry {
     this.#logger = logger;
     this.#hashFn = hashFn;
     this.#pinLimit = Math.max(Number(pinLimit) || DEFAULT_PIN_LIMIT, 1);
+    // P3：production 由 index 打开，所有 active 根都纳管；默认 false 保留 P1/P2 单根契约测试。
+    this.#manageAllRoots = manageAllRoots === true;
     this.#loadedIds = new Set(Object.keys(this.#state.roots));
     this.#attachRootId = this.#state.primaryRootId;
     this.#writable = loaded === null || loaded.writable !== false;
@@ -199,6 +203,8 @@ export class RootRegistry {
 
   #isManaged(entry) {
     if (entry === null || entry.state !== 'active') return false;
+    // P3：显式开启后，所有已登记 active 根各自纳管；默认仍只有挂载根。
+    if (this.#manageAllRoots) return true;
     return entry.rootId === (this.#attachRootId ?? this.#state.primaryRootId);
   }
 

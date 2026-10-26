@@ -224,6 +224,31 @@ export class RootStorePool {
     return this.#handle(key, record);
   }
 
+  /**
+   * P3：guard 生命周期 pin。`get` 的 refs 保持到 release；pinned 期间 TTL 不关。
+   * seed 记录本来 pinned=true，release 只恢复调用前的 pinned 状态，不把主根 seed 解 pin。
+   * @returns {Promise<{entry,store,audit,release:()=>void}>}
+   */
+  async pin(entry) {
+    const handle = await this.get(entry);
+    const key = handle.entry.rootId;
+    const record = this.#entries.get(key);
+    if (record === undefined) return handle;
+    const wasPinned = record.pinned;
+    record.pinned = true;
+    let released = false;
+    return {
+      ...handle,
+      release: () => {
+        if (released) return;
+        released = true;
+        const current = this.#entries.get(key);
+        if (current !== undefined) current.pinned = wasPinned;
+        this.release(key);
+      },
+    };
+  }
+
   release(rootId) {
     const record = this.#entries.get(rootId);
     if (record === undefined) return;
