@@ -157,7 +157,7 @@ test('0.2.1 动态 native + conservative 校验：1M/128k 双会话下 at=0.6 �
   assert.equal(resolved.values['compact.at'], 0.30, '越界层被拒后回落到下一层');
   assert.equal(resolved.sources['compact.at'], 'plugin');
   assert.ok(resolved.invalid.some((item) =>
-    item.source === 'session' && item.reason === 'over-native-runtime' && item.key === 'compact.at'));
+    item.source === 'session' && item.reason === 'window-shrunk' && item.key === 'compact.at'));
   // 同一份 native 函数：status 的 pressure 分母也用 current
   assert.equal(resolved.window.currentTokens, 1_048_576);
 });
@@ -217,7 +217,7 @@ test('0.2.1 /cg set：有保守窗口时按 conservative 校验（0.55 > 0.375 �
   const command = cmd({ policy: state, now: () => new Date('2026-10-26T00:00:00Z') });
   const rejected = await command.handler({ rawInput: 'set compact.at=0.55' });
   assert.equal(rejected.kind, 'error');
-  assert.match(rejected.text, /over-native/);
+  assert.match(rejected.text, /above-effective-window/);
   const allowed = await command.handler({ rawInput: 'set compact.at=0.30' });
   assert.equal(allowed.kind, 'success');
 });
@@ -475,7 +475,7 @@ test('0.2.1 P3-7（apply 路径）：windowViolations 去重 Set 恢复后清空
     feed(131_072);   // 第二次拒层：必须再写 1 条 → audit 2
     const auditFile = path.join(rootDir, '.dsh', 'memory', 'audit.jsonl');
     const records = (await fs.readFile(auditFile, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
-    const rejected = records.filter((record) => record.event === 'policy-invalid' && record.reason === 'over-native-runtime');
+    const rejected = records.filter((record) => record.event === 'policy-invalid' && record.reason === 'window-shrunk');
     assert.equal(rejected.length, 2, `跨 episode 必须写 2 条，实际 ${JSON.stringify(rejected)}`);
   } finally {
     for (const dispose of disposers) await dispose();

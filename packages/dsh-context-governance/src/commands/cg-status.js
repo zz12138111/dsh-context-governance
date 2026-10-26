@@ -65,9 +65,18 @@ function formatSession(overrides, rejectedKeys = null) {
 /** 会话层里被运行时拒绝的键（P3-2：display 要标 rejected，恢复后自然消失）。 */
 function rejectedSessionKeys(resolved) {
   const keys = new Set();
+  const reasonSet = new Set([
+    'window-shrunk',
+    'above-effective-window',
+    'native-uncomputable',
+    'fallback-over-native',
+    // 0.2.x 历史 reason：只读展示旧状态，不再新写（保留一个 release 周期）。
+    'over-native',
+    'over-native-runtime',
+  ]);
   for (const item of resolved?.invalid ?? []) {
     if (item?.source !== 'session' || item?.key !== 'compact.at') continue;
-    if (item.reason === 'over-native-runtime' || item.reason === 'native-uncomputable') keys.add('compact.at');
+    if (reasonSet.has(item.reason)) keys.add('compact.at');
   }
   return keys;
 }
@@ -293,6 +302,8 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
     if (argText === 'reset' || argText === 'clear') {
       const count = Object.keys(sessionValues).length;
       for (const key of Object.keys(sessionValues)) delete sessionValues[key];
+      // 清空覆盖 = 该会话的 transient 拒绝也应消失（不跨会话、不留残影）。
+      policy.clearSessionRejections?.(sessionId);
       audit?.append?.('policy-set', { source: 'session', key: '*', value: 'reset' });
       return { kind: 'success', text: `context-governance set\ncleared: ${count} session override(s)` };
     }
@@ -348,10 +359,14 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
           key: 'compact.at',
           reason: 'native-uncomputable',
           detail: '退化窗口下拒绝 /cg set compact.at',
+          sessionId,
+          at: parsed.value,
+          native: null,
         };
         const added = typeof policy.rejectSessionSet === 'function'
           ? policy.rejectSessionSet(entry)
-          : !(policy.sessionRejections?.() ?? []).some((item) =>
+          : !(policy.sessionRejections?.(sessionId) ?? []).some((item) =>
+            (item.sessionId ?? null) === sessionId &&
             item.source === 'session' && item.key === 'compact.at' && item.reason === 'native-uncomputable');
         if (added === true) {
           audit?.append?.('policy-invalid', { source: 'session', reason: 'native-uncomputable', code: 'compact.at' });
@@ -369,6 +384,29 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
       if (checked.invalid.length > 0) {
         const item = checked.invalid[0];
         const detail = item.detail === undefined ? '' : `（${item.detail}）`;
+        // 1.0 #4：窗上界拒绝与配置层同口径——审计 + status 可见（不建会话桶）。
+        if (item.reason === 'above-effective-window' || item.reason === 'window-shrunk' || item.reason === 'over-native') {
+          const entry = {
+            source: 'session',
+            key,
+            reason: item.reason,
+            detail: item.detail,
+            sessionId,
+            at: parsed.value,
+            native: validationNative,
+          };
+          const added = typeof policy.rejectSessionSet === 'function'
+            ? policy.rejectSessionSet(entry)
+            : !(policy.sessionRejections?.(sessionId) ?? []).some((existing) =>
+              (existing.sessionId ?? null) === sessionId &&
+              existing.source === 'session' && existing.key === key && existing.reason === item.reason);
+          if (added === true) {
+            audit?.append?.('policy-invalid', { source: 'session', reason: item.reason, code: key });
+            logger?.warn?.(
+              `[context-governance] rejected /cg set ${key}: ${item.reason}${detail}`,
+            );
+          }
+        }
         return { kind: 'error', text: `context-governance set: ${key}=${rawValue} 被拒绝: ${item.reason}${detail}` };
       }
       next[key] = parsed.value;
@@ -394,6 +432,7 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
           '需在配置文件设 compact.lowThresholdAck=true 后重启（该确认不随会话覆盖）',
       };
     }
+    for (const [key] of pairs) policy.clearSessionRejections?.(sessionId, key);
     for (const [key, rawValue] of pairs) {
       audit?.append?.('policy-set', { source: 'session', key, value: String(rawValue) });
     }

@@ -14,7 +14,7 @@ import path from 'node:path';
 
 import { registerStatusCommand } from './commands/cg-status.js';
 import { identityDiagnostic, inferRootFromCwd, persistInferredRoot, readRootState, resolvePersistenceIdentity, samePath, sessionCwd, writeRootState } from './root-state.js';
-import { POLICY_FILE_MAX_BYTES, nativeFromWindow, nativeRatio, profileLayer, resolvePolicy, shortSessionId, validateLayer } from './policy.js';
+import { POLICY_FILE_MAX_BYTES, WINDOW_USABLE_MARGIN, atExceedsUsableWindow, nativeFromWindow, nativeRatio, profileLayer, resolvePolicy, shortSessionId, usableAtCeiling, validateLayer } from './policy.js';
 import { detectHostVersion, normalizeBackendVersion } from './compress/adapters.js';
 import { CompressionGuard } from './compress/runtime.js';
 import { wireEarlyCompaction } from './compress/early-wiring.js';
@@ -361,12 +361,13 @@ export function buildPolicyState(config, deps = {}) {
             detail: `W=${degenerateTokens} O=${reservedTokens}`,
           });
           delete values['compact.at'];
-        } else if (at > checkNative + 1e-9) {
+        } else if (atExceedsUsableWindow(at, checkNative)) {
+          // 1.0 #4：窗口收缩后 at 落入非可用区间 [native−0.02, native] → 该层自动失效。
           runtimeInvalid.push({
             source: layer.source,
             key: 'compact.at',
-            reason: 'over-native-runtime',
-            detail: `at=${at} > native=${checkNative}` +
+            reason: 'window-shrunk',
+            detail: `at=${at} 落入非可用区间（native=${checkNative}, 上界=${usableAtCeiling(checkNative)}）` +
               (conservative === null ? '' : `（保守窗口 ${conservative.tokens}）`),
           });
           delete values['compact.at'];
@@ -375,21 +376,57 @@ export function buildPolicyState(config, deps = {}) {
       return { source: layer.source, values };
     });
     const resolved = resolvePolicy(filtered, { native: currentInfo.native });
-    // P2-3：拒绝项只放 transient（每 episode 去重、窗口恢复即清），绝不 push 进 state.invalid（那是构建期的静态记录）。
-    if (!degenerate) transientRejections.length = 0;
-    // P3-3：层被拒后回落到 builtin 的 at 仍可能 > conservative（例如 0.60 > 0.375），必须显式提示，不能默默生效。
-    if (!degenerate && checkNative !== null && resolved.values['compact.at'] > checkNative + 1e-9) {
+    // P2-3：拒绝项只放 transient（每 episode 去重；窗口恢复即清），绝不 push 进 state.invalid（那是构建期的静态记录）。
+    // 1.0 #4：非退化时也只清“窗口已变宽”的旧拒绝；同一 native 下保留，保证 /cg set 被拒后 status 仍可见。
+    if (!degenerate) {
+      for (let index = transientRejections.length - 1; index >= 0; index -= 1) {
+        const entry = transientRejections[index];
+        const entryNative = Number.isFinite(entry?.native) ? entry.native : null;
+        if (entryNative === null || checkNative > entryNative + 1e-9) transientRejections.splice(index, 1);
+      }
+    }
+    // 成功设置更小的 at 后（同一 native 下），旧的 transient 不再成立 → 清掉，恢复 P3-2 的“恢复后消失”。
+    for (let index = transientRejections.length - 1; index >= 0; index -= 1) {
+      const entry = transientRejections[index];
+      if ((entry.sessionId ?? null) !== (sessionId ?? null)) continue;
+      if (Number.isFinite(entry.at) && !atExceedsUsableWindow(entry.at, checkNative)) {
+        transientRejections.splice(index, 1);
+      }
+    }
+    // P3-3：层被拒后回落到 builtin 的 at 仍可能落在非可用区间，必须显式提示且不得显示 early=on。
+    if (!degenerate && Number.isFinite(checkNative) && atExceedsUsableWindow(resolved.values['compact.at'], checkNative)) {
       runtimeInvalid.push({
         source: 'builtin',
         key: 'compact.at',
         reason: 'fallback-over-native',
-        detail: `falls back to at=${resolved.values['compact.at']} > native=${checkNative}` +
+        detail: `falls back to at=${resolved.values['compact.at']}，落入非可用区间（native=${checkNative}, ` +
+          `上界=${usableAtCeiling(checkNative)}）` +
           (conservative === null ? '' : `（保守窗口 ${conservative.tokens}）`),
       });
     }
+    const effectiveAt = resolved.values['compact.at'];
+    const usable = !degenerate && Number.isFinite(checkNative) && !atExceedsUsableWindow(effectiveAt, checkNative);
+    const shrunk = conservative !== null && conservative.tokens < configWindow;
+    const earlyWindow = {
+      usable,
+      reason: usable
+        ? null
+        : (degenerate ? 'native-uncomputable' : (shrunk ? 'window-shrunk' : 'above-effective-window')),
+      at: Number.isFinite(effectiveAt) ? effectiveAt : null,
+      native: degenerate ? null : checkNative,
+      ceiling: degenerate ? null : usableAtCeiling(checkNative),
+      margin: WINDOW_USABLE_MARGIN,
+    };
     return {
       ...resolved,
-      invalid: [...invalid, ...runtimeInvalid, ...resolved.invalid, ...transientRejections],
+      earlyWindow,
+      invalid: [
+        ...invalid,
+        ...runtimeInvalid,
+        ...resolved.invalid,
+        // 1a：transient 拒绝只对本会话可见（不跨会话串）。
+        ...transientRejections.filter((item) => (item.sessionId ?? null) === (sessionId ?? null)),
+      ],
       window: {
         currentTokens: win?.current ? currentTokens : null,
         configTokens: configWindow,
@@ -446,17 +483,35 @@ export function buildPolicyState(config, deps = {}) {
       return info.native;
     },
     windowState: () => windowProvider() ?? null,
-    /** P2-3：记录一次“会话层设置被拒”（每 episode 去重；窗口恢复时清空）。返回是否新增。 */
+    /**
+     * 记录一次“会话层设置被拒”（按 sessionId+source+key+reason 去重；窗口恢复/成功设置时清）。
+     * 1a 之后会话级已成立：transient 必须带 sessionId，不能跨会话串。
+     */
     rejectSessionSet(entry) {
       if (entry === null || typeof entry !== 'object') return false;
-      const key = `${entry.source}|${entry.key}|${entry.reason}`;
-      if (transientRejections.some((item) => `${item.source}|${item.key}|${item.reason}` === key)) return false;
-      transientRejections.push(entry);
+      const sessionId = typeof entry.sessionId === 'string' && entry.sessionId !== '' ? entry.sessionId : null;
+      const normalized = { ...entry, sessionId };
+      const key = `${sessionId ?? ''}|${normalized.source}|${normalized.key}|${normalized.reason}`;
+      if (transientRejections.some((item) =>
+        `${item.sessionId ?? ''}|${item.source}|${item.key}|${item.reason}` === key)) return false;
+      transientRejections.push(normalized);
       return true;
     },
-    /** 当前 episode 的 transient 拒绝（只读快照）。 */
-    sessionRejections() {
-      return transientRejections.map((item) => ({ ...item }));
+    /** 当前 episode 的 transient 拒绝（只读快照；传 sessionId 只返回该会话）。 */
+    sessionRejections(sessionId = undefined) {
+      const source = sessionId === undefined
+        ? transientRejections
+        : transientRejections.filter((item) => (item.sessionId ?? null) === (sessionId ?? null));
+      return source.map((item) => ({ ...item }));
+    },
+    /** 成功写入/清空会话层后，删除该会话（可再限定 key）的 transient 拒绝。 */
+    clearSessionRejections(sessionId, key = null) {
+      for (let index = transientRejections.length - 1; index >= 0; index -= 1) {
+        const item = transientRejections[index];
+        if ((item.sessionId ?? null) !== (sessionId ?? null)) continue;
+        if (key !== null && item.key !== key) continue;
+        transientRejections.splice(index, 1);
+      }
     },
     resolve: resolveWithWindow,
   };
@@ -668,7 +723,12 @@ export async function apply(ctx, rawConfig = {}) {
     // 退化（DEC-20261025-68 A）reason 是 native-uncomputable，必须与 over-native-runtime 一样落审计。
     if (guard !== null && typeof guard.onWindowChange === 'function') {
       const windowViolations = new Set();
-      const WINDOW_REJECT_REASONS = new Set(['over-native-runtime', 'native-uncomputable']);
+      // 1.0 #4：新旧 reason 都认（旧 audit 不重写，读取/审计侧保留一个 release 周期）。
+      const WINDOW_REJECT_REASONS = new Set([
+        'window-shrunk',
+        'over-native-runtime',
+        'native-uncomputable',
+      ]);
       const checkWindowViolations = () => {
         try {
           // 1a：会话层按会话逐桶检查（窗口收缩也要让会话覆盖失效，不再只看全局链）。

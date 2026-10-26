@@ -104,7 +104,7 @@ test('0.2.0 项目文件非法：只记 invalid，不抛错；越界/未知键�
   const resolved = state.resolve();
   assert.equal(resolved.values['compact.at'], 0.60);
   assert.equal(resolved.sources['compact.at'], 'builtin');
-  assert.ok(state.invalid.some((item) => item.reason === 'over-native'));
+  assert.ok(state.invalid.some((item) => item.reason === 'above-effective-window'));
   assert.ok(state.invalid.some((item) => item.reason === 'unknown-key'));
 });
 
@@ -254,7 +254,7 @@ test('0.2.0 /cg set：config-only 键、越界、<0.30 未确认都拒绝且不�
   const ack = await command.handler({ rawInput: 'set compact.lowThresholdAck=true' });
   assert.match(ack.text, /只能在配置文件改/);
   const overNative = await command.handler({ rawInput: 'set compact.at=0.9' });
-  assert.match(overNative.text, /over-native/);
+  assert.match(overNative.text, /above-effective-window/);
   const tooLow = await command.handler({ rawInput: 'set compact.at=0.25' });
   assert.match(tooLow.text, /lowThresholdAck/);
   const unknown = await command.handler({ rawInput: 'set compact.nope=1' });

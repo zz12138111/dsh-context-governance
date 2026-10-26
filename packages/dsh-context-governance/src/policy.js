@@ -51,6 +51,19 @@ export const PROFILE_NAMES = Object.freeze(Object.keys(PROFILE_PRESETS));
 export const NATIVE_DEFAULT_RATIO = 0.6785;
 export const NATIVE_HEADROOM_TOKENS = 65536;
 export const NATIVE_RATIO_CAP = 0.8;
+/** 距 native 这个范围内不抢宿主（G2 口径：effective ≥ native−0.02 不抢）。1.0 #4 起也用于 at 的可用上界。 */
+export const WINDOW_USABLE_MARGIN = 0.02;
+
+/** 1.0 #4：`at` 是否落在非可用区间 `[native−0.02, native]`（含边界；native 不可算视为不可用）。 */
+export function atExceedsUsableWindow(at, native) {
+  if (!Number.isFinite(at) || !Number.isFinite(native)) return true;
+  return at >= native - WINDOW_USABLE_MARGIN - 1e-9;
+}
+
+/** 1.0 #4：`at` 的可用上界（开区间，严格小于该值才可用）。 */
+export function usableAtCeiling(native) {
+  return Number.isFinite(native) ? native - WINDOW_USABLE_MARGIN : null;
+}
 
 /** `compact.at` 绝对下限（任何层）。 */
 export const AT_MIN = 0.2;
@@ -194,8 +207,13 @@ export function validateLayer(raw, { source = 'builtin', native = NATIVE_DEFAULT
           });
           break;
         }
-        if (value > native + 1e-9) {
-          invalid.push({ source, key, reason: 'over-native', detail: '超过宿主原生触发点，M2 不支持推迟' });
+        if (atExceedsUsableWindow(value, native)) {
+          invalid.push({
+            source,
+            key,
+            reason: 'above-effective-window',
+            detail: `at=${value} 必须 < native−${WINDOW_USABLE_MARGIN}（native=${native}）`,
+          });
           break;
         }
         values[key] = value;
@@ -324,8 +342,13 @@ export function summarizePolicy(policy) {
   if (policy.early !== true) {
     const enabledSource = String(policy.sources?.['compact.early'] ?? 'builtin').replace(/^profile=/, '');
     earlyText = `off (policy:${enabledSource})`;
+  } else if (policy.earlyWindow !== undefined && policy.earlyWindow !== null && policy.earlyWindow.usable === false) {
+    // 1.0 #4/#5：生效 at 落在非可用区间（含退化）时不得显示 on。
+    earlyText = `off (${policy.earlyWindow.reason})`;
   } else if (policy.earlyArmed !== false) {
-    earlyText = `on (${armedLabel})`;
+    // 1.0 #5：窗口存在但还没有 observation（unvalidated）时不得只显示裸 on。
+    const unvalidated = window !== null && window !== undefined && window.validated === false;
+    earlyText = unvalidated ? `on (${armedLabel}; unvalidated)` : `on (${armedLabel})`;
   } else {
     earlyText = `off (${armedLabel})`;
   }

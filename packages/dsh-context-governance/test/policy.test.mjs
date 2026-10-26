@@ -51,11 +51,11 @@ test('0.2.0 四层合成顺序：会话 > 项目 > 插件 > profile 标签 > 内
   assert.equal(policy.sources['compact.at'], 'session');
 });
 
-test('0.2.0 越界拒绝：compact.at > native 提示不支持推迟', () => {
+test('0.2.0 越界拒绝：compact.at ≥ native−0.02 提示 above-effective-window', () => {
   const result = validateLayer({ 'compact.at': 0.9 }, { source: 'session', native: NATIVE, sessionLayer: true });
   assert.equal(result.values['compact.at'], undefined);
-  assert.equal(result.invalid[0].reason, 'over-native');
-  assert.match(result.invalid[0].detail, /不支持推迟/);
+  assert.equal(result.invalid[0].reason, 'above-effective-window');
+  assert.match(result.invalid[0].detail, /必须 < native/);
 });
 
 test('0.2.0 未知键整层拒绝；config-only 键不允许 /cg set', () => {
