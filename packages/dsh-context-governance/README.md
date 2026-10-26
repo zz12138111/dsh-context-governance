@@ -3,8 +3,7 @@
 上下文治理插件（DSH / DeepSeek Harness）。M1 目标：**压缩前后不断线**——任务态记忆落项目文件，压缩后只回注 ID/状态/指针，详情按需取。
 
 > 版本：**以 `package.json` 为唯一来源**（本文与代码都不再重复版本号；启动行/审计里的 version 由运行时读取）。
-> 当前进度：**B 方案 1.0 收口（P1–P4 代码/测试面已签收，发布待用户批准）**——可判定根登记与 state v2、每根记忆/审计/写者锁、`RootGuardPool` 每根保护/回注/header/提前压、`configRoot` 强制合并、v1→v2 迁移、只读根披露、隔离安装/卸载/兼容回滚。**全量 488/488（P3 fix 后）**；**未发布、未 push**；P4 门禁 E 已签收（详见 `../../docs/发布演练-安装卸载回滚.md`）。
-> 真机：已安装（junction 指向源码目录）；最近一次真机验证记录见 `memory/ARTIFACTS.md`，待验收项见 `STATUS.md`（本文不写具体版本/数字）。**M3 T2（0.3.1）起新会话 header 默认开启**（`/cg header off` 或配置 `memoryHeader.enabled=false` 可关）。
+> 当前版本：**B 方案 1.0**——可判定根登记与 state v2、每根记忆/审计/写者锁、`RootGuardPool` 每根保护/回注/header/提前压、`configRoot` 强制合并、v1→v2 迁移、只读根披露、隔离安装/卸载/兼容回滚。**全量 488/488（P3 fix 后）**；**自 M3 T2（0.3.1）起新会话 header 默认开启**（`/cg header off` 或配置 `memoryHeader.enabled=false` 可关）。
 > 安装方式：`docs/插件安装升级-Runbook.md`（`file:` 声明 + junction + bundle；不用 pnpm）。本机已按该方式安装（junction 指向源码），其它机器按 Runbook 操作。
 > **宿主兼容边界**：`engines.dsh = ">=0.2.1-rc.2 <0.2.2-0"`；实测只到 **0.2.1-rc.3**（在范围内）。**宿主升级到 0.2.2 会被拒载**——升级 DSH 前先看兼容矩阵/发布说明。
 

@@ -1,0 +1,12 @@
+# Gitleaks config for the public repository.
+# Keep the default rule set; only exempt fake credentials used by the
+# detector's own tests. No global allowlist and no rule-level exemptions.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "检测用例的假凭据，非真实密钥；仅限 packages/dsh-context-governance/test/**"
+paths = [
+  '''packages/dsh-context-governance/test/.*''',
+]
