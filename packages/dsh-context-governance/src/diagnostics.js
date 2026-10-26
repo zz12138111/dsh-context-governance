@@ -26,8 +26,11 @@ export const PLUGIN_VERSION = readPackageVersion();
 
 export function appendDiagnosticLine(file, line) {
   if (typeof file !== 'string' || file.trim() === '') return false;
+  // 1.0 #8：绝不对相对路径做 path.resolve（会落到进程 cwd）。非绝对路径直接拒绝。
+  const trimmed = file.trim();
+  if (!path.isAbsolute(trimmed)) return false;
   try {
-    const target = path.resolve(file);
+    const target = path.resolve(trimmed);
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.appendFileSync(target, `${line}\n`, 'utf8');
     return true;

@@ -117,15 +117,15 @@ packages/dsh-context-governance/
 
 ```yaml
 config:
-  projectRoot: "D:/DS-PROJECT/DSH插件开发"
-  memoryRoot: "memory/governance"     # 相对 projectRoot
-  project: "DSH插件开发"
+  projectRoot: ""                     # D9=A：空 = 首次推断并持久化；包内不预填
+  memoryRoot: "memory/governance"     # 相对推断出的 projectRoot
+  project: ""                         # 空 = 运行期按根 basename 推导
   compression:
     enabled: true
     hostVersion: ""                   # 空 = 自动探测
     backendVersion: ""                # 空 = 运行时识别，版本标 unknown
   diagnostics:
-    logFile: "D:/DS-PROJECT/DSH插件开发/logs/governance.log"
+    logFile: ""                       # 空=关闭；非空必须是绝对路径（相对路径 CONFIG 拒绝）
     # 0.2.2 起：除启动/能力行外，保护失败也写一行（只记检查名，不记 detail/正文）
   audit:
     maxBytes: 8388608                 # 8 MiB 后轮转 audit-YYYYMMDD.jsonl

@@ -115,6 +115,15 @@ export function resolveConfig(raw = {}) {
   if (typeof config.diagnostics.logFile !== 'string') {
     throw new MemoryStoreError('CONFIG', 'diagnostics.logFile must be a string');
   }
+  // 1.0 #8：非空 logFile 必须是绝对路径；相对路径会落到进程 cwd（app 安装目录），
+  // 既可写坏发行目录，也不符合“包内 0 绝对路径/空或显式”的安装契约。
+  const diagnosticsLogFile = config.diagnostics.logFile.trim();
+  if (diagnosticsLogFile !== '' && !path.isAbsolute(diagnosticsLogFile)) {
+    throw new MemoryStoreError(
+      'CONFIG',
+      'diagnostics.logFile must be empty or an absolute path (relative paths would resolve to the process cwd)',
+    );
+  }
   if (config.policy === null || typeof config.policy !== 'object' || Array.isArray(config.policy)) {
     throw new MemoryStoreError('CONFIG', 'policy must be an object');
   }
@@ -205,7 +214,7 @@ export function resolveConfig(raw = {}) {
     onlyProject: config.onlyProject,
     captureTitle: config.captureTitle,
     diagnostics: {
-      logFile: config.diagnostics.logFile.trim(),
+      logFile: diagnosticsLogFile,
     },
     policy: {
       profile: policy.profile,

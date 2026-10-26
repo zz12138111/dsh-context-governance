@@ -1,20 +1,22 @@
 # dsh-context-governance bundle patch：把插件挂成宿主加载树里的一行。
 #
 # 安装形态（见 docs/插件安装升级-Runbook.md）：
-#   profile package.json 依赖 = "file:D:/DS-PROJECT/DSH插件开发/packages/dsh-context-governance"
+#   profile package.json 依赖 = "file:<repo>/packages/dsh-context-governance"
 #   profile dsh.profile.bundles 追加 "dsh-context-governance"
 #   node_modules\@local\dsh-context-governance = junction 到本包
 #   不运行 pnpm install / dsh plugin add（会 prune + 搬走 compression redirect）
 #
-# 注意：config 里的路径是本机 00 工作区的安装配置；换机器/换项目时改这里。
+# 注意：包内不写本机路径；安装时的 projectRoot/memoryRoot/logFile 由用户 profile patch 覆盖。
 - insert:
     - id: dsh-context-governance
       name: "dsh-context-governance"
       config:
         enabled: true
-        projectRoot: "D:/DS-PROJECT/DSH插件开发"
+        # D9=A：留空 = 首次会话 cwd 推断项目根并持久化
+        projectRoot: ""
         memoryRoot: "memory/governance"
-        project: "DSH插件开发"
+        # 留空 = 运行期按推断根 basename 推导
+        project: ""
         compression:
           enabled: true
           # 留空 = 启动时自动探测宿主版本（asar 的 package.json）
@@ -25,5 +27,6 @@
         reinjection:
           maxFailures: 3
         diagnostics:
-          # 首次安装/升级验证用；写一行 apply 记录，不写正文
-          logFile: "D:/DS-PROJECT/DSH插件开发/logs/governance.log"
+          # 包内默认关闭；需要安装/升级诊断时由用户 profile patch 配绝对路径
+          # （非空相对路径会被 CONFIG 拒绝，避免写进进程 cwd）
+          logFile: ""
