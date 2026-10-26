@@ -45,6 +45,9 @@ export const AUDIT_FIELD_WHITELIST = Object.freeze({
   from: 'text',
   to: 'text',
   compactionId: 'id',
+  /** S1.3：迟到回填的审计字段——短 id 与延迟毫秒（需求 2026-10-27 一致性审：缺白名单会静默丢弃）。 */
+  compactionShortId: 'id',
+  reconcileDelayMs: 'number',
   cycle: 'id',
   manual: 'boolean',
   count: 'number',
@@ -171,6 +174,8 @@ export const AUDIT_EVENTS = Object.freeze([
   'early-failed',
   // S1.1：early 等本 cycle 报告未命中时的诊断行（reason=timeout|mismatch|error）。
   'early-report-wait',
+  // S1.3：报告晚到后按同 session+cycle 追加的回填行（不改写 early-forced 主记录）。
+  'early-forced-reconciled',
   'early-start-timeout',
   'early-start-reused',
   'early-start-missing',
