@@ -73,12 +73,97 @@ async function until(check, timeoutMs = 4000) {
 }
 
 async function close(cleanups) {
+  // apply() registers one lifecycle effect that awaits guardPool.closeAll()
+  // (guards + their stores) and then pool.closeAll(); do not skip it.
+  const failures = [];
   for (const factory of cleanups.splice(0).reverse()) {
     try {
       const cleanup = factory();
       if (typeof cleanup === 'function') await cleanup();
-    } catch {
-      /* ignore */
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length > 0) throw failures[0];
+  // Let any already-queued cleanup microtasks settle before removing the tree.
+  await new Promise((resolve) => setImmediate(resolve));
+}
+
+async function describeTree(root) {
+  const rows = [];
+  async function walk(dir, rel = '') {
+    let entries;
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch (error) {
+      rows.push({ path: rel || '.', kind: 'unreadable', code: error?.code ?? null });
+      return;
+    }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      const relative = rel === '' ? entry.name : path.join(rel, entry.name);
+      let stat = null;
+      try {
+        stat = await fs.lstat(full);
+      } catch (error) {
+        rows.push({ path: relative, kind: 'stat-failed', code: error?.code ?? null });
+        continue;
+      }
+      if (stat.isDirectory()) {
+        rows.push({ path: relative, kind: 'dir', mtimeMs: stat.mtimeMs });
+        await walk(full, relative);
+      } else {
+        rows.push({
+          path: relative,
+          kind: stat.isFile() ? 'file' : 'other',
+          size: stat.size,
+          mtimeMs: stat.mtimeMs,
+        });
+      }
+    }
+  }
+  await walk(root);
+  return rows;
+}
+
+/**
+ * Remove the test tree after all lifecycle cleanups have been awaited.
+ * ENOTEMPTY on Windows is diagnosed before the single retry; a leftover lock
+ * or temp file is treated as an unreleased-handle signal, not retried away.
+ */
+async function removeTree(root, label) {
+  const options = { recursive: true, force: true, maxRetries: 0 };
+  try {
+    await fs.rm(root, options);
+    return;
+  } catch (error) {
+    if (error?.code !== 'ENOTEMPTY') {
+      const tree = await describeTree(root);
+      console.error(`[${label}] cleanup failed: ${error?.code ?? error}`, { tree });
+      throw error;
+    }
+
+    const tree = await describeTree(root);
+    const suspicious = tree.filter((row) => (
+      /(^|[\\/])(?:\.writer\.json|\.tmp|[^\\/]*\.tmp|protection)([\\/]|$)/.test(row.path)
+    ));
+    console.error(`[${label}] ENOTEMPTY before one retry`, { tree, suspicious });
+    if (suspicious.length > 0) {
+      console.error(`[${label}] possible unreleased handle/lock; retry suppressed`, { suspicious });
+      throw error;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    try {
+      await fs.rm(root, options);
+    } catch (retryError) {
+      const afterRetry = await describeTree(root);
+      console.error(`[${label}] ENOTEMPTY after one retry`, {
+        original: error?.code ?? String(error),
+        retry: retryError?.code ?? String(retryError),
+        tree: afterRetry,
+      });
+      throw error; // preserve the original failure
     }
   }
 }
@@ -159,7 +244,7 @@ test('P2/删状态（默认空根）：A 重推 inferred-fresh；A 旧记忆可�
     }
   } finally {
     await close(ctx1.cleanups);
-    await fs.rm(base, { recursive: true, force: true });
+    await removeTree(base, 'p2-negative-state');
   }
 });
 
@@ -188,7 +273,7 @@ test('P2/删状态（configRoot）：回落 configRoot、不重推', async () =>
       await close(ctx2.cleanups);
     }
   } finally {
-    await fs.rm(base, { recursive: true, force: true });
+    await removeTree(base, 'p2-negative-state');
   }
 });
 
@@ -237,6 +322,6 @@ test('P2/并发：同根两会话串行不丢写；不同根并发；第二 stor
     }
   } finally {
     await close(ctx.cleanups);
-    await fs.rm(base, { recursive: true, force: true });
+    await removeTree(base, 'p2-negative-state');
   }
 });
