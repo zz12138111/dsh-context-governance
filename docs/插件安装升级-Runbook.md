@@ -1,9 +1,12 @@
 # 真插件安装/升级 Runbook（`dsh-context-governance`）
 
-> 状态：**已在本机执行过安装（v0.1.5）**；本文档仍由 00/用户照着操作，开发会话不安装、不重启、不改 `cordis.patch.yml`。
-> 适用：本机 DSH Desktop `0.2.1-rc.3`（asar；旧运行缓存可能显示 rc.2），profile = `C:\Users\19091\.dsh\profiles\desktop`。
+> 状态：**1.0 已执行（2026-10-26：隔离 profile 装/卸/回滚全过；见 `analysis/req-20261025-12/1.0-10条-复验/08-install/`）**。本文档由 00/用户照着操作；开发会话不安装、不重启、不改 `cordis.patch.yml`。
+> 适用：DSH Desktop `0.2.1-rc.3`（asar；旧运行缓存可能显示 rc.2），profile 目录 = `<profile-dir>`（例如 `$DSH_HOME/profiles/desktop`）。
 > 改动依据：2026-10-25 实测——`dsh plugin add` 会 prune（`Packages: -33`）、把 compression redirect 挪进 `node_modules\.ignored`、并用 `link:` 写 lock；本 Runbook **完全绕开 pnpm**。
 > 相关：架构 §10“安装/升级约束”；`packages/dsh-context-governance/cordis.patch.yml`；`packages/cg-stub/README.md`（redirect 恢复脚本）。
+>
+> 路径约定：`<repo>` = 本插件源码/发布包所在目录；`<profile-dir>` = 目标 profile；`<shared>` = 校验脚本目录。
+
 
 ---
 
@@ -12,12 +15,28 @@
 **方案：`file:` 声明 + Windows junction 落位 + bundle 自动登记；不运行 pnpm。**
 
 - profile `package.json`：
-  - `dependencies["dsh-context-governance"] = "file:D:/DS-PROJECT/DSH插件开发/packages/dsh-context-governance"`
+  - `dependencies["dsh-context-governance"] = "file:<repo>/packages/dsh-context-governance"`
   - `dsh.profile.bundles` 追加 `"dsh-context-governance"`
 - `node_modules\dsh-context-governance`：目录 junction → 插件包目录。
 - 插件包自带 `dsh.bundle.patch`，loader 会读 `cordis.patch.yml` 插入行；**不需要改 profile 的 `cordis.patch.yml`**。
 - **不运行** `pnpm install`、`dsh plugin add/remove`；**不跑** `pnpm install --lockfile-only`（见 §1.3）。
 - 红线：不 `RunAs`、不代点 UAC、不重启由开发执行；所有命令由 00/用户在自己会话里跑。
+
+### 0.1 1.0 安装契约（D9=A / logFile / project / profile）
+
+- **根来源 D9=A**：发布包默认 `projectRoot: ""`（不预填本机路径）。插件在**首个带 cwd 的会话事件**上按
+  `session.header.cwd` 上溯最近的含 `.git` 祖先，`realpath` + 盘符归一后**原子持久化**到
+  `<pc.home>/context-governance/root-state-<profile>.json`（取不到绝对 `home` 时落 `<pc.dir>/context-governance/root-state.json`）。
+  **重启沿用、不重新推断**；推断失败 = 该会话 `no-project-root` skip，不换根、不落盘。
+- **logFile**：发布包默认 `logFile: ""`（关闭，不建文件、不报错、不写进程 cwd）。要采集安装/升级诊断时，
+  在**用户 profile patch** 里配**绝对路径**；非空相对路径会被 `resolveConfig` 以 `CONFIG` 拒绝
+  （避免 `path.resolve` 落到应用安装目录）。
+- **project**：发布包默认 `project: ""`，运行期由推断出的项目根 `basename` 自动补；`/cg status` 的
+  `memory:`、审计成本行、记忆条目 project 均显示该值。
+- **/cg profile**：`/cg profile [status|reset|<batch|coding|review|research>]` 给**当前会话**打 profile 标签；
+  只影响本会话、进程内不持久化（重启回配置/默认）。`/cg set profile=...` 会按未知键拒绝——**唯一入口是本命令**。
+- **隔离安装结论**：`file:` 声明 + Windows junction + `dsh.profile.bundles` 登记，**不跑 pnpm / 不跑
+  `dsh plugin add/remove`**；隔离 profile 演练通过装→验→卸→回滚 v0.2.1（见 §2.1 与 08-install 证据）。
 
 ---
 
@@ -44,17 +63,32 @@
 
 ---
 
-## 2. 基线（2026-10-25 恢复后实测）
+## 2. 基线（安装前现测，不写死数字）
 
-| 项 | 当前值 |
+| 项 | 取值方式 |
 |---|---|
-| profile dependencies | **13** |
-| `dsh.profile.bundles` | **16** |
-| compression redirect（`node_modules\@deepseek-ai\dsh-compaction-basic\package.json`） | **0.1.0-context-zip** |
-| `dsh-context-governance` 依赖 / bundle | 均不存在 |
-| `logs\cg-stub.log` | 已有 5 次 apply（探针验证完成的遗留） |
+| profile dependencies | 安装前读 `package.json` 的 `dependencies` 数量（记为 N） |
+| `dsh.profile.bundles` | 安装前读 `dsh.profile.bundles` 数量（记为 B） |
+| compression redirect（`node_modules\@deepseek-ai\dsh-compaction-basic\package.json`） | 若存在记版本；本 Runbook 不做 pnpm，**不得变化** |
+| `dsh-context-governance` 依赖 / bundle | 安装前应均不存在 |
+| 插件源码目录 | `<repo>/packages/dsh-context-governance`（junction 目标） |
 
-**安装成功后应变为**：dependencies **14**、bundles **17**、redirect **0.1.0-context-zip**（不变）、`logs\governance.log` 出现一行 apply。
+**安装成功后应变为**：dependencies **N+1**、bundles **B+1**、redirect **不变**、`logs/governance.log` 出现
+`capability@apply`/`apply` 行（若启用诊断）。
+
+### 2.1 隔离安装演练结论（2026-10-26，`cg-install-test`）
+
+- 预检：空 profile 独立进程/端口/profile 目录；desktop 三快照（package/patch hash、junction、node_modules 数、bundles）完全一致。
+- 安装：deps 0→1、bundles 2→3、junction 解析正常；`apply version=1.0.0`；D9=A 首次推断出
+  `<repo>`，状态文件落 `<home>/context-governance/root-state-cg-install-test.json`；
+  `/cg status` 显示 `project-root: … (source=inferred, inferred-fresh)`、`memory: project=DSH插件开发`、
+  `memory root=…\.tmp\cg-install-ws\memory\governance`。
+- 卸载：profile 回装前（deps 1→0、bundles 3→2、junction 删除）；`--dump-config` 无插件；`/cg` 命令不存在；
+  源目录/隔离记忆保留；**用户级状态文件不删**。
+- 回滚：`v0.2.1`（tag `f585434`）worktree 安装 → `apply version=0.2.1`、`/cg` 命令正常；收尾回 clean。
+- 收尾：隔离 profile 删除、18769/18770 无监听、worktree 删除；desktop 最终快照与预检前 hash 一致。
+- **未验证**：真实 `/compact` 四件套（未触发，不声称）；外部会话 skip 引用 2b 已签真机证据，未重复采样。
+- 证据：`analysis/req-20261025-12/1.0-10条-复验/08-install/`（README、状态文件、status 原文、审计/日志、包面扫描）。
 
 ---
 
@@ -67,7 +101,7 @@
 Get-Process | Where-Object { $_.ProcessName -eq 'DeepSeek Harness' } | Select-Object Id,ProcessName
 
 $prof   = Join-Path $env:USERPROFILE '.dsh\profiles\desktop'
-$plugin = 'D:\DS-PROJECT\DSH插件开发\packages\dsh-context-governance'
+$plugin = '<repo>\packages\dsh-context-governance'
 $stamp  = Get-Date -Format 'yyyyMMdd-HHmmss'
 $backup = Join-Path $prof ".backup-cg-$stamp"
 New-Item -ItemType Directory -Force $backup | Out-Null
@@ -81,7 +115,7 @@ Copy-Item (Join-Path $prof 'node_modules\@deepseek-ai\dsh-compaction-basic') `
 Write-Host "backup -> $backup"
 
 # 2) 环境自检：与装前基线一致即可；不应新增 MISSING/WARN（退出码 0）
-pwsh -NoProfile -File 'D:\DS-PROJECT\_shared\check-env.ps1'
+pwsh -NoProfile -File '<shared>\check-env.ps1'
 
 # 3) `.dsh` JSON 不得有 BOM（期望无输出）
 Get-ChildItem "$env:USERPROFILE\.dsh" -Recurse -File -ErrorAction SilentlyContinue |
@@ -107,7 +141,7 @@ $before = Get-CgProfileState
 $before | Format-List
 ```
 
-期望：`dependencies=13`、`bundles=16`、`redirect=0.1.0-context-zip`、两个 plugin 标记 `False`。
+期望：`dependencies`/`bundles` 等于 §2 记录的 N/B（本机历史基线为 13/16，1.0 以现测为准）、`redirect` 与安装前一致、两个 plugin 标记 `False`。
 
 ---
 
@@ -115,7 +149,7 @@ $before | Format-List
 
 ```powershell
 $prof   = Join-Path $env:USERPROFILE '.dsh\profiles\desktop'
-$plugin = 'D:\DS-PROJECT\DSH插件开发\packages\dsh-context-governance'
+$plugin = '<repo>\packages\dsh-context-governance'
 
 # 5) 建 junction（已存在就停手，按回滚/旧安装处理）
 $link = Join-Path $prof 'node_modules\dsh-context-governance'
@@ -130,7 +164,7 @@ node --input-type=module -e @'
 import fs from 'node:fs';
 const file = process.env.CG_PROFILE_JSON;
 const name = 'dsh-context-governance';
-const spec = 'file:D:/DS-PROJECT/DSH插件开发/packages/dsh-context-governance';
+const spec = 'file:<repo>/packages/dsh-context-governance';
 const manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
 manifest.dependencies ??= {};
 if (manifest.dependencies[name] !== undefined) throw new Error('dependency already present: ' + name);
@@ -159,7 +193,7 @@ if ($after.redirect -ne $before.redirect) { throw 'redirect 版本变了，按 �
 if (-not ($after.pluginDep -and $after.pluginBundle)) { throw 'plugin 依赖或 bundle 未登记，回滚' }
 
 # 9) 重复装后检查：check-env 全绿 + BOM 扫描无输出
-pwsh -NoProfile -File 'D:\DS-PROJECT\_shared\check-env.ps1'
+pwsh -NoProfile -File '<shared>\check-env.ps1'
 Get-ChildItem "$env:USERPROFILE\.dsh" -Recurse -File -ErrorAction SilentlyContinue |
   Where-Object { $_.Extension -eq '.json' -and $_.FullName -notmatch '\\node_modules\\' } |
   ForEach-Object {
@@ -178,7 +212,7 @@ Get-ChildItem "$env:USERPROFILE\.dsh" -Recurse -File -ErrorAction SilentlyContin
 2. 等 10 秒，检查启动记录：
 
 ```powershell
-Get-Content 'D:\DS-PROJECT\DSH插件开发\logs\governance.log' -Tail 3
+Get-Content '<repo>\logs\governance.log' -Tail 3
 ```
 
 **期望两行**（时间/pid/host 可不同；v0.1.3 起）：
@@ -193,8 +227,20 @@ Get-Content 'D:\DS-PROJECT\DSH插件开发\logs\governance.log' -Tail 3
 - `audit=…`：`audit.jsonl` 在 apply 时即创建，首行是 `{"event":"apply",…}`。
 - 没有这两行：按 §7 排查，不要反复重启。
 
+**1.0（D9=A）装后必须能看出根/记忆/来源**：
+- 首个带 cwd 的会话事件后，`/cg status` 应出现
+  `project-root: <repo> (source=inferred, inferred-fresh)`（重启后为 `source=persisted`）、
+  `persistence-identity: source=profileContext name=<profile> … path=<home>/context-governance/root-state-<profile>.json`、
+  `memory: project=<推断根 basename> root=<repo>/<memoryRoot>`；
+- 状态文件 `root-state-<profile>.json` 内容为 `{version:1, root, source:"inferred", inferredAt, inferredFromCwd, instance:{profile}}`；
+- **重启不得出现**新的 `inferred-fresh`/`project-root-changed`，状态文件 hash/mtime 不变（沿用不重推）；
+- 根未知时 `/cg status` 显示 `project-root: unknown (no-project-root)`，记忆工具/header/提前压不挂载（fail-closed）。
+
 3. 工具面（可选人工确认）：新开一个会话，让模型调用 `mem_query`/`mem_write` 或查看工具列表；能调用即注册成功。
-4. 再跑一遍装后状态（不要重装）：
+4. 命令面：`/cg status`、`/cg policy show`、`/cg set`、`/cg profile [status|reset|<batch|coding|review|research>]`、
+   `/cg header [status|on|off]`、`/cg compact [status|arm|disarm]`。`/cg profile` 只影响当前会话、进程内不持久化；
+   `/cg set profile=...` 会按未知键拒绝。
+5. 再跑一遍装后状态（不要重装）：
 
 ```powershell
 $prof = Join-Path $env:USERPROFILE '.dsh\profiles\desktop'
@@ -210,7 +256,7 @@ function Get-CgProfileState {
   }
 }
 Get-CgProfileState | Format-List      # 14 / 17 / 0.1.0-context-zip / True / True
-pwsh -NoProfile -File 'D:\DS-PROJECT\_shared\check-env.ps1'
+pwsh -NoProfile -File '<shared>\check-env.ps1'
 ```
 
 ---
@@ -277,7 +323,7 @@ if ($redirectVersion -ne '0.1.0-context-zip') { throw "redirect 版本不对: $r
 $b = [IO.File]::ReadAllBytes((Join-Path $prof 'package.json'))
 if ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF) { throw 'package.json 有 BOM' }
 node -e "JSON.parse(require('node:fs').readFileSync(process.env.CG_PROFILE_JSON,'utf8')); console.log('json ok')"
-pwsh -NoProfile -File 'D:\DS-PROJECT\_shared\check-env.ps1'
+pwsh -NoProfile -File '<shared>\check-env.ps1'
 ```
 
 - **不强还原**：`cordis.patch.yml`、`pnpm-lock.yaml` 在 §4 安装步骤里没有改过；若它们与备份不同，说明另有改动，默认保留现状。需要比对时先看 diff：
@@ -321,7 +367,7 @@ DSH 启动失败诊断：CLI 路径会写 `%USERPROFILE%\.dsh\logs\startup-*.log
 ## 8. 升级
 
 1. 完整退出 DSH。
-2. 更新 `D:\DS-PROJECT\DSH插件开发\packages\dsh-context-governance\` 源码（junction 自动指向新内容；同名同路径无需改 manifest）。
+2. 更新 `<repo>\packages\dsh-context-governance\` 源码（junction 自动指向新内容；同名同路径无需改 manifest）。
 3. 改插件版本号后，启动自检看 `logs\governance.log` 的 `version=`。
 4. 若插件**路径或包名**变了：删旧 junction、建新 junction、更新 `dependencies` 的 `file:` 值；bundle 名不变则无需动 `dsh.profile.bundles`。
 5. 若 `cordis.patch.yml` 的 config 变了：随包生效，重启即可；**不要**在 profile patch 里重复插入同一 `id`。
@@ -334,13 +380,17 @@ DSH 启动失败诊断：CLI 路径会写 `%USERPROFILE%\.dsh\logs\startup-*.log
 - [ ] DSH 已完整退出（`Get-Process` 无输出）
 - [ ] 备份目录已生成（manifest/lock/patch/redirect 四份）
 - [ ] 装前 `check-env.ps1` 无新增 MISSING/WARN、`.dsh` JSON 无 BOM
-- [ ] 基线：deps 13 / bundles 16 / redirect 0.1.0-context-zip
+- [ ] 基线：deps N / bundles B / redirect 0.1.0-context-zip（按 §2 现测）
 - [ ] junction 存在且 `cordis.patch.yml`、`src\index.js` 可见
 - [ ] manifest 写入后无 BOM、`JSON.parse` 通过、`createRequire` 能解析
-- [ ] 装后：deps 14 / bundles 17 / redirect 不变 / pluginDep=true / pluginBundle=true
+- [ ] 装后：deps N+1 / bundles B+1 / redirect 不变 / pluginDep=true / pluginBundle=true
 - [ ] 装后 `check-env.ps1` 全绿、BOM 扫描无输出
-- [ ] 重启后 `logs\governance.log` 有 `capability version=<package.json 版本>` 与 `apply version=<同版本>` 两行
+- [ ] 重启后 `logs\governance.log` 有 `capability@apply` 与 `apply version=<package.json 版本>` 两行
 - [ ] apply 行含 `perception=event`、`event-api=on`、`audit=…audit.jsonl`；`audit.jsonl` 首行为 `event=apply`
+- [ ] 首个项目会话后 `/cg status` 显示 `project-root`（`source=inferred|persisted`）、`persistence-identity`、`memory: project=<basename> root=…`
+- [ ] 状态文件 `root-state-<profile>.json` 落在该 profile 身份路径；重启后 hash/mtime 不变、无新 `inferred-fresh`
+- [ ] `/cg profile status` 可用；`/cg set profile=...` 被按未知键拒绝（1.0 新入口）
+- [ ] 包内 `diagnostics.logFile` 为空（默认关闭）；如需诊断在 profile patch 配**绝对路径**
 - [ ] 任意会话能看到 `mem_write` / `mem_query`
 - [ ] 回滚路径已读一遍（§6），备份目录位置已记下
 
