@@ -12,6 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { detectSensitive } from './memory/contract.js';
+import { isUserLevelPath, rootAuditFile } from './roots/paths.js';
 
 const MAX_MEMORY_ENTRIES = 200;
 
@@ -25,6 +26,15 @@ export const AUDIT_FIELD_WHITELIST = Object.freeze({
   sessionId: 'id',
   sessionShortId: 'id',
   root: 'text',
+  rootId: 'text',
+  rootCount: 'number',
+  managed: 'boolean',
+  fromVersion: 'number',
+  toVersion: 'number',
+  backupPath: 'text',
+  violation: 'text',
+  target: 'text',
+  subagent: 'boolean',
   name: 'text',
   dir: 'text',
   home: 'text',
@@ -156,6 +166,22 @@ export const AUDIT_EVENTS = Object.freeze([
   'project-root-changed',
   'inferred-fresh',
   'no-project-root',
+  // P1：根 registry / 审计双通道（root audit）；单根会话事件仍写 per-root audit。
+  'root-registered',
+  'root-migrated',
+  'root-state-corrupt',
+  'root-state-write-failed',
+  'root-state-unsupported-version',
+  'root-entry-invalid',
+  'root-id-collision',
+  'root-fail-closed',
+  'root-limit-warn',
+  'root-audit-unavailable',
+  'containment-violation',
+  'root-unmanaged',
+  'root-drift',
+  // P2 预留：mem_* 根路由拒绝。
+  'memory-tool-rejected',
 ]);
 
 function redactText(value) {
@@ -212,8 +238,7 @@ export function sanitizeAuditDetails(details) {
   return out;
 }
 
-export class AuditLog {
-  #file;
+export class AuditLog {  #file;
   #now;
   #memory = [];
   #maxBytes;
@@ -352,5 +377,24 @@ export class AuditLog {
     const sorted = [...samples].sort((left, right) => left - right);
     const pick = (ratio) => sorted[Math.min(Math.max(Math.ceil(ratio * sorted.length) - 1, 0), sorted.length - 1)];
     return { count: sorted.length, p50Ms: pick(0.5), p95Ms: pick(0.95), maxMs: sorted[sorted.length - 1], minMs: sorted[0] };
+  }
+}
+
+/**
+ * P1：创建 profile 级 root audit（用户级 `root-audit-<profile>.jsonl`）。
+ * 身份不可用/路径不在白名单 → null（调用方降级到 logger）。
+ */
+export function createRootAudit(identity, { maxBytes, now } = {}) {
+  if (identity === null || typeof identity !== 'object' || identity.ok !== true) return null;
+  const file = rootAuditFile(identity);
+  if (file === null || !isUserLevelPath(identity, file)) return null;
+  try {
+    return new AuditLog({
+      file,
+      ...(Number.isFinite(maxBytes) ? { maxBytes } : {}),
+      ...(typeof now === 'function' ? { now } : {}),
+    });
+  } catch {
+    return null;
   }
 }

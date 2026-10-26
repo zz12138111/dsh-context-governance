@@ -19,7 +19,7 @@ import { detectHostVersion, normalizeBackendVersion } from './compress/adapters.
 import { CompressionGuard } from './compress/runtime.js';
 import { wireEarlyCompaction } from './compress/early-wiring.js';
 import { formatCapability, probeCapability } from './capabilities.js';
-import { DEFAULT_AUDIT_MAX_BYTES, MAX_AUDIT_MAX_BYTES, MIN_AUDIT_MAX_BYTES } from './audit.js';
+import { DEFAULT_AUDIT_MAX_BYTES, MAX_AUDIT_MAX_BYTES, MIN_AUDIT_MAX_BYTES, createRootAudit } from './audit.js';
 import { appendDiagnosticLine, capabilityLine, PLUGIN_VERSION, startupLine } from './diagnostics.js';
 import { DEFAULT_MEMORY_DIR, MemoryStore, MemoryStoreError } from './memory/store.js';
 import { registerMemoryHeader } from './memory/header.js';
@@ -534,6 +534,8 @@ export async function apply(ctx, rawConfig = {}) {
   }
   // 2a：根来源 显式配置 > 持久化 > 首次推断（首次推断在首个会话事件时做）。
   const identity = resolvePersistenceIdentity(ctx);
+  // P1：profile 级 root audit（用户级）。身份不可用 → 不写用户级文件（fail-closed）。
+  const rootAudit = identity.ok ? createRootAudit(identity, { maxBytes: config.audit.maxBytes }) : null;
   const persisted = identity.ok ? readRootState(identity.stateFile) : null;
   const configuredRoot = config.projectRoot === '' ? null : config.projectRoot;
   // 根变化可见（§11.1-6）：config 覆盖持久化根，或 config 移除后回落持久化根。
@@ -555,6 +557,21 @@ export async function apply(ctx, rawConfig = {}) {
     inferredFromCwd: null,
     statePersisted: null,
   };
+
+  // P1：身份事件写 root audit（不再写 per-root audit；见设计评审 §4.2）。
+  try {
+    rootAudit?.append?.('persistence-identity', {
+      source: identity.ok ? 'profileContext' : 'unavailable',
+      name: identity.name ?? null,
+      dir: identity.dir ?? null,
+      home: identity.home === null || identity.home === undefined ? 'absent' : 'present',
+      anchor: identity.anchor ?? null,
+      path: rootInfo.stateFile ?? null,
+      reason: identity.reason ?? null,
+    });
+  } catch {
+    /* 审计失败不影响主流程 */
+  }
 
   const startRuntime = async (root, source) => {
     rootInfo.root = root;
@@ -854,6 +871,7 @@ export async function apply(ctx, rawConfig = {}) {
       store,
       getGuard: () => guard,
       audit: guard?.auditLog ?? null,
+      rootAudit,
       policy: policyState,
       logger: ctx.logger,
       getEarlyStatus: () => (earlyWiring === null ? null : earlyWiring.getLast()),
@@ -901,19 +919,10 @@ export async function apply(ctx, rawConfig = {}) {
       );
     }
 
-    // 2a：身份与根变化留痕（有 audit 时；无 store 时由 diagnostics 行承担）。
+    // 2a：根变化留痕（P1 起身份/根生命周期事件写用户级 root audit；per-root 只留会话事件）。
     try {
-      guard?.auditLog?.append?.('persistence-identity', {
-        source: identity.ok ? 'profileContext' : 'unavailable',
-        name: identity.name ?? null,
-        dir: identity.dir ?? null,
-        home: identity.home === null || identity.home === undefined ? 'absent' : 'present',
-        anchor: identity.anchor ?? null,
-        path: rootInfo.stateFile ?? null,
-        reason: identity.reason ?? null,
-      });
       if (source === 'inferred') {
-        guard?.auditLog?.append?.('inferred-fresh', {
+        rootAudit?.append?.('inferred-fresh', {
           root,
           path: rootInfo.stateFile ?? null,
           ...(rootInfo.inferredFromCwd === null ? {} : { inferredFromCwd: rootInfo.inferredFromCwd }),
@@ -921,7 +930,7 @@ export async function apply(ctx, rawConfig = {}) {
         });
       }
       if (rootInfo.changedFrom !== null) {
-        guard?.auditLog?.append?.('project-root-changed', { from: rootInfo.changedFrom, to: root, source });
+        rootAudit?.append?.('project-root-changed', { from: rootInfo.changedFrom, to: root, source });
       }
     } catch {
       /* 审计失败不影响主流程 */
@@ -964,6 +973,7 @@ export async function apply(ctx, rawConfig = {}) {
       policy: null,
       getGuard: () => null,
       audit: null,
+      rootAudit,
       getEarlyStatus: () => null,
       getRootInfo: () => rootInfo,
       getPersistenceIdentity: () => identity,

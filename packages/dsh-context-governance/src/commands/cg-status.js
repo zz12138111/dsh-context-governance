@@ -90,7 +90,7 @@ function formatEarlyStatus(earlyStatus) {
   return `last-early: ${event}${reason}${effective}${at}`;
 }
 
-function statusText({ store, guard, audit, now, policy = null, earlyStatus = null, sessionId = null, rootInfo = null, identity = null }) {
+function statusText({ store, guard, audit, rootAudit = null, now, policy = null, earlyStatus = null, sessionId = null, rootInfo = null, identity = null }) {
   const lines = [];
   const status = guard?.status ?? null;
   lines.push('context-governance status');
@@ -272,6 +272,17 @@ function statusText({ store, guard, audit, now, policy = null, earlyStatus = nul
   } else {
     lines.push('audit: unavailable');
   }
+  // P1：用户级 root audit（根生命周期事件）与 per-root audit 分开显示。
+  if (rootAudit !== null) {
+    const rootFailures = rootAudit.entries()
+      .filter((entry) => /failed|corrupt|collision|violation/.test(entry.event))
+      .slice(-5)
+      .map((entry) => entry.event);
+    lines.push(
+      `root-audit: file=${rootAudit.file ?? '-'} max=${rootAudit.maxBytes ?? '-'} size=${rootAudit.sizeBytes ?? '-'} ` +
+      `rotations=${rootAudit.rotations ?? 0} failures=${rootFailures.join(',') || 'none'} (this-process)`,
+    );
+  }
   return lines.join('\n');
 }
 
@@ -280,7 +291,7 @@ function statusText({ store, guard, audit, now, policy = null, earlyStatus = nul
  *
  * @param {{store?:object|null, guard?:object|null, getGuard?:() => object|null, audit?:object|null, now?:() => Date}} options
  */
-export function createStatusCommand({ store = null, guard = null, getGuard = null, audit = null, policy = null, now = () => new Date(), logger = null, getEarlyStatus = null, sessionIdOf = defaultSessionIdOf, getRootInfo = null, getPersistenceIdentity = null } = {}) {
+export function createStatusCommand({ store = null, guard = null, getGuard = null, audit = null, rootAudit = null, policy = null, now = () => new Date(), logger = null, getEarlyStatus = null, sessionIdOf = defaultSessionIdOf, getRootInfo = null, getPersistenceIdentity = null } = {}) {
   const currentGuard = () => (typeof getGuard === 'function' ? getGuard() : guard);
 
   const parseBoolean = (text) => {
@@ -645,6 +656,7 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
             store,
             guard: currentGuard(),
             audit,
+            rootAudit,
             now,
             policy,
             earlyStatus: typeof getEarlyStatus === 'function' ? getEarlyStatus() : null,
