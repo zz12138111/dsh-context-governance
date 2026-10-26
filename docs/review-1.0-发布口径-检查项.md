@@ -187,4 +187,6 @@
 - 2026-10-26 夜（收敛完成）：需求 **v0.6 `416fac6` = 单根模型**唯一权威（v0.5 两模式与 D8 作废）；第 1/11 条判据与 §4.5 已按单根+持久化一次性对齐，撤销待收敛标记；三枚举统一 foreign-session / no-project-root / out-of-scope。仅剩 **D9 默认根来源 A/B** 由用户定。2a 18–27h、总账 60–94h、重启 7 次；门禁补 2a/2b 各一次真机（推断根首次 / 重启沿用 / 变化可见）。
 - 2026-10-26 夜（载体）：开发自选 **A 用户级状态文件**（不选 B=运行期改宿主配置；C 仅索引、D 待查 API、E 违反重启沿用）。设计要点：`\/context-governance/root-state-<profile>.json`，键 `DSH_PROFILE`，字段 version/root/source/inferredAt/inferredFromCwd/instance.profile；身份前置 0.5h（看不到 env 就 fail-closed 不落盘）。9 条验收点已并入第 11 条并补 4 条：**并发首推（wx/锁，只一个胜出）**、**config 移除后回落持久化根要审计+文档**、**状态文件 schema/路径校验**、**进包扫描 0 命中**。
 - 2026-10-26（1a/1b 真机签收）：探针 `b23b74d`+`5992cdd` 取证，证据 json sha256 `05d1f6f7…729540`；`command/run` 10 + `done` 10、审计全+短 id、`profile review` source=session at=0.55；回退 `251b6df`、HEAD `3d78b19`、`src` 对 `d05c1eb` 0 残留、marker 已删、干净重启无新探针文件、全量 348/348。**#6/#7 正式签收（单测+真机）**。
+- 2026-10-26（2a 签收）：单测 **377/377**（我跑）+ 真机核心通过——首次推断（root=repo、source=inferred、inferredFromCwd 同根）、持久化（C:\Users\19091\.dsh\context-governance\root-state-desktop.json，sha256 E254490B…C767AA）、二次重启沿用不重推（pid 19664；mtime/hash 不变；无 inferred-fresh/oot-unknown/
+o-project-root）。**真机待补（I3 前）**：双 profile、根变化可见、/cg status 文本（均有单测）。#11 状态=单测+真机核心签收。
 
