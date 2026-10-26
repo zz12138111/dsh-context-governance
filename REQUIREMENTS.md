@@ -412,7 +412,7 @@
 |---|---|---|---|---|
 | `compact.at` | 真实占窗口比例到多少就压 | `0.60` | `0.20` ~ dynamic native | 是 |
 | `compact.early` | 允许提前压 | `true` | bool | 是 |
-| `compact.early.armed` | 允许**真实执行**提前压（0.2.4 启用方案；项目层出现不生效） | `true`（来源 `default`） | bool | 是 |
+| `compact.early.armed` | 允许**真实执行**提前压（0.2.4 启用方案；项目层出现不生效） | `true`（来源 `default`） | bool | **否（用 `/cg compact arm\|disarm`）** |
 | `compact.cooldownMin` | 两次压缩最小间隔 | `10` 分钟 | ≥1 | 是 |
 | `compact.minDeltaTokens` | 距上次压缩至少新增 token | `20000` | ≥0 | 是 |
 | `compact.estimateSafety` | 估算放大系数（专家项） | `1.35` | `1.0–1.6` | **否**（仅配置） |
@@ -436,13 +436,13 @@
 
 | # | 条目 | 原文 / 来源 | 状态 |
 |---|---|---|---|
-| A5 | 会话级止损命令 | `/cg compact arm` / `/cg compact disarm`；`docs/1.0-状态定义-v1.md:66`；`TASKS/REQ-20261025-09-提前压启用-拆解.md:42` | 已录（见补定义 D2） |
-| B5 | 会话层可设键 | 参数表「可 `/cg set`」列（`docs/M2-需求草案-v0.6.md:61-70`）：`compact.at` / `compact.early` / `compact.early.armed` / `compact.cooldownMin` / `compact.minDeltaTokens` / `cost.remainingTurns` / `reinject.maxChars`、`maxLines`；`compact.estimateSafety` / `compact.lowThresholdAck` 仅配置文件 | 已录 |
+| A5 | 会话级止损命令 | `/cg compact arm` / `/cg compact disarm`（**名称以实现为准**——`TASKS:42` 原话「建议命名，开发可改」）；`docs/1.0-状态定义-v1.md:66` | 已录（见补定义 D2） |
+| B5 | 会话层可设键 | **实现实采** `SESSION_KEYS`（`policy.js:26`）：`compact.at` / `compact.early` / `compact.cooldownMin` / `compact.minDeltaTokens` / `cost.remainingTurns` / `header.enabled`；`cg-status.js:290` 对非 `SESSION_KEYS` 按「未知键」拒绝。M2 参数表另写 `reinject.maxChars`/`maxLines` 为「是」，但**实现未支持**（不在 `SESSION_KEYS`）；`compact.estimateSafety` / `compact.lowThresholdAck` 仅配置文件 | 已录（按实现实采更正） |
 | C5 | profile 打标入口 | **已定（需求侧判定 D7）**：入口形态**由实现定**（命令 / 会话元数据 / 配置键均可），需求只约束效果——按会话隔离、`/cg status` 显示本会话 profile 与来源、设置立即生效（草案 `R-PROFILE-2`，草案未生效、用户可推翻） | **已定（需求侧）** |
 | D4 | 配置级关闭 | `compact.early.armed=false`（加载后全局）；与会话级（A5）、策略级（`compact.early=false`）构成三层（见补定义 E5） | 已录 |
 | E1 | `compact.early.armed` 参数 | 默认 `true`、来源 `default`；项目层出现一律不生效（忽略 + `policy-invalid`，不清空整层）（`docs/1.0-状态定义-v1.md:39,65`） | 已录（参数表已加行） |
 | E2 | 「本项目」判定 | **已定（需求侧，规则）**：本项目 = 项目根下的会话（单根模型：`R-MEMROOT-2` 根固定/推断并持久化 + `R-SCOPE-1` 据此判 `foreign-session`；草案未生效）；**根来源 A/B（空推断 vs 显式配置）本身待 D9（用户定）** | **已定（规则）/ 待定（根来源）** |
-| E4 | 默认值调整规则 | 全仓无「默认值变更/记录要求」规定；现状默认值见参数表 | **待定** |
+| E4 | 默认值调整规则 | 全仓无规定。**选项 A**：补一条「默认值变更须记 `DECISIONS` + Release 说明」；**选项 B**：不纳入 1.0、由用户定 | **待定（用户择 A/B）** |
 
 ### 会话特点与偏好
 
