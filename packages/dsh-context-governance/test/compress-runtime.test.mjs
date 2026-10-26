@@ -80,6 +80,48 @@ test('宿主默认：完整压缩事务产生 full 模式与通过报告', async
   guard.stop();
 });
 
+test('S1：waitForReport 在回注收尾后返回本 cycle 报告', async () => {
+  const ctx = makeCtx(new BasicCompactionEngine());
+  const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.2' });
+  guard.start();
+  const built = buildCompaction({ before: healthyMessages(), summary: FREE_FORM_SUMMARY, start: 2, end: 11 });
+  const pending = guard.waitForReport({ previousCompactionId: 'old', sessionId: built.session.id, timeoutMs: 200 });
+  emitAll(ctx, built);
+  const report = await pending;
+  assert.equal(report.compactionId, built.compactionId);
+  assert.equal(report.sessionId, built.session.id);
+  assert.equal(report.compaction, 'committed');
+  await flushEnd();
+  guard.stop();
+});
+
+test('S1：waitForReport 的默认硬上限是 500ms', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const ctx = makeCtx(new BasicCompactionEngine());
+  const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.2' });
+  let result = 'pending';
+  const pending = guard.waitForReport().then((value) => { result = value; });
+  t.mock.timers.tick(499);
+  await Promise.resolve();
+  assert.equal(result, 'pending', '499ms 不得提前超时');
+  t.mock.timers.tick(1);
+  await pending;
+  assert.equal(result, null);
+  guard.stop();
+});
+
+test('S1：waitForReport 不命中其他会话的报告', async () => {
+  const ctx = makeCtx(new BasicCompactionEngine());
+  const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.2' });
+  guard.start();
+  const built = buildCompaction({ before: healthyMessages(), summary: FREE_FORM_SUMMARY, start: 2, end: 11 });
+  const pending = guard.waitForReport({ previousCompactionId: 'old', sessionId: 'session-other', timeoutMs: 20 });
+  emitAll(ctx, built);
+  assert.equal(await pending, null);
+  await flushEnd();
+  guard.stop();
+});
+
 test('context-zip：识别五段摘要并保持 full', async () => {
   const ctx = makeCtx(new ContextZipEngine());
   const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.2', backendVersion: '0.1.10' });

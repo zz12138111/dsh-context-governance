@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { EARLY_DELAY_MS, wireEarlyCompaction } from '../src/compress/early-wiring.js';
+import { EARLY_DELAY_MS, EARLY_REPORT_WAIT_MS, wireEarlyCompaction } from '../src/compress/early-wiring.js';
 
 function makeCtx({ agent = { session: { id: 's1' } }, engine = null } = {}) {
   const handlers = [];
@@ -61,9 +61,9 @@ test('0.2.2 接线：armed=false 时静默（不审计、不取服务、不调�
 
 test('0.2.2 接线：armed=true + 压力在位 → early-decision + early-forced（带 protection/failures/reinjected）', async () => {
   const guard = makeGuard({
-    lastReport: { compactionId: 'old', compaction: 'skipped', protection: 'ok', failures: [], reinjected: null },
+    lastReport: { compactionId: 'old', sessionId: 's1', compaction: 'skipped', protection: 'ok', failures: [], reinjected: null },
   });
-  const fresh = { compactionId: 'new', compaction: 'committed', protection: 'failed', failures: [{ name: 'latest-user-message' }], reinjected: true };
+  const fresh = { compactionId: 'new', sessionId: 's1', compaction: 'committed', protection: 'failed', failures: [{ name: 'latest-user-message' }], reinjected: true };
   const engine = {
     calls: 0,
     async compactNow() { this.calls += 1; guard.status.lastReport = fresh; },
@@ -79,6 +79,7 @@ test('0.2.2 接线：armed=true + 压力在位 → early-decision + early-forced
   const forced = audit.entries[1];
   assert.equal(forced.accepted, true);
   assert.equal(forced.compaction, 'committed');
+  assert.equal(forced.compactionId, 'new');
   assert.equal(forced.protection, 'failed');
   assert.deepEqual(forced.failures, ['latest-user-message']);
   assert.equal(forced.reinjected, true);
@@ -89,6 +90,156 @@ test('0.2.2 接线：armed=true + 压力在位 → early-decision + early-forced
   assert.ok(info, 'T2 首触提示：必须写一行 logger info');
   assert.match(info[1], /effective=0\.\d{3} threshold=0\.\d{2} compactionId=new protection=failed/);
   assert.equal(info[1].includes('latest-user-message'), false, 'logger 不得带失败项/正文');
+});
+
+test('S1：即时命中——waitForReport 返回本 cycle 报告 → committed + host compactionId', async () => {
+  const guard = makeGuard({
+    lastReport: { compactionId: 'old', sessionId: 's1', compaction: 'skipped', protection: 'ok', failures: [], reinjected: null },
+  });
+  const fresh = {
+    compactionId: 'host-uuid-new',
+    sessionId: 's1',
+    cycle: 'early-cycle-1',
+    compaction: 'committed',
+    protection: 'failed',
+    failures: [{ name: 'latest-user-message' }],
+    reinjected: true,
+  };
+  let waitArgs = null;
+  guard.preProtect = async () => ({ ok: true, cycleKey: 'early-cycle-1' });
+  guard.markEarlyAccepted = () => {};
+  guard.waitForReport = (input) => {
+    waitArgs = input;
+    return Promise.resolve(fresh);
+  };
+  const engine = makeEngine();
+  const { ctx } = makeCtx({ engine });
+  const audit = makeAudit();
+  const wiring = wireEarlyCompaction({
+    ctx, getGuard: () => guard, getPolicy: () => POLICY, audit, getArmed: () => true, now: () => 0,
+  });
+  await wiring.check({ id: 's1' });
+  assert.equal(waitArgs.previousCompactionId, 'old');
+  assert.equal(waitArgs.sessionId, 's1');
+  assert.equal(waitArgs.cycleKey, 'early-cycle-1');
+  assert.equal(waitArgs.timeoutMs, EARLY_REPORT_WAIT_MS);
+  const forced = audit.entries.find((entry) => entry.event === 'early-forced');
+  assert.equal(forced.compaction, 'committed');
+  assert.equal(forced.compactionId, 'host-uuid-new');
+  assert.equal(forced.cycle, 'early-cycle-1');
+});
+
+test('S1：等待中命中——报告回来前只写 early-decision，回来后写 forced', async () => {
+  const guard = makeGuard({
+    lastReport: { compactionId: 'old', sessionId: 's1', compaction: 'skipped', protection: 'ok', failures: [], reinjected: null },
+  });
+  let resolveReport = null;
+  guard.preProtect = async () => ({ ok: true, cycleKey: 'early-cycle-2' });
+  guard.markEarlyAccepted = () => {};
+  guard.waitForReport = () => new Promise((resolve) => {
+    resolveReport = resolve;
+  });
+  const { ctx } = makeCtx({ engine: makeEngine() });
+  const audit = makeAudit();
+  const wiring = wireEarlyCompaction({
+    ctx, getGuard: () => guard, getPolicy: () => POLICY, audit, getArmed: () => true, now: () => 0,
+  });
+  const pending = wiring.check({ id: 's1' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(audit.entries.map((entry) => entry.event), ['early-decision'], '报告未回前不得写 early-forced');
+  resolveReport({
+    compactionId: 'host-uuid-late',
+    sessionId: 's1',
+    cycle: 'early-cycle-2',
+    compaction: 'committed',
+    protection: 'ok',
+    failures: [],
+    reinjected: true,
+  });
+  await pending;
+  const forced = audit.entries.find((entry) => entry.event === 'early-forced');
+  assert.equal(forced.compaction, 'committed');
+  assert.equal(forced.compactionId, 'host-uuid-late');
+});
+
+test('S1：超时——等待窗口内无报告仍写 unknown + compactionId=null，不抛错', async () => {
+  assert.equal(EARLY_REPORT_WAIT_MS, 500);
+  const guard = makeGuard({
+    lastReport: { compactionId: 'old', sessionId: 's1', compaction: 'committed', protection: 'ok', failures: [], reinjected: true },
+  });
+  guard.preProtect = async () => ({ ok: true, cycleKey: 'early-cycle-3' });
+  guard.waitForReport = () => new Promise((resolve) => setTimeout(() => resolve(null), 20));
+  const { ctx } = makeCtx({ engine: makeEngine() });
+  const audit = makeAudit();
+  const wiring = wireEarlyCompaction({
+    ctx, getGuard: () => guard, getPolicy: () => POLICY, audit, getArmed: () => true, reportWaitMs: 20, now: () => 0,
+  });
+  await assert.doesNotReject(() => wiring.check({ id: 's1' }));
+  const forced = audit.entries.find((entry) => entry.event === 'early-forced');
+  assert.equal(forced.compaction, 'unknown');
+  assert.equal(forced.compactionId, null);
+});
+
+test('S1：跨会话/跨 cycle 的报告不得写进本会话 early-forced', async () => {
+  for (const fresh of [
+    { compactionId: 'host-other-session', sessionId: 's2', cycle: 'early-cycle-4', compaction: 'committed', protection: 'ok', failures: [], reinjected: true },
+    { compactionId: 'host-other-cycle', sessionId: 's1', cycle: 'early-cycle-other', compaction: 'committed', protection: 'ok', failures: [], reinjected: true },
+  ]) {
+    const guard = makeGuard({
+      lastReport: { compactionId: 'old', sessionId: 's1', compaction: 'skipped', protection: 'ok', failures: [], reinjected: null },
+    });
+    guard.preProtect = async () => ({ ok: true, cycleKey: 'early-cycle-4' });
+    guard.waitForReport = () => Promise.resolve(fresh);
+    const { ctx } = makeCtx({ engine: makeEngine() });
+    const audit = makeAudit();
+    const wiring = wireEarlyCompaction({
+      ctx, getGuard: () => guard, getPolicy: () => POLICY, audit, getArmed: () => true, now: () => 0,
+    });
+    await wiring.check({ id: 's1' });
+    const forced = audit.entries.find((entry) => entry.event === 'early-forced');
+    assert.equal(forced.compaction, 'unknown', JSON.stringify(fresh));
+    assert.equal(forced.compactionId, null);
+  }
+});
+
+test('S1：accepted=false 不等待报告，直接 early-aborted', async () => {
+  const guard = makeGuard({
+    lastReport: { compactionId: 'old', sessionId: 's1', compaction: 'committed', protection: 'ok', failures: [], reinjected: true },
+  });
+  let waitCalls = 0;
+  guard.preProtect = async () => ({ ok: true, cycleKey: 'early-cycle-5' });
+  guard.discardEarlyProtection = async () => {};
+  guard.waitForReport = () => {
+    waitCalls += 1;
+    return Promise.resolve(null);
+  };
+  const { ctx } = makeCtx({ engine: makeEngine('busy') });
+  const audit = makeAudit();
+  const wiring = wireEarlyCompaction({
+    ctx, getGuard: () => guard, getPolicy: () => POLICY, audit, getArmed: () => true, now: () => 0,
+  });
+  await wiring.check({ id: 's1' });
+  assert.equal(waitCalls, 0);
+  assert.equal(audit.entries.at(-1).event, 'early-aborted');
+});
+
+test('S1：session/event handler 不 await 报告等待', () => {
+  const { ctx, handlers } = makeCtx();
+  const scheduled = [];
+  const guard = makeGuard();
+  guard.waitForReport = () => new Promise(() => {});
+  const wiring = wireEarlyCompaction({
+    ctx,
+    getGuard: () => guard,
+    getPolicy: () => POLICY,
+    getArmed: () => true,
+    schedule: (fn, ms) => { scheduled.push(ms); return 0; },
+  });
+  const handler = handlers.find((item) => item.event === 'session/event').handler;
+  const returned = handler({ id: 's1' }, { type: 'turn/end' });
+  assert.equal(returned, undefined);
+  assert.deepEqual(scheduled, [EARLY_DELAY_MS]);
+  wiring.stop();
 });
 
 test('0.2.2 接线：accepted 但无新报告 → compaction=unknown（B-2）、protection=null', async () => {
@@ -104,6 +255,7 @@ test('0.2.2 接线：accepted 但无新报告 → compaction=unknown（B-2）、
   const forced = audit.entries[1];
   assert.equal(forced.accepted, true);
   assert.equal(forced.compaction, 'unknown', 'B-2：没有新报告必须写 unknown，不得写 committed');
+  assert.equal(forced.compactionId, null, '不得抄 prevReport 的 old id');
   assert.equal(forced.protection, null, '没有新报告时必须写未知 null，不得写 ok');
   assert.deepEqual(forced.failures, []);
   assert.equal(forced.reinjected, null);

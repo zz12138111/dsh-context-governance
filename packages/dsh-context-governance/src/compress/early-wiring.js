@@ -13,6 +13,8 @@ import { EarlyCompactor } from './early.js';
 import { EARLY_DECISION, decideEarly } from './early-gate.js';
 
 export const EARLY_DELAY_MS = 50;
+/** S1：early-forced 等待本 cycle 报告的上限；超时仍写 unknown，不阻塞 turn。 */
+export const EARLY_REPORT_WAIT_MS = 500;
 /** 冷却期默认值（policy `compact.cooldownMin` 生效时按其分钟数换算）。 */
 export const EARLY_COOLDOWN_MS = 10 * 60 * 1000;
 /** 增量门槛默认值（policy `compact.minDeltaTokens` 生效时按窗口换算成比例）。 */
@@ -61,6 +63,7 @@ function engineFor(ctx, agent) {
  * @param {(fn: Function, ms: number) => unknown} [options.schedule]
  * @param {number} [options.cooldownMs]
  * @param {number} [options.minDeltaRatio]
+ * @param {number} [options.reportWaitMs] S1：等本 cycle 报告的上限（默认 500，最大 500）
  * @returns {{stop: () => void, check: (session: object) => Promise<void>}}
  */
 export function wireEarlyCompaction(options = {}) {
@@ -79,7 +82,11 @@ export function wireEarlyCompaction(options = {}) {
     subscribe = true,
     cooldownMs: cooldownMsOption,
     minDeltaRatio: minDeltaRatioOption,
+    reportWaitMs: reportWaitMsOption,
   } = options;
+  const reportWaitMs = Number.isFinite(reportWaitMsOption)
+    ? Math.min(EARLY_REPORT_WAIT_MS, Math.max(0, reportWaitMsOption))
+    : EARLY_REPORT_WAIT_MS;
 
   const state = new Map();
   const timers = new Set();
@@ -260,10 +267,41 @@ export function wireEarlyCompaction(options = {}) {
     } else if (result.accepted !== true && preProtect?.ok === true) {
       await guard.discardEarlyProtection?.(preProtect.cycleKey, result.reason ?? 'not-accepted');
     }
-    const report = guard?.status?.lastReport ?? null;
+    const cycleKey = preProtect?.ok === true && typeof preProtect.cycleKey === 'string'
+      ? preProtect.cycleKey
+      : null;
+    let report = null;
+    if (result.accepted === true) {
+      try {
+        // S1：有 guard 的 waitForReport 就等本 cycle 的完整报告；老 guard/旧测试无此方法时保留即时读取。
+        if (typeof guard?.waitForReport === 'function') {
+          report = await guard.waitForReport({
+            previousCompactionId: prevReport?.compactionId ?? null,
+            sessionId,
+            cycleKey,
+            timeoutMs: reportWaitMs,
+          });
+        } else {
+          report = guard?.status?.lastReport ?? null;
+        }
+      } catch (error) {
+        // 等报告失败不能影响压缩结论/主流程；按无报告写 unknown。
+        logger?.warn?.(`[context-governance] early report wait failed: ${String(error?.message ?? error)}`);
+        report = null;
+      }
+    }
+    // 双保险：即使 guard 返回了别的会话/周期，也不能写进本会话的 early-forced。
+    const sessionMatches = sessionId === null || report?.sessionId === sessionId;
+    const cycleMatches = cycleKey === null || report?.cycle === cycleKey;
     const fresh = result.accepted === true
       && report !== null
+      && report !== undefined
+      && report.compactionId !== null
+      && report.compactionId !== undefined
+      && String(report.compactionId) !== ''
       && report.compactionId !== prevReport?.compactionId
+      && sessionMatches
+      && cycleMatches
       ? report
       : null;
     const fields = {

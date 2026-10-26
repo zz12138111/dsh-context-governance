@@ -116,7 +116,7 @@ function makeAudit() {
 
 test('2b B-2：accepted 但无 fresh report → compaction=unknown（不得写 committed）', async () => {
   const guard = makeGuard({
-    lastReport: { compactionId: 'old', compaction: 'committed', protection: 'ok', failures: [], reinjected: true },
+    lastReport: { compactionId: 'old', sessionId: 's1', compaction: 'committed', protection: 'ok', failures: [], reinjected: true },
   });
   const engine = { calls: 0, async compactNow() { this.calls += 1; } };
   const { ctx } = makeCtx({ engine });
@@ -134,13 +134,13 @@ test('2b B-2：accepted 但无 fresh report → compaction=unknown（不得写 c
 });
 
 test('2b B-2：accepted 且有 fresh report → compaction 采用报告枚举（committed）', async () => {
-  const guard = makeGuard({ lastReport: { compactionId: 'old', compaction: 'skipped', protection: 'ok', failures: [], reinjected: null } });
+  const guard = makeGuard({ lastReport: { compactionId: 'old', sessionId: 's1', compaction: 'skipped', protection: 'ok', failures: [], reinjected: null } });
   const engine = {
     calls: 0,
     async compactNow() {
       this.calls += 1;
       guard.status.lastReport = {
-        compactionId: 'new', compaction: 'committed', protection: 'ok', failures: [], reinjected: true,
+        compactionId: 'new', sessionId: 's1', compaction: 'committed', protection: 'ok', failures: [], reinjected: true,
       };
     },
   };
@@ -206,11 +206,11 @@ test('2b 接线：本项目 + 已知压力 → early-forced；本项目 + unknow
     async compactNow() {
       this.calls += 1;
       guard.status.lastReport = {
-        compactionId: 'new', compaction: 'committed', protection: 'ok', failures: [], reinjected: true,
+        compactionId: 'new', sessionId: 's1', compaction: 'committed', protection: 'ok', failures: [], reinjected: true,
       };
     },
   };
-  const guard = makeGuard({ lastReport: { compactionId: 'old', compaction: 'committed', protection: 'ok', failures: [], reinjected: true } });
+  const guard = makeGuard({ lastReport: { compactionId: 'old', sessionId: 's1', compaction: 'committed', protection: 'ok', failures: [], reinjected: true } });
   const audit = makeAudit();
   const { wiring } = makeScopeWiring({ engine, audit, guard });
   await wiring.check({ id: 's1', cwd: `${ROOT}\\src` });

@@ -134,6 +134,10 @@ export class CompressionGuard {
   #completedCycles = new Set();
   #completedOrder = [];
   #reports = [];
+  /** S1：已写完保护/回注、可供 early 审计读取的本 cycle 报告 id。 */
+  #readyReports = new Set();
+  /** S1：等待本 cycle 报告的 early 接线（最多 500ms）。 */
+  #reportWaiters = new Set();
   #unsubscribe = null;
   #started = false;
   #eventApi = false;
@@ -737,6 +741,61 @@ export class CompressionGuard {
   /** 已完成的保护报告（最多 20 条，供 T5 审计）。 */
   reports() {
     return this.#reports.map((report) => cloneJson(report));
+  }
+
+  /**
+   * S1：等待本 cycle 的完整报告（保护校验 + 回注结果已写回），供 early 审计使用。
+   *
+   * 只在 `compaction/end` 的收尾 microtask 完成后才 resolve；最多等 500ms。
+   * 超时/被其他会话抢先报告都返回 null，由调用方写 `unknown`；不抛错、不阻塞 turn。
+   *
+   * @param {{previousCompactionId?: string|null, sessionId?: string|null, cycleKey?: string|null, timeoutMs?: number}} [input]
+   * @returns {Promise<object|null>}
+   */
+  waitForReport({ previousCompactionId = null, sessionId = null, cycleKey = null, timeoutMs = 500 } = {}) {
+    const rawTimeout = Number(timeoutMs);
+    const limit = Number.isFinite(rawTimeout) ? Math.min(500, Math.max(0, rawTimeout)) : 500;
+    const isFresh = (report) => {
+      if (report === null || typeof report !== 'object') return false;
+      const id = report.compactionId;
+      if (id === null || id === undefined || String(id) === '') return false;
+      if (previousCompactionId !== null && previousCompactionId !== undefined
+        && String(id) === String(previousCompactionId)) return false;
+      if (sessionId !== null && sessionId !== undefined && report.sessionId !== sessionId) return false;
+      if (cycleKey !== null && cycleKey !== undefined && report.cycle !== cycleKey) return false;
+      return this.#readyReports.has(id);
+    };
+    for (let index = this.#reports.length - 1; index >= 0; index -= 1) {
+      const report = this.#reports[index];
+      if (isFresh(report)) return Promise.resolve(cloneJson(report));
+    }
+    return new Promise((resolve) => {
+      let timer = null;
+      let settled = false;
+      const finish = (report) => {
+        if (settled) return;
+        settled = true;
+        if (timer !== null) clearTimeout(timer);
+        this.#reportWaiters.delete(waiter);
+        resolve(report === null ? null : cloneJson(report));
+      };
+      const waiter = (report) => {
+        if (isFresh(report)) finish(report);
+      };
+      this.#reportWaiters.add(waiter);
+      timer = setTimeout(() => finish(null), limit);
+    });
+  }
+
+  /** S1：通知等待者；报告在回注收尾后才进入 readyReports，避免 early 读到 reinjection=null 的半成品。 */
+  #notifyReportWaiters(report) {
+    for (const waiter of [...this.#reportWaiters]) {
+      try {
+        waiter(report);
+      } catch {
+        /* 单个等待者失败不影响其它等待者/主流程 */
+      }
+    }
   }
 
   #auditEvent(event, details) {
@@ -1408,6 +1467,9 @@ export class CompressionGuard {
   #record(report, state) {
     const enriched = {
       ...report,
+      // S1：让 early 等待者能按 session/cycle 过滤，避免拿到别的会话/别的周期的 lastReport。
+      sessionId: state?.sessionId ?? report.sessionId ?? null,
+      cycle: state?.protectionCycleKey ?? null,
       // 0.2.2（DEC-20261025-86）：ok 三处混用拆分——compaction 与 protection 两个正交字段。
       // compactNow/事务到达 end 才 record：有 start 就是 committed；start 未观测（插件中途挂载）为 skipped。
       compaction: state === null ? 'skipped' : 'committed',
@@ -1422,7 +1484,12 @@ export class CompressionGuard {
       protectedEntries: Array.isArray(state?.entries) ? state.entries.map((entry) => entry.id) : [],
     };
     this.#reports.push(enriched);
-    if (this.#reports.length > MAX_REPORTS) this.#reports.shift();
+    if (this.#reports.length > MAX_REPORTS) {
+      const dropped = this.#reports.shift();
+      if (dropped?.compactionId !== null && dropped?.compactionId !== undefined) {
+        this.#readyReports.delete(dropped.compactionId);
+      }
+    }
     if (enriched.protection === 'failed') {
       this.#stats.protectionFailures += 1;
       this.#logger?.warn?.(
@@ -1653,7 +1720,17 @@ export class CompressionGuard {
   #scheduleReinjection(session, state) {
     if (state.reinjectionScheduled === true) return;
     state.reinjectionScheduled = true;
-    queueMicrotask(() => this.#injectPointers(session, state));
+    queueMicrotask(() => {
+      try {
+        this.#injectPointers(session, state);
+      } finally {
+        // S1：等回注结果写回 report 后才算 ready；不能只等 #record，否则 early 会读到 reinjected=null。
+        if (state.report !== null && state.report !== undefined && state.report.compactionId != null) {
+          this.#readyReports.add(state.report.compactionId);
+          this.#notifyReportWaiters(state.report);
+        }
+      }
+    });
   }
 
   #injectPointers(session, state) {
