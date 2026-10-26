@@ -51,7 +51,7 @@
   1. 当前会话：`/cg compact disarm`（`/cg compact arm` 恢复；会话结束回默认）
   2. 全局配置：`compact.early.armed: false`（加载后生效）
   3. profile：`compact.early: false`（`research` 已预置）
-- 查看：`/cg status` 的 `early=on|off (default|config|session)` 与 `last-early: …`；审计 `early-armed/disarmed`、`early-forced/skipped/aborted/failed`。
+- 查看：`/cg status` 的 `early=on|off (default|config|session)` 与 `last-early: …`；审计 `early-armed/disarmed`、`early-forced/skipped/aborted/failed`，以及 1.0.1 起的 `early-report-wait`（等本 cycle 报告未命中：`timeout`/`mismatch`/`error` + `waitedMs`）与 `early-forced-reconciled`（报告迟到后的回填行，只追加、不改写 `early-forced`）。
 - 项目层 `.cg-policy.json` **不能**开关 armed：出现即忽略并记 `policy-invalid(project-excluded)`，同层其它键仍生效。
 
 
