@@ -767,6 +767,124 @@ export async function apply(ctx, rawConfig = {}) {
     }
   }
 
+  // --- 1a 真机取证探针（临时、默认零行为；取完证据即回退）---
+  // 仅 CG_1A_PROBE=1：用宿主 commands.execute 派发只读/可复原命令，不调用本插件 handler、不自造 invocation。
+  // 顺序：读初始 armed/profile → disarm → status → profile review → status → profile reset → arm → 按初始值复原。
+  // 不压缩、不写配置/记忆/项目文件、不联网、不读正文；证据只留 sessionId/commandId/事件名/时间与命令输出。
+  if (process.env.CG_1A_PROBE === '1') {
+    let fired = false;
+    let attempts = 0;
+    const runProbe = async (agent) => {
+      const commands = typeof ctx.get === 'function' ? ctx.get('commands') : null;
+      const sessionId = agent?.session?.id ?? null;
+      const record = { ts: new Date().toISOString(), sessionId, initial: null, steps: [], commandEvents: [] };
+      const events = [];
+      const onSessionEvent = (session, event) => {
+        if (session?.id !== sessionId) return;
+        if (event?.type !== 'command/run' && event?.type !== 'command/done') return;
+        events.push({
+          type: event.type,
+          commandId: event.data?.commandId ?? null,
+          name: event.data?.name ?? null,
+          seq: event.seq ?? null,
+          time: event.time ?? null,
+          sourceKind: event.data?.source?.kind ?? null,
+        });
+      };
+      let stopCapture = null;
+      try {
+        if (typeof ctx.on === 'function') stopCapture = ctx.on('session/event', onSessionEvent);
+      } catch {
+        stopCapture = null;
+      }
+      const signal = new AbortController().signal;
+      const call = async (line) => {
+        try {
+          const out = await commands.execute(agent, line, [], signal);
+          record.steps.push({
+            line,
+            ok: true,
+            commandId: out?.commandId ?? null,
+            kind: out?.result?.kind ?? null,
+            text: typeof out?.result?.text === 'string' ? out.result.text : null,
+          });
+          return out;
+        } catch (error) {
+          record.steps.push({ line, ok: false, error: String(error?.message ?? error).slice(0, 200) });
+          throw error;
+        }
+      };
+      const parseArmed = (text) => {
+        const match = /^armed:\s+(on|off)\b/m.exec(text ?? '');
+        return match === null ? null : match[1] === 'on';
+      };
+      const parseProfile = (text) => {
+        const match = /^profile:\s+(.*?)\s+\(source=([^)]+)\)/m.exec(text ?? '');
+        if (match === null) return null;
+        return { profile: match[1] === '(none)' ? '' : match[1], source: match[2] };
+      };
+      try {
+        const armedBefore = await call('/cg compact status');
+        const profileBefore = await call('/cg profile status');
+        const initialArmed = parseArmed(armedBefore?.result?.text);
+        const initialProfile = parseProfile(profileBefore?.result?.text);
+        record.initial = { armed: initialArmed, profile: initialProfile };
+
+        await call('/cg compact disarm');
+        await call('/cg status');
+        await call('/cg profile review');
+        await call('/cg status');
+        await call('/cg profile reset');
+        await call('/cg compact arm');
+
+        // 按初始值复原：未知时按 disarmed 处理（不盲 arm）。
+        if (initialArmed !== true) await call('/cg compact disarm');
+        if (initialProfile !== null && initialProfile.source === 'session' && initialProfile.profile !== '') {
+          await call(`/cg profile ${initialProfile.profile}`);
+        } else {
+          await call('/cg profile reset');
+        }
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        record.commandEvents = events;
+      } catch {
+        /* 探针失败不阻断插件；已采集步骤仍落盘 */
+      } finally {
+        try {
+          if (typeof stopCapture === 'function') stopCapture();
+        } catch {
+          /* ignore */
+        }
+        try {
+          const dir = process.env.TEMP ?? '.';
+          fs.writeFileSync(path.join(dir, `cg-1a-probe-${Date.now()}.json`), JSON.stringify(record, null, 2), 'utf8');
+        } catch {
+          /* 证据文件写失败不阻断插件 */
+        }
+      }
+    };
+    const tick = () => {
+      if (fired) return;
+      attempts += 1;
+      let agents = [];
+      try {
+        const service = typeof ctx.get === 'function' ? ctx.get('agents') : null;
+        agents = typeof service?.list === 'function' ? (service.list() ?? []) : [];
+      } catch {
+        agents = [];
+      }
+      const agent = agents.find((item) => typeof item?.session?.id === 'string' && item.session.id !== '');
+      if (agent === undefined) {
+        if (attempts < 30) setTimeout(tick, 2000);
+        return;
+      }
+      const commands = typeof ctx.get === 'function' ? ctx.get('commands') : null;
+      if (typeof commands?.execute !== 'function') return;
+      fired = true;
+      void runProbe(agent);
+    };
+    setTimeout(tick, 3000);
+  }
+
   if (typeof ctx.effect === 'function') {
     ctx.effect(() => async () => {
       commandRef.current.dispose?.();
