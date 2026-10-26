@@ -84,6 +84,9 @@ async function makeFixture(startWaitMs = 30, { isSubagent = false, readOnly = fa
     getPolicy: () => policy,
     getAudit: () => audit,
     getArmed: () => true,
+    // S1.2：本文件测的是保护 journal/startWaitMs 计时，不测报告等待；显式把等待压到 0，
+    // 否则默认 60s 安全网会让这些"压缩不完成"的用例真的等 60s（B2e 还会撞上 startWaitMs 超时）。
+    reportWaitMs: 0,
     schedule: (fn, ms) => {
       const timer = setTimeout(fn, ms);
       timers.push(timer);

@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { CompressionGuard } from '../src/compress/runtime.js';
+import { CompressionGuard, EARLY_REPORT_WAIT_MS } from '../src/compress/runtime.js';
 import {
   FIVE_SECTION_SUMMARY,
   FREE_FORM_SUMMARY,
@@ -99,15 +99,16 @@ test('S1：waitForReport 在回注收尾后返回本 cycle 报告', async () => 
   guard.stop();
 });
 
-test('S1.1：waitForReport 的默认上限是 3000ms', async (t) => {
+test('S1.2：waitForReport 的默认上限是 60000ms', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const ctx = makeCtx(new BasicCompactionEngine());
   const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.2' });
+  assert.equal(EARLY_REPORT_WAIT_MS, 60000, '默认上限必须是 60000ms');
   let result = 'pending';
   const pending = guard.waitForReport().then((value) => { result = value; });
-  t.mock.timers.tick(2999);
+  t.mock.timers.tick(EARLY_REPORT_WAIT_MS - 1);
   await Promise.resolve();
-  assert.equal(result, 'pending', '2999ms 不得提前超时');
+  assert.equal(result, 'pending', '上限前 1ms 不得提前超时');
   t.mock.timers.tick(1);
   await pending;
   assert.equal(result.ok, false);
@@ -116,14 +117,14 @@ test('S1.1：waitForReport 的默认上限是 3000ms', async (t) => {
   guard.stop();
 });
 
-test('S1.1：waitForReport 的 timeoutMs 也被夹到 3000ms 上限', async (t) => {
+test('S1.2：waitForReport 的 timeoutMs 也被夹到 60000ms 上限', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const ctx = makeCtx(new BasicCompactionEngine());
   const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.2' });
   let result = 'pending';
-  // 传 60000 也只能等 3000：大于 500 的旧上限也证明 clamp 与常量同源。
-  const pending = guard.waitForReport({ timeoutMs: 60000 }).then((value) => { result = value; });
-  t.mock.timers.tick(2999);
+  // 传 10 倍上限也只能等到 EARLY_REPORT_WAIT_MS，证明 clamp 与常量同源。
+  const pending = guard.waitForReport({ timeoutMs: EARLY_REPORT_WAIT_MS * 10 }).then((value) => { result = value; });
+  t.mock.timers.tick(EARLY_REPORT_WAIT_MS - 1);
   await Promise.resolve();
   assert.equal(result, 'pending');
   t.mock.timers.tick(1);

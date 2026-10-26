@@ -170,7 +170,7 @@ test('S1：等待中命中——报告回来前只写 early-decision，回来后
 });
 
 test('S1.1：超时——等待窗口内无报告写 unknown，并留 early-report-wait(timeout)', async () => {
-  assert.equal(EARLY_REPORT_WAIT_MS, 3000, '上限必须是 3000ms（唯一数字定义点在 runtime.js）');
+  assert.equal(EARLY_REPORT_WAIT_MS, 60000, '上限必须是 60000ms（唯一数字定义点在 runtime.js）');
   const guard = makeGuard({
     lastReport: { compactionId: 'old', sessionId: 's1', compaction: 'committed', protection: 'ok', failures: [], reinjected: true },
   });

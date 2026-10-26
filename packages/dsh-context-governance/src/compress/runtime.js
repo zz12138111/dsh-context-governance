@@ -40,15 +40,18 @@ import { selectMode } from './selection.js';
 const MAX_REPORTS = 20;
 const REINJECTION_SOURCE_KIND = 'plugin:context-governance';
 /**
- * S1.1：`waitForReport` / `early-forced` 等本 cycle 报告的上限（唯一数字定义点，
+ * S1.2：`waitForReport` / `early-forced` 等本 cycle 报告的上限（唯一数字定义点，
  * `early-wiring.js` 从这里引用，两处不得再各自写字面量）。
  *
- * 依据：0.2.1-rc.3 桌面真机（pid 34728）一次真实触发中，`early-forced` 在 500ms 上限处
- * 超时，仅比本 cycle 报告 ready 早约 16ms（16:44:06.533Z 超时 / .549Z 报告 ready），
- * 属"差一点"而不是过滤不匹配；报告链实测约 520ms，故取 3000ms（约 6 倍余量）。
+ * 依据：宿主把 `compression` 事件派发给插件的延迟不是固定值，随会话体量/落盘增长，实测：
+ * - 小型会话：20ms（16:05）、14ms（16:35）；
+ * - 25MB 会话：约 513ms（16:44，500ms 上限只差 16ms）；
+ * - 25MB 会话含大落盘：约 3013ms（17:00，3000ms 上限只差 3ms）；
+ *   `compaction-cost.occurredAt=17:00:18.705Z`，插件收到是 21.72Z，派发延迟约 3s。
+ * 任何固定短上限都是赌博，故取 60000ms 作安全网（不追求命中率，只保证"真到就等到"）。
  * 等待只发生在 turn/end 之后的异步 check 里，不阻塞对话、不占 turn。
  */
-export const EARLY_REPORT_WAIT_MS = 3000;
+export const EARLY_REPORT_WAIT_MS = 60000;
 
 function cloneJson(value) {
   try {
@@ -146,7 +149,7 @@ export class CompressionGuard {
   #reports = [];
   /** S1：已写完保护/回注、可供 early 审计读取的本 cycle 报告 id。 */
   #readyReports = new Set();
-  /** S1.1：等待本 cycle 报告的 early 接线（最多 `EARLY_REPORT_WAIT_MS`，当前 3000ms）。 */
+  /** S1.2：等待本 cycle 报告的 early 接线（最多 `EARLY_REPORT_WAIT_MS`，当前 60000ms）。 */
   #reportWaiters = new Set();
   #unsubscribe = null;
   #started = false;
