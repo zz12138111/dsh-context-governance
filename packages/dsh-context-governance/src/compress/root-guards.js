@@ -39,6 +39,8 @@ export class RootGuardPool {
   #sweepMs;
   #warnThreshold;
   #startWaitMs;
+  #onFirstEvent;
+  #readyFired = false;
   #guards = new Map();
   #opening = new Map();
   #queues = new Map();
@@ -60,6 +62,7 @@ export class RootGuardPool {
     sweepMs = DEFAULT_GUARD_SWEEP_MS,
     warnThreshold = DEFAULT_GUARD_WARN,
     startWaitMs = DEFAULT_START_WAIT_MS,
+    onFirstEvent = null,
   } = {}) {
     if (registry === null || registry === undefined) {
       throw new RootGuardPoolError('NO_REGISTRY', 'RootGuardPool requires a root registry');
@@ -81,6 +84,7 @@ export class RootGuardPool {
     this.#sweepMs = Math.max(Number(sweepMs) || DEFAULT_GUARD_SWEEP_MS, 1000);
     this.#warnThreshold = Math.max(Number(warnThreshold) || DEFAULT_GUARD_WARN, 1);
     this.#startWaitMs = Math.max(Number(startWaitMs) || DEFAULT_START_WAIT_MS, 10);
+    this.#onFirstEvent = typeof onFirstEvent === 'function' ? onFirstEvent : null;
     this.#timer = setInterval(() => { void this.closeIdle(); }, this.#sweepMs);
     this.#timer.unref?.();
   }
@@ -154,52 +158,94 @@ export class RootGuardPool {
   /** 路由入口：同步判定根，异步按根串行；宿主不等 Promise。 */
   route(session, event) {
     if (this.#closed || !this.#started) return;
+    if (!this.#readyFired) {
+      this.#readyFired = true;
+      try {
+        this.#onFirstEvent?.();
+      } catch (error) {
+        this.#logger?.warn?.(`[context-governance] root guard ready hook failed: ${String(error?.message ?? error)}`);
+      }
+    }
     const resolved = this.#resolve(session);
-    if (resolved === null || resolved.status !== 'managed' || resolved.entry === null) return;
+    if (resolved === null) return;
+    // fail-closed 后 registry 返回 unmanaged，但仍带 entry；必须先关已有 guard。
+    if (resolved.entry !== null && resolved.entry?.state !== 'active' && this.#guards.has(resolved.entry.rootId)) {
+      this.#enqueue(resolved.entry.rootId, () => this.dispose(resolved.entry.rootId, 'fail-closed'));
+      return;
+    }
+    if (resolved.status !== 'managed' || resolved.entry === null) return;
     const entry = resolved.entry;
     if (entry.state !== 'active') {
       this.#enqueue(entry.rootId, () => this.dispose(entry.rootId, 'fail-closed'));
       return;
     }
+    // 主根已建时保持 P1/P2 的同步观测语义；early/turn-end 仍按根串行。
+    const existing = this.#guards.get(entry.rootId);
+    if (existing !== undefined && !this.#queues.has(entry.rootId) && !this.#opening.has(entry.rootId)) {
+      existing.lastUsed = this.#now();
+      if (this.#handleGuard(existing, session, event) && event?.type === 'turn/end' && existing.early !== null) {
+        this.#enqueue(entry.rootId, () => this.#runEarly(existing, session));
+      }
+      return;
+    }
     this.#enqueue(entry.rootId, async () => {
       if (this.#closed) return;
-      const record = await this.#ensure(entry);
-      if (record === null) return;
-      record.lastUsed = this.#now();
+      let record;
       try {
-        record.guard?.handleEvent?.(session, event);
+        record = await this.#ensure(entry);
       } catch (error) {
-        record.lastError = String(error?.message ?? error).slice(0, 300);
-        this.#auditRecord(record, 'root-guard-error', {
-          phase: 'handle-event',
+        this.#auditRoot('root-guard-error', {
+          phase: 'ensure',
           root: entry.root,
           rootId: entry.rootId,
-          sessionId: sessionIdOf(session),
-          reason: record.lastError,
+          reason: String(error?.message ?? error).slice(0, 300),
         });
-        this.#logger?.warn?.(
-          `[context-governance] root guard error (${entry.root}): ${String(error?.message ?? error)}`,
-        );
-        return;
+        throw error;
       }
-      if (event?.type === 'turn/end' && record.early !== null) {
-        try {
-          await record.early.check?.(session);
-        } catch (error) {
-          record.lastError = String(error?.message ?? error).slice(0, 300);
-          this.#auditRecord(record, 'root-guard-error', {
-            phase: 'early-check',
-            root: entry.root,
-            rootId: entry.rootId,
-            sessionId: sessionIdOf(session),
-            reason: record.lastError,
-          });
-          this.#logger?.warn?.(
-            `[context-governance] root early check failed (${entry.root}): ${String(error?.message ?? error)}`,
-          );
-        }
-      }
+      if (record === null) return;
+      record.lastUsed = this.#now();
+      if (!this.#handleGuard(record, session, event)) return;
+      if (event?.type === 'turn/end' && record.early !== null) await this.#runEarly(record, session);
     });
+  }
+
+  async #runEarly(record, session) {
+    try {
+      await record.early.check?.(session);
+    } catch (error) {
+      record.lastError = String(error?.message ?? error).slice(0, 300);
+      this.#auditRecord(record, 'root-guard-error', {
+        phase: 'early-check',
+        root: record.entry.root,
+        rootId: record.entry.rootId,
+        sessionId: sessionIdOf(session),
+        reason: record.lastError,
+      });
+      this.#logger?.warn?.(
+        `[context-governance] root early check failed (${record.entry.root}): ${String(error?.message ?? error)}`,
+      );
+    }
+  }
+
+  /** 已建 guard 的事件同步处理，避免主根每条事件都排微任务（P1/P2 行为保持）。 */
+  #handleGuard(record, session, event) {
+    try {
+      record.guard?.handleEvent?.(session, event);
+      return true;
+    } catch (error) {
+      record.lastError = String(error?.message ?? error).slice(0, 300);
+      this.#auditRecord(record, 'root-guard-error', {
+        phase: 'handle-event',
+        root: record.entry.root,
+        rootId: record.entry.rootId,
+        sessionId: sessionIdOf(session),
+        reason: record.lastError,
+      });
+      this.#logger?.warn?.(
+        `[context-governance] root guard error (${record.entry.root}): ${String(error?.message ?? error)}`,
+      );
+      return false;
+    }
   }
 
   #enqueue(rootId, task) {
@@ -256,11 +302,6 @@ export class RootGuardPool {
       };
       this.#guards.set(entry.rootId, record);
       this.#checkLimit();
-      this.#auditRecord(record, 'root-guard-created', {
-        root: entry.root,
-        rootId: entry.rootId,
-        project: entry.project ?? null,
-      });
       return record;
     })();
     this.#opening.set(entry.rootId, task);
@@ -269,6 +310,19 @@ export class RootGuardPool {
     } finally {
       if (this.#opening.get(entry.rootId) === task) this.#opening.delete(entry.rootId);
     }
+  }
+
+  /** 显式懒创建（index 主根/测试）；route 内部也走同一入口。 */
+  async ensure(entry) {
+    return this.#ensure(entry);
+  }
+
+  /** 按会话懒创建并返回记录；header/命令需要 store 时用。 */
+  async ensureForSession(session) {
+    const resolved = this.#resolve(session);
+    if (resolved === null || resolved.status !== 'managed' || resolved.entry === null) return null;
+    if (resolved.entry.state !== 'active') return null;
+    return this.#ensure(resolved.entry);
   }
 
   #recordForResolved(resolved) {
@@ -282,6 +336,11 @@ export class RootGuardPool {
     return this.#recordForResolved(this.#resolve(session));
   }
 
+  recordForSessionId(sessionId) {
+    if (this.#closed || typeof sessionId !== 'string' || sessionId === '') return null;
+    return this.recordForSession({ id: sessionId, header: { id: sessionId } });
+  }
+
   guardForSession(session) {
     return this.recordForSession(session)?.guard ?? null;
   }
@@ -290,13 +349,25 @@ export class RootGuardPool {
     return this.recordForSession(session)?.policy ?? null;
   }
 
+  policyForSessionId(sessionId) {
+    return this.recordForSessionId(sessionId)?.policy ?? null;
+  }
+
   auditForSession(session) {
     return this.recordForSession(session)?.audit ?? null;
+  }
+
+  auditForSessionId(sessionId) {
+    return this.recordForSessionId(sessionId)?.audit ?? null;
   }
 
   /** 供 header 等按根读 store；只取已打开 guard，不在这里开新 store。 */
   storeForSession(session) {
     return this.recordForSession(session)?.handle?.store ?? null;
+  }
+
+  storeForSessionId(sessionId) {
+    return this.recordForSessionId(sessionId)?.handle?.store ?? null;
   }
 
   recordForEntry(entry) {

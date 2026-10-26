@@ -45,6 +45,8 @@ export const DEFAULT_MEMORY_DIR = path.join('.dsh', 'memory');
 export const INDEX_FILE_NAME = 'MEMORY.md';
 export const TOPICS_DIR_NAME = 'topics';
 export const PROTECTION_DIR_NAME = 'protection';
+/** P3：终态未确认 journal 的归档目录；P3 只归档，TTL/GC 留 P4。 */
+export const PROTECTION_ORPHAN_DIR_NAME = 'orphaned';
 /** 保护条目预留的 ID 区间：`MEM-YYYYMMDD-1000+`，避开普通条目。 */
 export const PROTECTION_ID_FLOOR = 1000;
 
@@ -461,9 +463,87 @@ export class MemoryStore {
     return result;
   }
 
-  /** 用后端文件内容重建内存态；外部改动后由上层显式调用。 */
-  async reload() {
+  #forgetJournal(cycleKey) {
+    const entries = this.#journalEntries.get(cycleKey);
+    if (entries !== undefined) {
+      for (const entry of entries) this.#protectionEntries.delete(entry.id);
+    }
+    this.#journalEntries.delete(cycleKey);
+  }
+
+  /**
+   * P3：明确“宿主未压缩/预写失败”时删除 journal。调用方必须先确认，不得拿它当超时清理。
+   * @returns {Promise<{ok:boolean, removed:boolean, entries:number, reason?:string}>}
+   */
+  async discardProtection(cycleKey) {
     this.#assertOpen();
+    const key = String(cycleKey);
+    const entries = this.#journalEntries.get(key);
+    const file = this.#journalPath(key);
+    this.#guardContainment(file);
+    let removed = false;
+    try {
+      await fs.rm(file, { force: true });
+      removed = true;
+    } catch (error) {
+      if (error?.code !== 'ENOENT') {
+        return { ok: false, removed: false, entries: entries?.length ?? 0, reason: String(error?.message ?? error).slice(0, 200) };
+      }
+      removed = true;
+    }
+    this.#forgetJournal(key);
+    return { ok: true, removed, entries: entries?.length ?? 0 };
+  }
+
+  /**
+   * P3：终态未确认 journal 归档到 `protection/orphaned/`，**不删除**。
+   * P3 不做 TTL/GC；归档文件保留 entries 供 P4 审计。
+   * @returns {Promise<{ok:boolean, file?:string, entries?:number, reason?:string}>}
+   */
+  async archiveProtection(cycleKey, { reason = 'unknown' } = {}) {
+    this.#assertOpen();
+    const key = String(cycleKey);
+    const entries = this.#journalEntries.get(key);
+    const source = this.#journalPath(key);
+    const dir = path.join(this.#rootDir, PROTECTION_DIR_NAME, PROTECTION_ORPHAN_DIR_NAME);
+    this.#guardContainment(dir);
+    let journal;
+    try {
+      journal = JSON.parse(await fs.readFile(source, 'utf8'));
+    } catch (error) {
+      if (error?.code !== 'ENOENT') {
+        return { ok: false, entries: entries?.length ?? 0, reason: String(error?.message ?? error).slice(0, 200) };
+      }
+      this.#forgetJournal(key);
+      return { ok: true, entries: entries?.length ?? 0, missing: true };
+    }
+    const base = path.basename(source, '.json');
+    let target = path.join(dir, `${base}.orphan.json`);
+    let suffix = 0;
+    while (fsSync.existsSync(target)) {
+      suffix += 1;
+      target = path.join(dir, `${base}.orphan-${suffix}.json`);
+    }
+    this.#guardContainment(target);
+    const archived = {
+      ...journal,
+      status: 'unknown',
+      orphanedAt: this.#now().toISOString(),
+      archiveReason: String(reason ?? 'unknown').slice(0, 120),
+    };
+    try {
+      await fs.mkdir(dir, { recursive: true });
+      await atomicWriteFile(target, `${JSON.stringify(archived, null, 2)}\n`, { backup: false });
+      await fs.rm(source, { force: true });
+    } catch (error) {
+      return { ok: false, entries: entries?.length ?? 0, reason: String(error?.message ?? error).slice(0, 200) };
+    }
+    this.#forgetJournal(key);
+    return { ok: true, file: target, entries: entries?.length ?? 0 };
+  }
+
+  /** 用后端文件内容重建内存态；外部改动后由上层显式调用。 */
+  async reload() {    this.#assertOpen();
     this.#warnings = [];
     this.#readOnly = false;
     this.#readOnlyReason = null;

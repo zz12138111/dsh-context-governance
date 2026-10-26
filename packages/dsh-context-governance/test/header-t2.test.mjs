@@ -111,6 +111,30 @@ test('T2 header-injected：五个字段都有真实值，mode 区分两形态', 
   }
 });
 
+test('P3 header：按会话所属根取 store，A/B 文本不串', async () => {
+  const storeA = fakeStore([entry('MEM-a1', 'decision', '根 A 的决定')]);
+  const storeB = fakeStore([entry('MEM-b1', 'decision', '根 B 的决定')]);
+  const handlers = [];
+  const injected = [];
+  const ctx = { on: (event, handler) => { handlers.push({ event, handler }); return () => {}; }, logger: { warn: () => {} } };
+  registerMemoryHeader(ctx, null, {
+    enabled: true,
+    resolveStore: (session) => (session.id === 'session-a' ? storeA : storeB),
+    getHasRuleFile: () => true,
+    now: NOW,
+    onInjected: (built, _injection, info) => injected.push({ ids: built.ids, session: info.session?.id }),
+  });
+  const handler = handlers.find((item) => item.event === 'agent/pre-step').handler;
+  const next = async () => ({ kind: 'accept', messages: [] });
+  const a = await handler({ agent: { session: { id: 'session-a' } }, step: 1 }, next);
+  const b = await handler({ agent: { session: { id: 'session-b' } }, step: 1 }, next);
+  assert.match(a.messages[0].content[0].text, /根 A 的决定/);
+  assert.doesNotMatch(a.messages[0].content[0].text, /根 B 的决定/);
+  assert.match(b.messages[0].content[0].text, /根 B 的决定/);
+  assert.doesNotMatch(b.messages[0].content[0].text, /根 A 的决定/);
+  assert.deepEqual(injected.map((item) => item.session), ['session-a', 'session-b']);
+});
+
 test('T2 /cg header off 后完全不注入（不是空包裹）', async () => {
   const store = fakeStore([entry('MEM-d1', 'decision', '关掉后不得出现')]);
   const config = resolveConfig({ projectRoot: 'D:/tmp/header-off', policy: {} });

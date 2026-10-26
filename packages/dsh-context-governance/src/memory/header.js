@@ -146,11 +146,13 @@ function isSubagentPayload(payload) {
  * 挂 `agent/pre-step`：新会话第一步注入一次 header。
  *
  * @param {object} ctx 插件上下文（需要 `on`；`logger` 可选）
- * @param {object} store MemoryStore
+ * @param {object} store MemoryStore（固定根；P3 也可用 resolveStore 按会话取根）
  * @param {{
  *   enabled?: boolean, isEnabled?: (session: object|null) => boolean, hasRuleFile?: boolean,
+ *   getHasRuleFile?: (session: object|null) => boolean,
+ *   resolveStore?: (session: object|null) => object|null|Promise<object|null>,
  *   maxLines?: number, maxChars?: number, oldAgeDays?: number, oldLimit?: number,
- *   onInjected?: (header: object) => void,
+ *   onInjected?: (header: object, injection: object, context: object) => void,
  * }} [options]
  */
 export function registerMemoryHeader(ctx, store, options = {}) {
@@ -158,6 +160,15 @@ export function registerMemoryHeader(ctx, store, options = {}) {
   if (typeof ctx?.on !== 'function') return { registered: false, reason: 'ctx.on is unavailable' };
   const seen = new Set();
   const enabledNow = (session) => (typeof options.isEnabled === 'function' ? options.isEnabled(session) !== false : true);
+  const storeNow = async (session) => {
+    if (typeof options.resolveStore === 'function') return await options.resolveStore(session);
+    return store ?? null;
+  };
+  const hasRuleFileNow = (session) => (
+    typeof options.getHasRuleFile === 'function'
+      ? options.getHasRuleFile(session) === true
+      : options.hasRuleFile === true
+  );
   try {
     ctx.on('agent/pre-step', async (payload, next) => {
       const decision = await next();
@@ -172,7 +183,10 @@ export function registerMemoryHeader(ctx, store, options = {}) {
         if (sessionId === null || payload?.step !== 1 || seen.has(sessionId)) return decision;
         if (decision.kind === 'reject') return decision;
         if (isSubagentPayload(payload)) return decision; // 子会话默认不注入
-        const header = buildMemoryHeader(store, options);
+        // P3：按会话所属根取 store；未打开/不可判定 → 本会话不注入。
+        const rootStore = await storeNow(session);
+        if (rootStore === null || rootStore === undefined) return decision;
+        const header = buildMemoryHeader(rootStore, { ...options, hasRuleFile: hasRuleFileNow(session) });
         if (header === null) return decision;
         const messages = Array.isArray(decision?.messages) ? decision.messages : [];
         if (messages.some((message) => message?.source?.kind === MEMORY_HEADER_SOURCE_KIND && message?.source?.form === MEMORY_HEADER_FORM)) {
@@ -191,7 +205,7 @@ export function registerMemoryHeader(ctx, store, options = {}) {
           options.onInjected?.(header, {
             messagesBefore: messages.length,
             messagesAfter: messages.length + 1,
-          });
+          }, { session, sessionId });
         } catch {
           /* 审计回调失败不影响注入 */
         }

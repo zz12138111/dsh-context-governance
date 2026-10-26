@@ -83,6 +83,30 @@ test('残留 journal 在下次 open 时自动物化', async () => {
   }
 });
 
+test('P3：orphan 归档只移动不删除；discard 只用于明确未压缩', async () => {
+  await withStore(async (store, rootDir) => {
+    const [entry] = store.protectSync({ cycleKey: 'early-unknown', items: [item('批处理进度：块B', 9)] });
+    assert.equal(store.protectionPending, 1);
+    const archived = await store.archiveProtection('early-unknown', { reason: 'early-start-missing' });
+    assert.equal(archived.ok, true);
+    assert.equal(store.protectionPending, 0, '归档后不再算 pending');
+    assert.equal(store.get(entry.id), null, '归档不发生活跃记忆物化');
+    const orphanDir = path.join(rootDir, 'protection', 'orphaned');
+    const files = (await fs.readdir(orphanDir)).filter((name) => name.endsWith('.json'));
+    assert.equal(files.length, 1, '归档文件必须保留');
+    const journal = JSON.parse(await fs.readFile(path.join(orphanDir, files[0]), 'utf8'));
+    assert.equal(journal.status, 'unknown');
+    assert.equal(journal.archiveReason, 'early-start-missing');
+    assert.equal(journal.entries[0].id, entry.id);
+
+    store.protectSync({ cycleKey: 'discard-me', items: [item('临时', 10)] });
+    const discarded = await store.discardProtection('discard-me');
+    assert.equal(discarded.ok, true);
+    assert.equal(store.protectionPending, 0);
+    assert.equal((await fs.readdir(orphanDir)).filter((name) => name.endsWith('.json')).length, 1, 'discard 不写 orphan');
+  });
+});
+
 test('只读 store 的 protectSync 抛 READ_ONLY，不落 journal', async () => {
   const rootDir = await tempDir();
   const store = await MemoryStore.open({ rootDir, project: 'test-project', readOnly: true });

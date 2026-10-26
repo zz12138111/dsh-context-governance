@@ -330,8 +330,44 @@ function rootsStatusLines({ rootsView = null, rootCounts = null }) {
  *
  * @param {{store?:object|null, guard?:object|null, getGuard?:() => object|null, audit?:object|null, now?:() => Date}} options
  */
-export function createStatusCommand({ store = null, guard = null, getGuard = null, audit = null, rootAudit = null, policy = null, now = () => new Date(), logger = null, getEarlyStatus = null, sessionIdOf = defaultSessionIdOf, getRootInfo = null, getPersistenceIdentity = null, getRootsView = null, getRootCounts = null, getPoolStats = null, getDiagnosticsLogFile = null, getDiagnosticsError = null } = {}) {
-  const currentGuard = () => (typeof getGuard === 'function' ? getGuard() : guard);
+export function createStatusCommand({ store = null, guard = null, getGuard = null, audit = null, rootAudit = null, policy = null, now = () => new Date(), logger = null, getEarlyStatus = null, getEarlyStatusForSession = null, getPolicyForSession = null, getStoreForSession = null, getAuditForSession = null, sessionIdOf = defaultSessionIdOf, getRootInfo = null, getPersistenceIdentity = null, getRootsView = null, getRootCounts = null, getPoolStats = null, getDiagnosticsLogFile = null, getDiagnosticsError = null } = {}) {
+  const policyFor = (sessionId) => {
+    if (typeof getPolicyForSession !== 'function') return policy;
+    try {
+      return getPolicyForSession(sessionId) ?? policy;
+    } catch {
+      return policy;
+    }
+  };
+  const currentGuard = (sessionId = null) => (typeof getGuard === 'function'
+    ? getGuard({ id: sessionId, header: { id: sessionId } })
+    : guard);
+  const storeFor = (sessionId) => {
+    if (typeof getStoreForSession !== 'function') return store;
+    try {
+      return getStoreForSession(sessionId) ?? store;
+    } catch {
+      return store;
+    }
+  };
+  const auditFor = (sessionId) => {
+    if (typeof getAuditForSession !== 'function') return audit;
+    try {
+      return getAuditForSession(sessionId) ?? audit;
+    } catch {
+      return audit;
+    }
+  };
+  const earlyStatusFor = (sessionId) => {
+    if (typeof getEarlyStatusForSession === 'function') {
+      try {
+        return getEarlyStatusForSession(sessionId);
+      } catch {
+        /* fallback */
+      }
+    }
+    return typeof getEarlyStatus === 'function' ? getEarlyStatus() : null;
+  };
 
   const parseBoolean = (text) => {
     const lowered = String(text).trim().toLowerCase();
@@ -355,6 +391,8 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
   const sessionText = (sessionValues) => formatSession(sessionValues);
   /** `/cg set key=value [key=value…] | /cg set reset`：会话层覆盖（最高优先级）。 */
   const handleSet = (argText, sessionId = null) => {
+    const policy = policyFor(sessionId);
+    const audit = auditFor(sessionId);
     if (policy === null || typeof policy.resolve !== 'function' || typeof policy.sessionValues !== 'function') {
       return { kind: 'error', text: '[context-governance] session layer is unavailable (policy not wired)' };
     }
@@ -533,6 +571,8 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
       const identity = typeof getPersistenceIdentity === 'function' ? getPersistenceIdentity() : null;
       // 1b：profile 按会话（入口为本命令；不持久化，重启回配置/默认）。
       if (raw === 'profile' || raw.startsWith('profile ')) {
+        const policy = policyFor(sessionId);
+        const audit = auditFor(sessionId);
         if (policy === null || typeof policy.resolve !== 'function' || typeof policy.profileInfo !== 'function') {
           return { kind: 'error', text: '[context-governance] profile layer is unavailable (policy not wired)' };
         }
@@ -567,6 +607,8 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
         return { kind: 'success', text: `context-governance profile\nprofile: ${arg} (source=session)` };
       }
       if (raw === 'header' || raw.startsWith('header ')) {
+        const policy = policyFor(sessionId);
+        const audit = auditFor(sessionId);
         if (policy === null || typeof policy.resolve !== 'function' || typeof policy.sessionValues !== 'function') {
           return { kind: 'error', text: '[context-governance] session layer is unavailable (policy not wired)' };
         }
@@ -596,6 +638,8 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
         return { kind: 'error', text: 'Usage: /cg header [status|on|off]' };
       }
       if (raw === 'compact' || raw.startsWith('compact ')) {
+        const policy = policyFor(sessionId);
+        const audit = auditFor(sessionId);
         if (policy === null || typeof policy.resolve !== 'function' || typeof policy.sessionValues !== 'function') {
           return { kind: 'error', text: '[context-governance] session layer is unavailable (policy not wired)' };
         }
@@ -633,6 +677,7 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
         }
       }
       if (raw === 'policy show' || raw === 'policy') {
+        const policy = policyFor(sessionId);
         if (policy === null || typeof policy.resolve !== 'function') {
           return { kind: 'error', text: '[context-governance] policy is unavailable' };
         }
@@ -676,7 +721,7 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
       if (raw === 'last-cost') {        try {
           return {
             kind: 'success',
-            text: ['context-governance last-cost', costLine(currentGuard()?.status ?? null)].join('\n'),
+            text: ['context-governance last-cost', costLine(currentGuard(sessionId)?.status ?? null)].join('\n'),
           };
         } catch (error) {
           return {
@@ -702,9 +747,9 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
         return {
           kind: 'success',
           text: statusText({
-            store,
-            guard: currentGuard(),
-            audit,
+            store: storeFor(sessionId),
+            guard: currentGuard(sessionId),
+            audit: auditFor(sessionId),
             rootAudit,
             rootsView,
             rootCounts,
@@ -712,8 +757,8 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
             diagnosticsLogFile,
             diagnosticsError,
             now,
-            policy,
-            earlyStatus: typeof getEarlyStatus === 'function' ? getEarlyStatus() : null,
+            policy: policyFor(sessionId),
+            earlyStatus: earlyStatusFor(sessionId),
             sessionId,
             rootInfo,
             identity,

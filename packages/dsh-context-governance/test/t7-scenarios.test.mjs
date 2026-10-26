@@ -452,7 +452,7 @@ test('S6 后端不可用/配置非法：回退或插件不加载，DSH 正常', 
       project: 'test-project',
       compression: { enabled: true, hostVersion: '0.2.1-rc.3', backendVersion: '' },
     });
-    assert.equal(ctx.handlers.filter((item) => item.event === 'session/event').length, 2, 'guard + early wiring 各一个');
+    assert.equal(ctx.handlers.filter((item) => item.event === 'session/event').length, 1, 'P3：guard/early 共用 RootGuardPool 的唯一订阅');
     assert.ok(ctx.logs.some(([level, message]) => level === 'warn' && message.includes('compaction service')));
   } finally {
     for (const entry of ctx.handlers) entry.handler = entry.handler; // no-op to keep refs

@@ -20,6 +20,7 @@ import { RootStorePool } from './roots/store-pool.js';
 import { POLICY_FILE_MAX_BYTES, WINDOW_USABLE_MARGIN, atExceedsUsableWindow, nativeFromWindow, nativeRatio, profileLayer, resolvePolicy, shortSessionId, usableAtCeiling, validateLayer } from './policy.js';
 import { detectHostVersion, normalizeBackendVersion } from './compress/adapters.js';
 import { CompressionGuard } from './compress/runtime.js';
+import { RootGuardPool } from './compress/root-guards.js';
 import { wireEarlyCompaction } from './compress/early-wiring.js';
 import { formatCapability, probeCapability } from './capabilities.js';
 import { DEFAULT_AUDIT_MAX_BYTES, MAX_AUDIT_MAX_BYTES, MIN_AUDIT_MAX_BYTES, AuditLog, createRootAudit } from './audit.js';
@@ -573,6 +574,8 @@ export async function apply(ctx, rawConfig = {}) {
       profile: identity.name,
       home: identity.home ?? identity.dir,
       logger: ctx.logger,
+      // P3：所有 active 根各自纳管；P1/P2 单根契约仍由默认 false 保留给旧测试。
+      manageAllRoots: true,
     })
     : null;
   const persistedRoot = registry?.primary?.root ?? null;
@@ -815,6 +818,39 @@ export async function apply(ctx, rawConfig = {}) {
     }
     let guard = null;
     let earlyWiring = null;
+    let guardPool = null;
+    let primaryEntry = attachEntry;
+    const policyCache = new Map();
+    // 主根 policy 复用 attach 时算好的链（含 /cg set 会话层与 window provider）。
+    if (attachEntry !== null) policyCache.set(attachEntry.rootId, policyState);
+    const policyForEntry = (entry) => {
+      const key = entry?.rootId ?? null;
+      if (key !== null && policyCache.has(key)) return policyCache.get(key);
+      const root = entry?.root ?? config.projectRoot;
+      const memory = memoryRootFor(root, config.memoryRootRel ?? config.memoryRoot);
+      const rootConfig = {
+        ...config,
+        projectRoot: root,
+        memoryRoot: memory.memoryRoot ?? config.memoryRoot,
+        project: entry?.project ?? (samePath(root, config.projectRoot) ? config.project : path.basename(root)),
+      };
+      const state = buildPolicyState(rootConfig);
+      if (key !== null) policyCache.set(key, state);
+      return state;
+    };
+    const policyForSession = (session) => {
+      if (guardPool !== null) {
+        const policy = guardPool.policyForSession(session);
+        if (policy !== null) return policy;
+      }
+      if (registry !== null) {
+        const resolved = registry.resolveSessionRoot(session);
+        if (resolved?.status === 'managed' && resolved.entry !== null) return policyForEntry(resolved.entry);
+      }
+      return policyState;
+    };
+    const ruleFileForRoot = (root) => ['AGENTS.md', 'CLAUDE.md']
+      .some((fileName) => fs.existsSync(path.join(root, fileName)));
     const probeReadyCapability = () => {
       const ready = probeCapability(ctx);
       const entries = ready.entries.map(([name, value]) => `${name}=${value}`);
@@ -831,154 +867,228 @@ export async function apply(ctx, rawConfig = {}) {
         `get.tokenMeter=${find('get.tokenMeter')}`,
       );
     };
-    if (config.compression.enabled) {
-      try {
-        guard = new CompressionGuard({
-          ctx,
-          hostVersion,
-          backendVersion,
-          logger: ctx.logger,
-          diagnosticsLogFile: config.diagnostics.logFile,
-          store,
-          audit: primaryAudit,
-          auditMaxBytes: config.audit.maxBytes,
-          auditBase: config.memoryRoot,
-          projectRoot: config.projectRoot,
-          onlyProject: config.onlyProject,
-          // 1.0 #1：观测/保护/回注与早压触发共用同一归域判定。
-          resolveScope: scopeOf,
-          captureTitle: config.captureTitle,
-          project: config.project,
-          reinjection: { maxFailures: config.reinjection.maxFailures },
-          onFirstEvent: probeReadyCapability,
-        });
-        guard.start();
-        // 0.2.2 第 5 步：turn/end 门禁接线（armed=false：不审计、不取服务、不调用）。
-        if (earlyWiring === null) {
-          earlyWiring = wireEarlyCompaction({
-            ctx,
-            getGuard: () => guard,
-            getPolicy: (session) => {
-              try {
-                return policyState.resolve(session?.id ?? null);
-              } catch {
-                return null;
-              }
-            },
-            getArmed: (session) => {
-              try {
-                return policyState.resolve(session?.id ?? null).values['compact.early.armed'] === true;
-              } catch {
-                return false;
-              }
-            },
-            // 1.0 #1：外部/无根会话在取 pressure 前跳过并审计。
-            getScope: scopeOf,
-            audit: guard.auditLog ?? null,
-            logger: ctx.logger,
-          });
-        }
-        const status = guard.status;
-        ctx.logger?.info?.(
-          `[context-governance] compression observer: adapter=${status.adapter.kind} ` +
-          `mode=${status.mode} perception=${status.perception} host=${hostVersion} ` +
-          `backend=${status.adapter.versions.backend} compaction-service=${compactionService} ` +
-          `only-project=${config.onlyProject} capture-title=${config.captureTitle}`,
-        );
-        for (const conflict of status.conflicts) {
-          const log = conflict.severity === 'error' ? 'warn' : 'info';
-          ctx.logger?.[log]?.(`[context-governance] compression conflict ${conflict.code}: ${conflict.message}`);
-        }
-        if (guard.readOnly !== true) {
-          guard?.auditLog?.append?.('apply', {
-            status: 'applied',
-            version: PLUGIN_VERSION,
-            mode: status.mode,
-            adapter: status.adapter.kind,
-            host: hostVersion,
-            backend: status.adapter.versions.backend,
-            perception: status.perception,
-            eventApi: status.eventApi,
-            readOnly: false,
-          });
-          guard?.auditLog?.append?.('capability@apply', { probe: capabilityProbeEntries });
-        } else {
-          ctx.logger?.warn?.(`[context-governance] audit not initialized: memory read-only (${guard.readOnlyReason ?? 'unknown'})`);
-        }
-      } catch (error) {
-        ctx.logger?.warn?.(`[context-governance] compression observer failed to start: ${String(error?.message ?? error)}`);
-        guard = null;
-      }
-    }
-
-    // 0.2.1（DEC-20261025-66）：窗口由运行时观察；每次 resolve 现算 native（不锁 apply）。
-    if (typeof policyState.setWindowProvider === 'function') {
-      policyState.setWindowProvider(() => guard?.windowState ?? null);
-    }
-    // 窗口变化导致 at 不可用：拒绝该层 + 审计一次（不静默降级、不每事件刷审计）。
-    // 退化（DEC-20261025-68 A）reason 是 native-uncomputable，必须与 over-native-runtime 一样落审计。
-    if (guard !== null && typeof guard.onWindowChange === 'function') {
+    const createGuardForRoot = async (entry, resources) => {
+      const rootPolicy = policyForEntry(entry);
+      const rootProject = entry.project ?? (samePath(entry.root, config.projectRoot) ? config.project : path.basename(entry.root));
+      const rootGuard = new CompressionGuard({
+        ctx,
+        hostVersion,
+        backendVersion,
+        logger: ctx.logger,
+        diagnosticsLogFile: config.diagnostics.logFile,
+        store: resources.store,
+        audit: resources.audit,
+        auditMaxBytes: config.audit.maxBytes,
+        auditBase: resources.store.rootDir,
+        projectRoot: entry.root,
+        onlyProject: config.onlyProject,
+        // 1.0 #1：观测/保护/回注与早压触发共用同一归域判定。
+        resolveScope: scopeOf,
+        captureTitle: config.captureTitle,
+        project: rootProject,
+        reinjection: { maxFailures: config.reinjection.maxFailures },
+        startWaitMs: resources.startWaitMs,
+      });
+      // P3：订阅由 RootGuardPool 持有；guard 只初始化 tokenMeter/感知状态。
+      rootGuard.start({ subscribe: false });
+      rootPolicy.setWindowProvider(() => rootGuard.windowState ?? null);
       const windowViolations = new Set();
-      // 1.0 #4：新旧 reason 都认（旧 audit 不重写，读取/审计侧保留一个 release 周期）。
-      const WINDOW_REJECT_REASONS = new Set([
-        'window-shrunk',
-        'over-native-runtime',
-        'native-uncomputable',
-      ]);
+      const WINDOW_REJECT_REASONS = new Set(['window-shrunk', 'over-native-runtime', 'native-uncomputable']);
       const checkWindowViolations = () => {
         try {
-          // 1a：会话层按会话逐桶检查（窗口收缩也要让会话覆盖失效，不再只看全局链）。
-          const sessionIds = typeof policyState.sessionIds === 'function' ? policyState.sessionIds() : [];
+          const sessionIds = typeof rootPolicy.sessionIds === 'function' ? rootPolicy.sessionIds() : [];
           const targets = [null, ...sessionIds];
           const seenThisPass = new Set();
           for (const target of targets) {
-            const resolved = policyState.resolve(target);
+            const resolved = rootPolicy.resolve(target);
             for (const item of resolved.invalid) {
               if (!WINDOW_REJECT_REASONS.has(item.reason)) continue;
               const key = `${target ?? 'global'}|${item.source}|${item.key}|${item.reason}`;
               seenThisPass.add(key);
               if (windowViolations.has(key)) continue;
               windowViolations.add(key);
-              guard?.auditLog?.append?.('policy-invalid', {
+              resources.audit?.append?.('policy-invalid', {
                 source: item.source,
                 reason: item.reason,
                 code: item.key,
+                root: entry.root,
+                rootId: entry.rootId,
+                path: path.join(entry.root, config.policy.projectFile),
                 ...(target === null ? {} : { sessionId: target, sessionShortId: shortSessionId(target) }),
               });
               ctx.logger?.warn?.(
                 `[context-governance] policy layer rejected at runtime: ${item.source}/${item.key}:${item.reason}` +
-                `${item.detail === undefined ? '' : ` ${item.detail}`}`,
+                `${item.detail === undefined ? '' : ` ${item.detail}`} (root=${entry.root})`,
               );
             }
           }
-          // P3-7/P2-3：本轮不再出现的拒绝项清出去重 Set，下一 episode 能再写审计。
           if (seenThisPass.size === 0) windowViolations.clear();
           else for (const key of [...windowViolations]) if (!seenThisPass.has(key)) windowViolations.delete(key);
         } catch (error) {
-          ctx.logger?.warn?.(`[context-governance] runtime window check failed: ${String(error?.message ?? error)}`);
+          ctx.logger?.warn?.(`[context-governance] runtime window check failed (${entry.root}): ${String(error?.message ?? error)}`);
         }
       };
-      guard.onWindowChange(checkWindowViolations);
+      rootGuard.onWindowChange(checkWindowViolations);
       checkWindowViolations();
+      for (const invalid of rootPolicy.invalid) {
+        resources.audit?.append?.('policy-invalid', {
+          source: invalid.source,
+          reason: invalid.reason,
+          code: invalid.key,
+          root: entry.root,
+          rootId: entry.rootId,
+          path: path.join(entry.root, config.policy.projectFile),
+        });
+      }
+      const early = wireEarlyCompaction({
+        ctx,
+        subscribe: false,
+        getGuard: () => rootGuard,
+        getPolicy: (session) => {
+          try {
+            return rootPolicy.resolve(session?.id ?? null);
+          } catch {
+            return null;
+          }
+        },
+        getArmed: (session) => {
+          try {
+            return rootPolicy.resolve(session?.id ?? null).values['compact.early.armed'] === true;
+          } catch {
+            return false;
+          }
+        },
+        getScope: scopeOf,
+        audit: resources.audit,
+        logger: ctx.logger,
+      });
+      return { guard: rootGuard, policy: rootPolicy, early };
+    };
+    if (config.compression.enabled) {
+      try {
+        // identity 不可用时没有 registry：保留单根观测（不是多根兜底），但订阅仍只由 pool 持有一份。
+        let observedRegistry = registry;
+        let observedStorePool = pool;
+        if (observedRegistry === null) {
+          const singleEntry = {
+            rootId: 'single-root',
+            root,
+            project: config.project,
+            state: 'active',
+            origin: source === 'config' ? 'config' : 'inferred',
+          };
+          primaryEntry = singleEntry;
+          observedRegistry = {
+            resolveSessionRoot: (session) => {
+              const scope = resolveScope({
+                root,
+                cwd: sessionCwd(session),
+                earlyEnabled: true,
+                managed: true,
+              });
+              return {
+                status: scope.governed ? 'managed' : 'unmanaged',
+                entry: singleEntry,
+                source: null,
+                isSubagent: scope.isSubagent === true,
+                cwd: sessionCwd(session),
+                skipReason: scope.skipReason ?? null,
+              };
+            },
+          };
+          observedStorePool = {
+            async pin() {
+              return {
+                entry: singleEntry,
+                store,
+                audit: primaryAudit,
+                release() {},
+              };
+            },
+          };
+        }
+        guardPool = new RootGuardPool({
+          ctx,
+          registry: observedRegistry,
+          storePool: observedStorePool,
+          createGuard: createGuardForRoot,
+          rootAudit,
+          logger: ctx.logger,
+          onFirstEvent: probeReadyCapability,
+        });
+        guardPool.start();
+        // 主根先建（有 store seed）；其他根仍由首个会话事件懒创建。
+        if (primaryEntry !== null) {
+          const record = await guardPool.ensure(primaryEntry);
+          guard = record?.guard ?? null;
+          if (guard !== null && typeof policyState.setWindowProvider === 'function') {
+            policyState.setWindowProvider(() => guard.windowState ?? null);
+          }
+        }
+        if (guard !== null) {
+          const status = guard.status;
+          ctx.logger?.info?.(
+            `[context-governance] compression observer: adapter=${status.adapter.kind} ` +
+            `mode=${status.mode} perception=${status.perception} host=${hostVersion} ` +
+            `backend=${status.adapter.versions.backend} compaction-service=${compactionService} ` +
+            `only-project=${config.onlyProject} capture-title=${config.captureTitle}`,
+          );
+          for (const conflict of status.conflicts) {
+            const log = conflict.severity === 'error' ? 'warn' : 'info';
+            ctx.logger?.[log]?.(`[context-governance] compression conflict ${conflict.code}: ${conflict.message}`);
+          }
+          if (guard.readOnly !== true) {
+            guard.auditLog?.append?.('apply', {
+              status: 'applied',
+              version: PLUGIN_VERSION,
+              mode: status.mode,
+              adapter: status.adapter.kind,
+              host: hostVersion,
+              backend: status.adapter.versions.backend,
+              perception: status.perception,
+              eventApi: status.eventApi,
+              readOnly: false,
+            });
+            guard.auditLog?.append?.('capability@apply', { probe: capabilityProbeEntries });
+          } else {
+            ctx.logger?.warn?.(`[context-governance] audit not initialized: memory read-only (${guard.readOnlyReason ?? 'unknown'})`);
+          }
+        }
+      } catch (error) {
+        ctx.logger?.warn?.(`[context-governance] compression observer failed to start: ${String(error?.message ?? error)}`);
+        guard = null;
+      }
     }
+    earlyWiring = null;
 
-    // M3 T2（0.3.1）：新会话 header（默认开）。放在 guard 之后注册，保持 session/event 处理顺序稳定。
-    const header = registerMemoryHeader(ctx, store, {
+    // M3 T2（0.3.1）：新会话 header（默认开）。P3 按会话所属根取 store/audit。
+    const header = registerMemoryHeader(ctx, null, {
       enabled: config.memoryHeader.enabled,
       isEnabled: (session) => {
         const scope = scopeOf(session);
-        return config.memoryHeader.enabled &&
-          !scope.isSubagent &&
-          scope.governed &&
-          policyState.resolve(session?.id ?? null).values['header.enabled'] !== false;
+        if (!config.memoryHeader.enabled || scope.isSubagent || !scope.governed) return false;
+        try {
+          return policyForSession(session).resolve(session?.id ?? null).values['header.enabled'] !== false;
+        } catch {
+          return false;
+        }
       },
-      hasRuleFile: ruleFilePresent,
+      resolveStore: async (session) => {
+        if (guardPool === null) return store;
+        const record = await guardPool.ensureForSession(session);
+        return record?.handle?.store ?? null;
+      },
+      getHasRuleFile: (session) => {
+        const scope = scopeOf(session);
+        return scope.root === null || scope.root === undefined ? ruleFilePresent : ruleFileForRoot(scope.root);
+      },
       maxLines: config.memoryHeader.maxLines,
       maxChars: config.memoryHeader.maxChars,
       oldAgeDays: config.memoryHeader.oldAgeDays,
       oldLimit: config.memoryHeader.oldLimit,
-      onInjected: (built, injection = {}) => {
-        guard?.auditLog?.append?.('header-injected', {
+      onInjected: (built, injection = {}, info = {}) => {
+        const auditForHeader = guardPool?.auditForSession(info.session) ?? primaryAudit;
+        auditForHeader?.append?.('header-injected', {
           count: built.count,
           lines: built.count,
           mode: built.mode,
@@ -1022,13 +1132,6 @@ export async function apply(ctx, rawConfig = {}) {
 
     // T5：/cg status（只读；不依赖压缩服务是否可用）。
     // P3-1（三轮复核）：commands 可能在治理插件之后挂载——首次失败不静默，`ctx.inject` 或下个 tick 重试一次。
-    for (const invalid of policyState.invalid) {
-      guard?.auditLog?.append?.('policy-invalid', {
-        source: invalid.source,
-        reason: invalid.reason,
-        code: invalid.key,
-      });
-    }
     if (policyState.invalid.length > 0) {
       // 用户日常只看 /cg status：apply 时也留一行，别让被拒的层静默退回。
       const summary = policyState.invalid
@@ -1042,18 +1145,33 @@ export async function apply(ctx, rawConfig = {}) {
     }
     const commandOptions = {
       store,
-      getGuard: () => guard,
+      getGuard: (session) => (guardPool === null ? guard : guardPool.guardForSession(session)),
       audit: primaryAudit,
+      getAuditForSession: (sessionId) => (guardPool === null ? primaryAudit : guardPool.auditForSessionId(sessionId)),
       rootAudit,
       policy: policyState,
+      getPolicyForSession: (sessionId) => (guardPool === null ? policyState : (guardPool.policyForSessionId(sessionId) ?? policyState)),
+      getStoreForSession: (sessionId) => (guardPool === null ? store : (guardPool.storeForSessionId(sessionId) ?? store)),
       logger: ctx.logger,
-      getEarlyStatus: () => (earlyWiring === null ? null : earlyWiring.getLast()),
+      getEarlyStatus: () => {
+        if (guardPool !== null && guard !== null) {
+          const record = guardPool.recordForEntry(primaryEntry);
+          return record?.early?.getLast?.() ?? null;
+        }
+        return earlyWiring?.getLast?.() ?? null;
+      },
+      getEarlyStatusForSession: (sessionId) => {
+        if (guardPool === null) return earlyWiring?.getLast?.() ?? null;
+        const record = guardPool.recordForSessionId(sessionId);
+        return record?.early?.getLast?.() ?? null;
+      },
       // 2a：根来源与持久化身份在 status 中可见（运行期数值，用 getter 不复制快照）。
       getRootInfo: () => rootInfo,
       getPersistenceIdentity: () => identity,
       getRootsView: () => (registry === null ? null : registry.view()),
       getRootCounts: () => (registry === null ? null : registry.counts()),
       getPoolStats: () => (pool === null ? null : pool.stats()),
+      getGuardPoolStats: () => (guardPool === null ? null : guardPool.stats()),
       getDiagnosticsLogFile: () => config.diagnostics.logFile,
       getDiagnosticsError: () => rootInfo.diagnosticsError,
     };
@@ -1085,8 +1203,12 @@ export async function apply(ctx, rawConfig = {}) {
     if (typeof ctx.effect === 'function') {
       ctx.effect(() => async () => {
         commandRef.current.dispose?.();
-        earlyWiring?.stop();
-        guard?.stop();
+        if (guardPool !== null) {
+          await guardPool.closeAll('dispose');
+        } else {
+          earlyWiring?.stop();
+          guard?.stop();
+        }
         if (pool !== null) await pool.closeAll();
         else {
           await store.close();

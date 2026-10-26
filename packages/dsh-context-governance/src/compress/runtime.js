@@ -123,6 +123,11 @@ export class CompressionGuard {
   #audit;
   #reinjection;
   #pending = new Map();
+  /** P3：early 预写 journal（按 session），start 到达前不删；超时只标 unknown。 */
+  #earlyPending = new Map();
+  #earlyStopArchive = null;
+  #startWaitMs = 120 * 1000;
+  #schedule;
   #completedCycles = new Set();
   #completedOrder = [];
   #reports = [];
@@ -197,6 +202,9 @@ export class CompressionGuard {
     unmanagedEvents: 0,
     noRootEvents: 0,
     reinjectionShadowed: 0,
+    /** P3：early 预写 start 超时/终态归档计数（不冒充 protected）。 */
+    earlyTimeouts: 0,
+    earlyArchived: 0,
     /** 0.2.1 P3-6：收到但非法的 contextWindow 观测（不当作删除）。 */
     windowInvalidObservations: 0,
   };
@@ -227,6 +235,10 @@ export class CompressionGuard {
     };
     this.#maxReinjectionFailures = this.#reinjection.maxFailures;
     this.#onFirstEvent = typeof options.onFirstEvent === 'function' ? options.onFirstEvent : null;
+    this.#startWaitMs = Math.max(Number(options.startWaitMs) || 120_000, 10);
+    this.#schedule = typeof options.schedule === 'function'
+      ? options.schedule
+      : (fn, ms) => setTimeout(fn, ms);
     // M1.2：装载时先试一次；失败不缓存 null，之后走注入回调/按需获取。
     this.#getTokenMeter();
     this.#audit = options.audit ?? (this.#store === null
@@ -279,6 +291,27 @@ export class CompressionGuard {
   get auditLog() { return this.#audit; }
   get readOnly() { return this.#readOnly; }
   get readOnlyReason() { return this.#readOnlyReason; }
+  get startWaitMs() { return this.#startWaitMs; }
+
+  /** P3：early 预写但尚未被 start/summary/end 关联。 */
+  hasPendingEarly() { return this.#earlyPending.size > 0; }
+
+  earlyStatus() {
+    const states = [...this.#earlyPending.values()];
+    return {
+      pending: states.length,
+      unknown: states.filter((state) => state.unknown === true).length,
+      accepted: states.filter((state) => state.accepted === true).length,
+      startWaitMs: this.#startWaitMs,
+      cycles: states.map((state) => ({
+        cycle: state.cycleKey,
+        sessionId: state.sessionId,
+        accepted: state.accepted === true,
+        unknown: state.unknown === true,
+        materialized: state.materialized === true,
+      })),
+    };
+  }
 
   /** 会话的 cwd：优先 `session.header.cwd`（宿主真实字段），退回 `session.cwd`。 */
   #sessionCwd(session) {
@@ -423,6 +456,213 @@ export class CompressionGuard {
       });
     }
     this.#pending.clear();
+    // P3：early 预写未关联 start 的 journal 只归档，不 discard；异步清理，dispose() 可 await。
+    if (this.#earlyStopArchive === null) {
+      this.#earlyStopArchive = this.#archiveAllEarly('observer-disposed');
+    }
+  }
+
+  /** P3：卸载/关闭时等 early 归档完成（RootGuardPool 使用）。 */
+  async dispose(reason = 'dispose') {
+    this.stop();
+    await this.#earlyStopArchive;
+    if (reason !== 'observer-disposed') {
+      this.#logger?.info?.(`[context-governance] compression guard disposed (${String(reason)})`);
+    }
+  }
+
+  /**
+   * P3 门禁 7：early 预写保护 journal（必须在 compactNow 之前调用）。
+   * 返回 ok=false 时调用方必须不触发 compactNow。
+   */
+  async preProtect(session) {
+    const sessionId = this.#sessionKey(session);
+    if (sessionId === null) return { ok: false, reason: 'no-session' };
+    if (this.#store === null || !this.#reinjection.enabled) return { ok: false, reason: 'no-store' };
+    if (this.#earlyPending.has(sessionId)) return { ok: false, reason: 'pending-cycle' };
+    if (this.#skipProtectionThisCycle || this.#protectionSuspended) {
+      return { ok: false, reason: 'protection-suspended' };
+    }
+    if (this.#readOnly) await this.#refreshReadOnly();
+    if (this.#readOnly) return { ok: false, reason: 'read-only' };
+    if (this.#store.status?.writable !== true) return { ok: false, reason: 'read-only' };
+
+    const cycleKey = `early-${randomUUID()}`;
+    const scope = this.#scopeOf(session);
+    let snapshot;
+    try {
+      snapshot = snapshotProtection(session);
+    } catch (error) {
+      return { ok: false, reason: 'snapshot-failed', errorCode: error?.code ?? null };
+    }
+    const built = buildProtectionItems(snapshot, {
+      sessionId,
+      compactionId: cycleKey,
+      cycleKey,
+      manual: false,
+      captureTitle: this.#captureTitle,
+    });
+    if (built.items.length === 0) return { ok: false, reason: 'empty-snapshot' };
+
+    const writeStartedAt = Date.now();
+    let entries;
+    try {
+      entries = this.#store.protectSync({
+        cycleKey,
+        compactionId: null,
+        sessionId,
+        items: built.items,
+      });
+    } catch (error) {
+      const code = error?.code ?? 'PROTECTION_WRITE';
+      if (['EACCES', 'EPERM', 'EROFS', 'ENOSPC', 'EBUSY'].includes(code) || error?.name === 'MemoryReadOnlyError') {
+        this.#setReadOnly(`write-failed:${code}`, String(error?.message ?? error));
+      }
+      return { ok: false, reason: 'protection-prewrite-failed', errorCode: code };
+    }
+    if (entries.length === 0) return { ok: false, reason: 'empty-snapshot' };
+    const durationMs = Date.now() - writeStartedAt;
+    const auditOk = this.#auditEvent('protection-write', {
+      sessionId,
+      cycle: cycleKey,
+      phase: 'early-prewrite',
+      manual: false,
+      count: entries.length,
+      durationMs,
+      ids: entries.map((entry) => entry.id),
+      kinds: built.meta.map((item) => item.kind),
+    });
+    if (!auditOk) {
+      try { await this.#store.discardProtection(cycleKey); } catch { /* ignore */ }
+      return { ok: false, reason: 'audit-unwritable' };
+    }
+    this.#stats.protectionWrites += 1;
+    this.#stats.lastProtectionWriteMs = durationMs;
+    const state = {
+      cycleKey,
+      sessionId,
+      snapshot,
+      entries,
+      meta: built.meta,
+      subagent: scope.isSubagent === true,
+      accepted: false,
+      unknown: false,
+      materialized: false,
+      timer: null,
+    };
+    this.#earlyPending.set(sessionId, state);
+    return { ok: true, cycleKey, entries, snapshot, meta: built.meta };
+  }
+
+  /** compactNow accepted 后启动 startWaitMs；超时只标 unknown，journal 保留。 */
+  markEarlyAccepted(cycleKey) {
+    const state = this.#earlyStateByCycle(cycleKey);
+    if (state === undefined) return false;
+    state.accepted = true;
+    if (state.timer !== null || state.unknown) return true;
+    const timer = this.#schedule(() => {
+      state.timer = null;
+      if (state.unknown || state.materialized) return;
+      state.unknown = true;
+      this.#stats.earlyTimeouts += 1;
+      this.#auditEvent('early-start-timeout', {
+        sessionId: state.sessionId,
+        cycle: state.cycleKey,
+        phase: 'start-wait',
+        protection: 'unknown',
+        materialized: false,
+        reason: 'start-not-observed-before-timeout',
+      });
+      this.#logger?.warn?.(
+        `[context-governance] early protection journal retained but start not observed after ${this.#startWaitMs}ms ` +
+        `(session=${state.sessionId}, cycle=${state.cycleKey}); state=unknown`,
+      );
+    }, this.#startWaitMs);
+    timer.unref?.();
+    state.timer = timer;
+    return true;
+  }
+
+  /** 明确 compactNow 未被接受时删除预写 journal（唯一安全的 discard 路径之一）。 */
+  async discardEarlyProtection(cycleKey, reason = 'early-not-accepted') {
+    const state = this.#earlyStateByCycle(cycleKey);
+    if (state === undefined) return false;
+    if (state.timer !== null) clearTimeout(state.timer);
+    state.timer = null;
+    this.#earlyPending.delete(state.sessionId);
+    try {
+      await this.#store?.discardProtection?.(cycleKey);
+    } catch (error) {
+      this.#logger?.warn?.(`[context-governance] early journal discard failed: ${String(error?.message ?? error)}`);
+    }
+    this.#auditEvent('protection-write-skipped', {
+      sessionId: state.sessionId,
+      cycle: cycleKey,
+      phase: 'early-rejected',
+      reason: String(reason ?? 'early-not-accepted').slice(0, 120),
+    });
+    return true;
+  }
+
+  #earlyStateByCycle(cycleKey) {
+    for (const state of this.#earlyPending.values()) {
+      if (state.cycleKey === cycleKey) return state;
+    }
+    return undefined;
+  }
+
+  #clearEarlyTimer(state) {
+    if (state?.timer !== null && state?.timer !== undefined) clearTimeout(state.timer);
+    if (state !== null && state !== undefined) state.timer = null;
+  }
+
+  /** 关联 start/summary/end：取走该会话的预写 journal 并留审计；只归档/物化，不重写。 */
+  #takeEarlyForSession(session, phase) {
+    const sessionId = this.#sessionKey(session);
+    if (sessionId === null) return null;
+    const state = this.#earlyPending.get(sessionId);
+    if (state === undefined) return null;
+    this.#earlyPending.delete(sessionId);
+    this.#clearEarlyTimer(state);
+    state.materialized = false;
+    this.#auditEvent('early-start-reused', {
+      sessionId,
+      cycle: state.cycleKey,
+      phase,
+      protection: 'prewritten',
+      late: state.unknown === true,
+      accepted: state.accepted === true,
+    });
+    return state;
+  }
+
+  async #archiveAllEarly(reason) {
+    const states = [...this.#earlyPending.values()];
+    this.#earlyPending.clear();
+    await Promise.all(states.map(async (state) => {
+      this.#clearEarlyTimer(state);
+      let archived = { ok: false, reason: 'no-store' };
+      try {
+        archived = await this.#store?.archiveProtection?.(state.cycleKey, { reason }) ?? archived;
+      } catch (error) {
+        archived = { ok: false, reason: String(error?.message ?? error).slice(0, 200) };
+      }
+      this.#stats.earlyArchived += 1;
+      this.#auditEvent('early-start-missing', {
+        sessionId: state.sessionId,
+        cycle: state.cycleKey,
+        phase: 'terminal',
+        protection: 'unknown',
+        materialized: false,
+        accepted: state.accepted === true,
+        reason: archived.ok === true ? String(reason) : `archive-failed:${archived.reason ?? 'unknown'}`,
+      });
+      if (archived.ok !== true) {
+        this.#logger?.warn?.(
+          `[context-governance] early journal archive failed (${state.cycleKey}): ${archived.reason ?? 'unknown'}`,
+        );
+      }
+    }));
   }
 
   /** 供 `/cg status`（T5）读取；不含消息正文。 */
@@ -479,6 +719,7 @@ export class CompressionGuard {
         unmanagedEvents: this.#stats.unmanagedEvents,
         noRootEvents: this.#stats.noRootEvents,
       },
+      early: this.earlyStatus(),
       writeLatency: calculateLatencyStats(this.#writeDurations),
       pressure: this.pressure(),
       stats: { ...this.#stats, pending: this.#pending.size, reports: this.#reports.length },
@@ -1230,6 +1471,7 @@ export class CompressionGuard {
       if (this.#writeDurations.length > 200) this.#writeDurations.shift();
       state.entries = entries;
       state.protectionWrite = 'ok';
+      state.protectionCycleKey = id;
       this.#stats.protectionWrites += 1;
       this.#stats.lastProtectionWriteMs = durationMs;
       this.#auditEvent('protection-write', {
@@ -1295,6 +1537,14 @@ export class CompressionGuard {
 
   #materializeProtection(cycleKey, state) {
     if (this.#store === null) return;
+    if (state?.subagent === true) {
+      // P3 G8：子会话保护 journal 只供本周期回注，不并入持久 topics/MEMORY.md。
+      this.#auditEvent('protection-materialize-skipped', {
+        compactionId: cycleKey,
+        reason: 'subagent',
+      });
+      return;
+    }
     const promise = Promise.resolve(this.#store.materializeProtection(cycleKey))
       .then((result) => {
         if (state !== undefined) state.protectionMaterialized = result;
@@ -1608,10 +1858,12 @@ export class CompressionGuard {
               );
             }
           }
+          const early = this.#takeEarlyForSession(session, 'start');
           const state = {
             compactionId: id,
             sessionId: session?.id ?? null,
-            snapshot: snapshotProtection(session),
+            subagent: scope.isSubagent === true,
+            snapshot: early === null ? snapshotProtection(session) : early.snapshot,
             startSeq: event.seq ?? null,
             manual: event.data?.sourceCommandId != null,
             summaryEvent: null,
@@ -1619,9 +1871,10 @@ export class CompressionGuard {
             summaryReadable: null,
             checkpointSeq: null,
             lateSnapshot: false,
-            entries: [],
-            protectionMeta: [],
-            protectionWrite: 'not-attempted',
+            entries: early === null ? [] : early.entries,
+            protectionMeta: early === null ? [] : early.meta,
+            protectionWrite: early === null ? 'not-attempted' : 'early-prewrite',
+            protectionCycleKey: early === null ? null : early.cycleKey,
             reinjectionScheduled: false,
             report: null,
             prunes: [],
@@ -1629,42 +1882,82 @@ export class CompressionGuard {
           };
           this.#pending.set(id, state);
           this.#attachPrunesToState(state, session);
-          this.#protectBeforeSummary(session, state, id);
+          if (early === null) {
+            this.#protectBeforeSummary(session, state, id);
+          } else {
+            // 预写 journal 已存在；start 只关联 compactionId，不重新快照/重写。
+            state.protectionWrite = 'early-prewrite';
+            queueMicrotask(() => this.#materializeProtection(early.cycleKey, state));
+          }
           return;
         }
         case 'compaction/summary': {
           if (id === null) return;
           this.#stats.summaries += 1;
+          const isSubagent = this.#scopeOf(session).isSubagent === true;
           let state = this.#pending.get(id);
+          let early = null;
           if (state === undefined) {
-            // 插件在压缩事务中途才挂上：来不及在摘要前固化，只能记审计。
-            state = {
-              compactionId: id,
-              sessionId: session?.id ?? null,
-              snapshot: snapshotProtection(session),
-              startSeq: null,
-              manual: null,
-              summaryEvent: null,
-              summaryText: '',
-              summaryReadable: null,
-              checkpointSeq: null,
-              lateSnapshot: true,
-              entries: [],
-              protectionMeta: [],
-              protectionWrite: 'late-start',
-              reinjectionScheduled: false,
-              report: null,
-              prunes: [],
-              cost: this.#newCost(event.data?.sourceCommandId != null ? 'manual' : 'auto', session),
-            };
+            early = this.#takeEarlyForSession(session, 'summary');
+            if (early !== null) {
+              // start 事件缺口，但预写 journal 还在：按预写内容接续，不重新快照。
+              state = {
+                compactionId: id,
+                sessionId: session?.id ?? null,
+                subagent: isSubagent,
+                snapshot: early.snapshot,
+                startSeq: null,
+                manual: null,
+                summaryEvent: null,
+                summaryText: '',
+                summaryReadable: null,
+                checkpointSeq: null,
+                lateSnapshot: false,
+                entries: early.entries,
+                protectionMeta: early.meta,
+                protectionWrite: 'early-prewrite',
+                protectionCycleKey: early.cycleKey,
+                reinjectionScheduled: false,
+                report: null,
+                prunes: [],
+                cost: this.#newCost(event.data?.sourceCommandId != null ? 'manual' : 'auto', session),
+              };
+            } else {
+              // 插件在压缩事务中途才挂上：来不及在摘要前固化，只能记审计。
+              state = {
+                compactionId: id,
+                sessionId: session?.id ?? null,
+                subagent: isSubagent,
+                snapshot: snapshotProtection(session),
+                startSeq: null,
+                manual: null,
+                summaryEvent: null,
+                summaryText: '',
+                summaryReadable: null,
+                checkpointSeq: null,
+                lateSnapshot: true,
+                entries: [],
+                protectionMeta: [],
+                protectionWrite: 'late-start',
+                protectionCycleKey: null,
+                reinjectionScheduled: false,
+                report: null,
+                prunes: [],
+                cost: this.#newCost(event.data?.sourceCommandId != null ? 'manual' : 'auto', session),
+              };
+            }
             this.#pending.set(id, state);
             this.#attachPrunesToState(state, session);
-            this.#stats.lateSnapshots += 1;
-            this.#auditEvent('protection-write-skipped', {
-              sessionId: state.sessionId,
-              compactionId: id,
-              reason: 'compaction-start-not-observed',
-            });
+            if (early !== null) {
+              queueMicrotask(() => this.#materializeProtection(early.cycleKey, state));
+            } else {
+              this.#stats.lateSnapshots += 1;
+              this.#auditEvent('protection-write-skipped', {
+                sessionId: state.sessionId,
+                compactionId: id,
+                reason: 'compaction-start-not-observed',
+              });
+            }
           }
           state.summaryEvent = event;
           const text = summaryTextOf(event);
@@ -1741,7 +2034,39 @@ export class CompressionGuard {
         case 'compaction/end': {
           if (id === null) return;
           this.#stats.ends += 1;
-          const state = this.#pending.get(id);
+          const isSubagent = this.#scopeOf(session).isSubagent === true;
+          let state = this.#pending.get(id);
+          let early = null;
+          if (state === undefined) {
+            early = this.#takeEarlyForSession(session, 'end');
+            if (early !== null) {
+              // start/summary 都缺口，但预写 journal 还在：至少完成物化/回注/成本落点。
+              state = {
+                compactionId: id,
+                sessionId: session?.id ?? null,
+                subagent: isSubagent,
+                snapshot: early.snapshot,
+                startSeq: null,
+                manual: event.data?.sourceCommandId != null,
+                summaryEvent: null,
+                summaryText: '',
+                summaryReadable: null,
+                checkpointSeq: null,
+                lateSnapshot: false,
+                entries: early.entries,
+                protectionMeta: early.meta,
+                protectionWrite: 'early-prewrite',
+                protectionCycleKey: early.cycleKey,
+                reinjectionScheduled: false,
+                report: null,
+                prunes: [],
+                cost: this.#newCost(event.data?.sourceCommandId != null ? 'manual' : 'auto', session),
+              };
+              this.#pending.set(id, state);
+              this.#attachPrunesToState(state, session);
+              queueMicrotask(() => this.#materializeProtection(early.cycleKey, state));
+            }
+          }
           if (state === undefined) {
             this.#stats.skipped += 1;
             this.#record({
@@ -1809,6 +2134,25 @@ export class CompressionGuard {
               : this.#now().toISOString();
           }
           this.#scheduleReinjection(session, state);
+          if (state.subagent === true && state.protectionCycleKey !== null && state.protectionCycleKey !== undefined) {
+            const cycleKey = state.protectionCycleKey;
+            queueMicrotask(async () => {
+              try {
+                await this.#store?.discardProtection?.(cycleKey);
+                this.#auditEvent('protection-write-skipped', {
+                  sessionId: state.sessionId,
+                  compactionId: id,
+                  cycle: cycleKey,
+                  phase: 'subagent-cycle-end',
+                  reason: 'subagent-not-persisted',
+                });
+              } catch (error) {
+                this.#logger?.warn?.(
+                  `[context-governance] subagent protection discard failed: ${String(error?.message ?? error)}`,
+                );
+              }
+            });
+          }
           // T8-2/M1.2：回注 microtask 之后写成本记录（同一周期一条）。
           // tokenMeter 可用 → 立即写；不可用 → 等 compaction/end 后第一条
           // assistant/message 的 usage 补齐 tokensAfter；等不到则由 stop/新周期冲刷为 null + none。

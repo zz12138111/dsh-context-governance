@@ -71,10 +71,12 @@ export function wireEarlyCompaction(options = {}) {
     getArmed = () => false,
     getScope = null,
     audit = null,
+    getAudit = null,
     logger = null,
     onDecision = null,
     now = () => Date.now(),
     schedule = (fn, ms) => setTimeout(fn, ms),
+    subscribe = true,
     cooldownMs: cooldownMsOption,
     minDeltaRatio: minDeltaRatioOption,
   } = options;
@@ -82,6 +84,23 @@ export function wireEarlyCompaction(options = {}) {
   const state = new Map();
   const timers = new Set();
   const armedNow = (session) => getArmed(session) === true;
+  const guardNow = (session) => {
+    try {
+      return typeof getGuard === 'function' ? getGuard(session) : null;
+    } catch {
+      return null;
+    }
+  };
+  const auditNow = (session) => {
+    if (typeof getAudit === 'function') {
+      try {
+        return getAudit(session) ?? audit;
+      } catch {
+        return audit;
+      }
+    }
+    return audit;
+  };
   const explicitCooldown = Number.isFinite(cooldownMsOption) && cooldownMsOption >= 0;
   const explicitDelta = Number.isFinite(minDeltaRatioOption) && minDeltaRatioOption >= 0;
   let lastDecision = null;
@@ -99,11 +118,12 @@ export function wireEarlyCompaction(options = {}) {
     if (!armedNow(session)) return;
     const policy = getPolicy(session);
     if (policy === null || policy === undefined) return;
+    const auditForSession = auditNow(session);
     const sessionId = session?.id ?? null;
     const at = policy.values?.['compact.at'] ?? null;
     const native = policy.window?.native ?? policy.native ?? null;
     const auditScopeSkip = (reason) => {
-      audit?.append?.('early-skipped', {
+      auditForSession?.append?.('early-skipped', {
         sessionId,
         sessionShortId: sessionId === null ? null : shortSessionId(sessionId),
         reason,
@@ -125,7 +145,15 @@ export function wireEarlyCompaction(options = {}) {
       return;
     }
 
-    const guard = getGuard();
+    const guard = guardNow(session);
+    if (guard === null) {
+      auditScopeSkip('guard-unavailable');
+      return;
+    }
+    if (guard.status?.readOnly === true) {
+      auditScopeSkip('read-only');
+      return;
+    }
     const pressureStatus = (typeof guard?.pressureFor === 'function'
       ? guard.pressureFor(session)
       : null) ?? guard?.status?.pressure ?? {};
@@ -157,6 +185,7 @@ export function wireEarlyCompaction(options = {}) {
       || !Number.isFinite(previous.effective) || !Number.isFinite(effective)
       || effective - previous.effective >= minDeltaRatio;
     const pending = Number.isFinite(guard?.status?.stats?.pending) ? guard.status.stats.pending : 0;
+    const earlyPending = typeof guard?.hasPendingEarly === 'function' && guard.hasPendingEarly() === true;
 
     const decision = decideEarly({
       armed: true,
@@ -165,7 +194,7 @@ export function wireEarlyCompaction(options = {}) {
       agentIdle: true,
       hasAgent: agent !== null,
       hasEngine: engine !== null,
-      inProgress: pending > 0,
+      inProgress: pending > 0 || earlyPending,
       cooldownOk,
       deltaOk,
       effective,
@@ -173,7 +202,7 @@ export function wireEarlyCompaction(options = {}) {
       native,
     });
 
-    audit?.append?.('early-decision', {
+    auditForSession?.append?.('early-decision', {
       sessionId,
       action: decision.action,
       reason: decision.reason,
@@ -183,14 +212,40 @@ export function wireEarlyCompaction(options = {}) {
     });
 
     if (decision.action !== EARLY_DECISION.FORCE) {
-      audit?.append?.('early-skipped', { sessionId, reason: decision.reason, effective, threshold: at, native });
+      auditForSession?.append?.('early-skipped', { sessionId, reason: decision.reason, effective, threshold: at, native });
       record({ event: 'early-skipped', reason: decision.reason, effective, time: new Date(nowMs).toISOString() });
       return;
     }
 
+    // P3 门禁 7：preProtect 必须在 compactNow 之前；失败 → 不调用 compactNow。
+    let preProtect = null;
+    if (typeof guard?.preProtect === 'function') {
+      try {
+        preProtect = await guard.preProtect(session);
+      } catch (error) {
+        preProtect = { ok: false, reason: 'protection-prewrite-failed', error: String(error?.message ?? error) };
+      }
+      if (preProtect?.ok !== true) {
+        auditForSession?.append?.('early-skipped', {
+          sessionId,
+          reason: 'protection-prewrite-failed',
+          detail: preProtect?.reason ?? null,
+          effective,
+          threshold: at,
+          native,
+        });
+        record({
+          event: 'early-skipped',
+          reason: 'protection-prewrite-failed',
+          effective,
+          time: new Date(nowMs).toISOString(),
+        });
+        return;
+      }
+    }
     state.set(sessionId, { at: nowMs, effective });
     // 审核 §10-⑤：attempt 前取 prevReport；失败时没有新报告，绝不能抄上一轮。
-    const prevReport = getGuard()?.status?.lastReport ?? null;
+    const prevReport = guard?.status?.lastReport ?? null;
     const compactor = new EarlyCompactor({ getEngine: () => engine, armed: true, logger });
     const result = await compactor.attempt({
       agent,
@@ -200,7 +255,12 @@ export function wireEarlyCompaction(options = {}) {
       turnEnded: true,
       agentIdle: true,
     });
-    const report = getGuard()?.status?.lastReport ?? null;
+    if (result.accepted === true && preProtect?.ok === true) {
+      guard.markEarlyAccepted?.(preProtect.cycleKey);
+    } else if (result.accepted !== true && preProtect?.ok === true) {
+      await guard.discardEarlyProtection?.(preProtect.cycleKey, result.reason ?? 'not-accepted');
+    }
+    const report = guard?.status?.lastReport ?? null;
     const fresh = result.accepted === true
       && report !== null
       && report.compactionId !== prevReport?.compactionId
@@ -218,6 +278,7 @@ export function wireEarlyCompaction(options = {}) {
         : [],
       reinjected: result.accepted === true ? (fresh?.reinjected ?? null) : null,
       compactionId: fresh?.compactionId ?? null,
+      ...(preProtect?.ok === true ? { cycle: preProtect.cycleKey, phase: 'early-prewrite' } : {}),
       reason: result.reason ?? null,
       delayMs: EARLY_DELAY_MS,
       effective,
@@ -225,15 +286,15 @@ export function wireEarlyCompaction(options = {}) {
       native,
     };
     if (result.accepted === true) {
-      audit?.append?.('early-forced', fields);
+      auditForSession?.append?.('early-forced', fields);
       // T2 首触提示（不做弹窗）：logger 一行 info，只含数值/来源，不含正文。
       logger?.info?.(
         `[context-governance] early compaction forced effective=${Number(effective).toFixed(3)} ` +
         `threshold=${Number(at).toFixed(2)} compactionId=${String(fresh?.compactionId ?? '')} ` +
         `protection=${String(fields.protection ?? 'unknown')}`,
       );
-    } else if (result.reason === 'busy') audit?.append?.('early-aborted', fields);
-    else audit?.append?.('early-failed', fields);
+    } else if (result.reason === 'busy') auditForSession?.append?.('early-aborted', fields);
+    else auditForSession?.append?.('early-failed', fields);
     record({
       event: result.accepted === true ? 'early-forced' : (result.reason === 'busy' ? 'early-aborted' : 'early-failed'),
       reason: result.reason ?? null,
@@ -243,7 +304,7 @@ export function wireEarlyCompaction(options = {}) {
     });
   }
 
-  const dispose = typeof ctx?.on === 'function'
+  const dispose = subscribe !== false && typeof ctx?.on === 'function'
     ? ctx.on('session/event', (session, event) => {
       if (event?.type !== 'turn/end') return;
       // 审核 §10-⑤ 附注：armed=false 时不排定时器（无服务/审计副作用，也不积 timers）。
