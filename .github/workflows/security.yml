@@ -17,8 +17,17 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      # GitHub Windows runner 的默认 TEMP 是 8.3 短名（如 C:\Users\RUNNER~1\...），
+      # 而插件按 realpath 归一为长名；测试按原始 tmpdir 断言会失败。
+      # 这里把测试进程的 TEMP/TMP 指到长路径，使 os.tmpdir() 与 realpath 一致。
+      - name: prepare long temp path
+        shell: pwsh
+        run: New-Item -ItemType Directory -Force -Path 'D:\a\_temp' | Out-Null
       - name: unit tests
         working-directory: packages/dsh-context-governance
+        env:
+          TEMP: 'D:\a\_temp'
+          TMP: 'D:\a\_temp'
         run: node --test "test/*.test.mjs"
 
   # 扫描在 Linux 跑：gitleaks-action 的 Windows 二进制下载有已知 404 问题
