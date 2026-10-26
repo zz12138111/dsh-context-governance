@@ -187,6 +187,18 @@
 
 > 关于「调高 `compact.at` 能否**替代**修 B-1」：**不能替代**。它解决的是「默认值下触发概率/默认暴露面」，没解决「一旦触发即零保护、零账本、审计占位」的机理——阈值之上照样命中，且把风险解释成「用户自己调低」等于转嫁。它只能作为「带缺陷发」时的附带缓解，且必须与 Release 已知缺陷段同时存在。
 
+### 4.12 发布前真机观察项（统一清单）
+
+> 只此一处；其他条目只引用本节，不重复。均为**不阻塞第 4/5 批**、但 **I3/Release 前**应尽量补的实机证据；拿不到时按“Release 口径”列执行，不得把单测说成实机。
+
+| # | 观测项 | 现状 | 拿不到时的 Release 口径 |
+|---|---|---|---|
+| 1 | **#1 外部会话宿主原生 cost**：真实 `compaction-cost` 行 `source=host-native`，含 backend/前后 tokens、无 protection/reinjection、store 零写 | 未观测到（单测覆盖字段边界） | 不声称“外部压缩已有实机证据” |
+| 2 | **#4/#5 `/cg status` 文本**：unvalidated 显示 `early=on (...; unvalidated)`；收缩/空窗显示 `early=off (reason)`；恢复回 on | 真机文本未采（单测覆盖） | 不声称 status 已真机验过 |
+| 3 | **#10 真机 auto loss**：宿主自动压缩保护失败 → `compaction-loss(manual:false, trigger:auto)` | 未观测（单测覆盖） | 不声称已有 auto 实机 loss 证据 |
+| 4 | **#11 双 profile 真机**：两个 profile 各写各状态文件、互读不到 | 单测覆盖 alpha/beta；本机只有 desktop | 不声称双 profile 已真机验证 |
+| 5 | **#11 根变化真机**：config 变更 / 状态文件丢失 / 损坏 → `project-root-changed` / `inferred-fresh`，状记忆不迁移 | 单测覆盖；真机未做 | 不声称根变化已真机验证 |
+| 6 | **#11 `/cg status` 根文本**：root / memoryRoot / source 可见 | 真机文本未采（单测覆盖） | 不声称 status 已真机验过 |
 ## 5. 状态
 
 - 本文仅为口径登记；不含启用方案设计、不改变任何代码。
@@ -210,4 +222,5 @@ o-project-root）。**真机待补（I3 前）**：双 profile、根变化可见
 - 2026-10-26（2b #1 签收）：单测 **394/394** + 真机 `early-skipped(foreign-session)`（session `53ece2c2`，threshold .6/native .6934；无 `early-forced`/`compaction-cost`；scope 先于 pressure）；`armed` 已恢复 false（pid 4640，04:20Z 后 `early-*`=0）。**剩余观察项**：外部会话真实 host-native cost 行未出现，单测覆盖字段边界；Release 不得声称已有实机证据。证据 `analysis/req-20261025-12/1.0-10条-复验/01-B1/real-skip-foreign-session.md`。
 - 2026-10-26（3b 签收）：#4/#5 代码/测试面通过——全量 **407/407**；reason 新旧兼容（`fallback-over-native` 保留）、transient 按会话过滤/成功清除/fallback 传 sessionId、unvalidated 不裸 on；README 4A 单独提交。真机 `/cg status` 文本待桌面窗口，不阻塞本批。
 - 2026-10-26（#10 单测签收）：全量 **414/414**；compaction-loss 统一（manual/trigger、loss-v1.0），manual-compaction-loss 只读，cost 仍 cost-v1.4；late-mount 带 eason=late-mount；历史回查 292d1e97=发生丢失、ca9c9bb8=无法判定（行号 60/61/63/64）。真机 auto loss 为发布前观察项。
+
 
