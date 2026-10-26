@@ -444,7 +444,7 @@
 | D4 | 配置级关闭 | `compact.early.armed=false`（加载后全局）；与会话级（A5）、策略级（`compact.early=false`）构成三层（见补定义 E5） | 已录 |
 | E1 | `compact.early.armed` 参数 | 默认 `true`、来源 `default`；项目层出现一律不生效（忽略 + `policy-invalid`，不清空整层）（`docs/1.0-状态定义-v1.md:39,65`） | 已录（参数表已加行） |
 | E2 | 「本项目」判定 | **已定（2026-10-26 用户拍板 B：全局纳管）**：**每个会话按自身项目根判定**（不再有「单一本项目」/「外部会话」）；无 `.git` 祖先 = `no-project-root`（完全不碰，见 3A 豁免）。根来源沿用 D9=A | **已定（每会话根）** |
-| E4 | 默认值调整规则 | 全仓无规定。**选项 A**：补一条「默认值变更须记 `DECISIONS` + Release 说明」；**选项 B**：不纳入 1.0、由用户定 | **待定（用户择 A/B）** |
+| E4 | 默认值调整规则 | **已定（用户 2026-10-26 拍 A）**：任何**内置默认值**变更须记 **`DECISIONS` 编号 + Release notes 一句话**；适用面见下「默认值变更规则」 | **已定** |
 
 **补录条款（主单自表述；语义与派生草案一致，不引草案）**
 
@@ -460,6 +460,12 @@
    - **根来源（configRoot 强制合并）**：`projectRoot` **非空**时，其下会话的根 = `projectRoot`（`source=config`），**嵌套 `.git` 不另立根**——**已知限制：显式配置根内多根隔离不完整**（P1 / P4 文档须披露）；`configRoot` 外会话按自身 cwd 独立成根；`projectRoot` **为空**时按最近 `.git`（文件或目录）多根推断；首见推断并持久化（D9=A），**重启沿用、不重推**；**不再存在「单项目模式」**。
    - 根变化（配置变更 / 持久化状态丢失 / 换机）必须在 `/cg status` 与审计可见（`project-root-changed` / `inferred-fresh`）；**重启后根不得静默改变**。
    - 已写入的记忆**不迁移、不删除**，留在原根路径；**卸载保留各根 memory、回滚不回写旧根**（见「多根通用性」第 11 条）。
+
+**默认值变更规则（用户 2026-10-26 拍 A）**
+
+- **适用面（「默认值」= 插件内置层的默认，不是用户自己配的值）**：`compact.at` / `compact.early` / `compact.early.armed` / `compact.cooldownMin` / `compact.minDeltaTokens` / `compact.estimateSafety` / `compact.lowThresholdAck` / `cost.remainingTurns` / `header.enabled` / `logFile` / `projectRoot` / `memoryRoot` 等内置默认值。
+- **变更要求**：① 记 **`DECISIONS` 编号**（开发账本）；② **Release notes 写一句用户可见变化**（改了什么、影响谁）。**不记录不得改默认**。
+- **不适用**：用户自己设置的配置值（会话 / 插件配置 / 项目层）不需要记 `DECISIONS`。
 
 **多根通用性（用户 2026-10-26 拍板；收敛 23 条通用性缺口）**
 
