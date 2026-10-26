@@ -771,7 +771,10 @@ export async function apply(ctx, rawConfig = {}) {
   // 仅 CG_1A_PROBE=1：用宿主 commands.execute 派发只读/可复原命令，不调用本插件 handler、不自造 invocation。
   // 顺序：读初始 armed/profile → disarm → status → profile review → status → profile reset → arm → 按初始值复原。
   // 不压缩、不写配置/记忆/项目文件、不联网、不读正文；证据只留 sessionId/commandId/事件名/时间与命令输出。
-  if (process.env.CG_1A_PROBE === '1') {
+  // 门控：env OR 仓库内 marker 文件（审核定：不改系统环境变量/配置；重启前放 marker，取完删除）。
+  const probeFlagFile = path.join(config.projectRoot, '.tmp', 'cg-1a-probe.flag');
+  const probeEnabled = process.env.CG_1A_PROBE === '1' || fs.existsSync(probeFlagFile);
+  if (probeEnabled) {
     let fired = false;
     let attempts = 0;
     const runProbe = async (agent) => {
@@ -806,6 +809,8 @@ export async function apply(ctx, rawConfig = {}) {
             ok: true,
             commandId: out?.commandId ?? null,
             kind: out?.result?.kind ?? null,
+            // 诊断：只记返回对象的键名（不记值），用于定位 execute 返回形状。
+            resultKeys: out !== null && typeof out === 'object' ? Object.keys(out) : null,
             text: typeof out?.result?.text === 'string' ? out.result.text : null,
           });
           return out;
