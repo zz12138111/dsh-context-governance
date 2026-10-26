@@ -23,7 +23,7 @@
 - **依据**：`docs/上下文治理插件-架构说明-v1.1.md`
 - **背景/痛点**：长会话压缩后，任务状态、决策、批次进度容易丢失；已定的事被重问；换会话或定时唤醒接不上。M1 先解决“不断线”，不追求省 token。
 - **目标（可验收）**：
-  1. 单插件、对宿主零硬依赖；对宿主默认与 context-zip 两种后端保持**事件级契约一致**（provider 层在本 scope 不可得，见验收 ⑤）。
+  1. 单插件、对宿主零硬依赖；**经官方跨 isolate 访问器（`agentPresets.serviceFor(agent,'compaction')`）取用宿主当前 active 压缩引擎并主动触发压缩**（provider 级）：宿主原装 `compaction-basic` 与 context-zip redirect **两种后端形态下同一条取用路径均成立**——运行时只有一个 active engine，不是双引擎（见验收 ⑤）。
   2. 压缩、换会话、唤醒后，任务态（目标、待办、最近决定、关键约束）能自动恢复。
   3. 压缩保护按 S4=B：压缩前先把受保护内容写进记忆（标题+指针）；压缩结束（`compaction/end` 发布后首个 microtask、下一次模型调用前）从记忆回注；自动压缩下 5 类受保护内容 0 丢失；手动压缩允许原文丢失，但必须有记忆指针、audit 显式告警、回注后能看出最后一句。
   4. 回注只放记忆 ID/状态/指针，详情留记忆，不产生第二段摘要。
@@ -39,7 +39,7 @@
   - ② **记忆写作**：模型调用记忆写入工具后，条目包含 `id/type/status/project/source/writer/confidence`；高风险项为 `proposed`；来源可追溯。
   - ③ **压缩保护（S4=B）**：压缩前把受保护内容写进记忆（标题+指针）；压缩结束（`compaction/end` 发布后首个 microtask、同一 tick、下一次模型调用前）从记忆回注；字面“checkpoint 后、end 前”需替换压缩 provider，M1 不做。自动压缩：5 类受保护内容（最新用户消息/规则注入/工具配对/批次 STATE/回滚点映射）0 丢失；手动压缩：允许原文丢失（宿主仅保留最后 1 个 surface 节点，治理层无否决权），但必须满足记忆有指针、audit 有显式告警、回注后调用方能看出“最后一句是什么”；任何“写不进/注不进”必须有 audit，不允许静默。
   - ④ **回注行为**：只含 ID + 状态 + 指针；摘要可读时按覆盖判断是否补一行标题；摘要不可读时仅 ID+状态；摘要与记忆冲突时记忆赢；详情可通过记忆工具找回。
-  - ⑤ **双后端（事件级）**：两种后端共用同一事件契约；真机实测为 **context-zip**（redirect 接管 `compaction-basic`），宿主默认未单独跑；**provider 路径不可用**（本插件 scope `get.compaction(strict=false) → undefined`，见 `REQ-20261025-03` 结案），因此不替换用户现有配置、也不参与 provider 选择；没装 context-zip 时自动用宿主默认。
+  - ⑤ **双后端（provider 级）**（2026-10-26 口径升级：M1 结项按当时「事件级」已结，本条自 1.0 起按 provider 级执行）：**根 scope `ctx.get('compaction')` 与 `agent.ctx.get('compaction')` 不可得属宿主设计**（`isolate.compaction=true`；`DEC-20261025-48` 不改 isolate）；取用走**官方跨 isolate 访问器 `agentPresets.serviceFor(agent,'compaction')`**，返回当前 active engine（默认 desktop = `ContextZipEngine`，redirect 接管 `compaction-basic`；无 redirect = `BasicCompactionEngine`）。**两种后端形态共用同一条取用路径**，取到后调 `compactNow` 触发压缩；**不自造引擎、不替换后端、不接管 provider 选择**；没装 context-zip 时自动用宿主默认。`REQ-20261025-03` 结案的是「根 scope `get.compaction` 不可得」，**不等于「取不到引擎」**；桌面默认部署的真机触发见 0.2.2 验收。
   - ⑥ **失败与降级**：记忆写失败 → 重试一次，仍失败跳过本次压缩并告警；压缩失败 → 回退宿主默认；配置非法 → 插件不加载、DSH 正常；摘要/范围/产物都不可见 → 该后端只读。
   - ⑦ **状态与审计**：状态命令（暂名 `/cg status`）显示后端、能力、记忆条数、上次压缩、上次回注、降级项；审计含后端、压缩前后、成本归属（字段见下）、回注被吞/重复、失败。
 
@@ -156,7 +156,7 @@
   2. **探测修正**：能力探测由“apply 一次”改为「apply 记 `capability@apply` + 首个会话事件后补 `capability@ready`」两行审计，不得因时序把可用服务记成 absent。
   3. **口径可追**：新增 `tokensBeforeSource` / `tokensAfterSource`（`tokenMeter` / `usage` / `none`），`auditVersion` 升 `cost-v1.1`；**只增字段、不改已有字段语义**，旧解析器仍可用。
   4. **provider 结论（已结案，2026-10-25）**：本部署下 `get.compaction(strict=false)=undefined`（`@apply` 13:18:10Z / `@ready` 13:18:23Z 一致）→ **该 scope 未提供 `compaction` 服务**。因此 **「回注时点修正」在该部署下不可行**，只能走事件时序推断（现方案）——**这是结论，不是待查项**。本轮不改压缩后端、不替换 provider；若未来宿主或部署方式变化，重新探测即可，但不再作为 M2 的前置期待。
-- **影响与定案（2026-10-25，`DEC-20261025-48`）**：**不改 `isolate.compaction`**（宿主 preset 作用域隔离，属设计行为）。理由：宿主压缩行为/压力阈值/审计时序均不变；`cordis provide` 同 scope key 重复注册会抛错（`@local/dsh-computer-use/presets/cordis.patch.yml` 有两处 compaction 组）；插件侧 `get.compaction` 变 `obj` 会使 mode 由 `event-level` 变 `full`（保护失败会进 `degraded-protection`）；收益≈0。**「回注时点修正」不可行，不再作为 M2 前置期待；M2 不依赖 provider。** 如需验证 provider 路径，只允许在**隔离 profile 实验**里进行，标注为实验、不在主线。
+- **影响与定案（2026-10-25，`DEC-20261025-48`）**：**不改 `isolate.compaction`**（宿主 preset 作用域隔离，属设计行为）。理由：宿主压缩行为/压力阈值/审计时序均不变；`cordis provide` 同 scope key 重复注册会抛错（`@local/dsh-computer-use/presets/cordis.patch.yml` 有两处 compaction 组）；插件侧 `get.compaction` 变 `obj` 会使 mode 由 `event-level` 变 `full`（保护失败会进 `degraded-protection`）；收益≈0。**「回注时点修正」不可行，不再作为 M2 前置期待。** ~~M2 不依赖 provider~~ → **2026-10-26 口径升级（用户批准）**：M2 提前压**依赖** `agentPresets.serviceFor(agent,'compaction')` 取 active engine（官方跨 isolate 访问器）；`isolate` 仍不改，取用**不经过根 scope**；隔离 profile 只用于验证，不替代桌面真机。
 - **边界（不做什么）**：
   - 不改回注逻辑、不改记忆、不做折叠（折叠已于 2026-10-25 取消）；
   - 不接 ACP、不做货币成本、不做跨周期聚合（留 M2）；
@@ -590,8 +590,9 @@
 
 - **0.2.0**：四层覆盖正确——**项目层经 `apply` 真实生效**（`buildPolicyState` 接线，不许内联重建），并有**经 apply 的集成测试**；非法配置与**被拒的项目层**都可在 `/cg status` 直接看到原因，不只写审计；`/cg status` 合成链与 `native` 正确；`/cg policy show` 可用；`research` 显示 `early=off`；项目层安全口径（P-A/P-C）有单测覆盖（`lowThresholdAck`/`estimateSafety`/`at<0.45` 三类拒绝）；全量测试通过、S1–S6 不回归。
 - **0.2.1（窗口/校验层，本次范围拆分）：本版不触发任何压缩**——只做窗口记录、动态 `native`（与 status/压力分母同源）、`conservative` 校验、status 双显与三条窗口测试；**并随本版修复 P3 九条（见下）**。验收：`windowState` 含 `current(#lastSession)/conservative(observed[])/observedAt`；`request/context` 缺失删除旧值并置 `unknown`（不沿用）；同源解析函数被 status 与压力分母共用；无观察时允许设 `at` 但标“未经校验”，运行时 `at>native` 拒绝该层 + 审计；`/cg status` 双显并标“校验按 conservative”；1M+128k 双会话用例与“删除窗口”用例通过；**代码检索与单测证明本版无任何压缩触发路径**。
-- **0.2.2（提前压执行，已排期，`DEC-20261025-79`）**：前置 G2/G3 **在真机窗口做**——插件运行在宿主进程内、本身持有凭据，`compactNow` 是宿主内调用，**不需要 headless、不受 T0 的“拿不到凭据”限制**。验收：到点主动压一次（`early-forced` 审计、事件流完整）；`effective ≥ native−0.02` 不抢；失败不伤宿主；`early-aborted` 静默；长 turn 不打断；手动 `/cg compact now` 两步确认（冷却期 `--force`）；参数越界被拒。
+- **0.2.2（提前压执行，已排期，`DEC-20261025-79`）**：前置 G2/G3 **在真机窗口做**——插件运行在宿主进程内、本身持有凭据，`compactNow` 是宿主内调用，**不需要 headless、不受 T0 的“拿不到凭据”限制**。验收：**桌面默认部署（非隔离 profile）到点主动压 ≥1 次**（`early-forced` + `compaction-cost` 用量 + `/cg status` 原文；`accepted=true` 且 `compaction=committed`，`last-compaction id` 与本周期 `compactionId` 一致；仅 `early-decision skip` 或仅隔离 profile 触发不算通过；R-2 已有的隔离两次——host-basic `acb89ca` / context-zip `bc12050`——只作环境证据，不替代桌面真机）；`effective ≥ native−0.02` 不抢；失败不伤宿主；`early-aborted` 静默；长 turn 不打断；手动 `/cg compact now` 两步确认（冷却期 `--force`）；参数越界被拒。
 - ~~**0.2.3（成本账本）**：~~ **暂缓至 1.1**（`DEC-20261025-79`）。**暂缓理由**：① G2/G3 运行时验证成本高、优先保 0.2.2 与 1.0 收口；② 账本属“看得见”的增强，不影响“提前压/不断线”的主价值；③ `cost-v1.4` 字段已稳定，延后不影响数据可用性。原验收标准保留备查：聚合 = 逐条求和；两实测数 + 假设行置顶的估算；`backend` 用 `cost-v1.4` 枚举（含 `none`）；未知保持 unknown；`/cg cost` 可查。
+- **状态展示可解释性（1.0 门禁，2026-10-26 用户批准新增）**：`/cg status` 必须**区分「adapter 未识别」与「引擎不可用」**——`adapter=none` / `self-check-failed` 只说明 provider adapter 观测面（根/agent scope 的 `ctx.get('compaction')`）不可得（宿主 `isolate.compaction` 设计行为），**不得渲染为“压缩能力不可用/提前压不可用”**；须另有一项标明引擎可达性（经 `agentPresets.serviceFor` 取到 active engine = 可达；取不到 = 不可达）。反例（真实发生）：`adapter=none` + `self-check-failed(error)` 被误读为“到阈值也压不了”。
 - **总回归**：M1 的 S1–S6；生产代码无折叠、**无引擎包装**。
 
 ### 0.2.1 附带修复：P3 九条（`DEC-20261025-64`，随 0.2.1 一起复核、一起推）
@@ -615,7 +616,7 @@
 ### 依赖/风险
 
 - **依赖 `cost-v1.4` 基线**：0.1.16 已推；**建议等 0.1.17（枚举补 `none`）落定后再开始 0.2.2**；
-- 提前压依赖 preset 引擎可见（G1），`ctx.compaction` 仍不可得（已结案，不期待）；
+- 提前压依赖 preset 引擎可见（G1）；`ctx.compaction` 在根/agent scope 不可得属设计（不期待），**但 `agentPresets.serviceFor(agent,'compaction')` 可取到当前 active engine**（官方跨 isolate 访问器；`DEC-20261025-48` 不改 isolate）；
 - 每压一次都是一次摘要调用，“更早压”= 更多摘要成本，文档必须写明；
 - 与 `dsh-context` 不重复做图表，只做策略账本。
 
