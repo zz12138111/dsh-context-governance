@@ -101,7 +101,7 @@ async function readAudit(rootDir) {
 
 function guardWith(store, adapter) {
   const ctx = makeCtx();
-  const guard = new CompressionGuard({
+  const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }),
     ctx,
     hostVersion: '0.2.1-rc.3',
     store,

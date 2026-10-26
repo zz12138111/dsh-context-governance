@@ -292,10 +292,11 @@ export class CompressionGuard {
   }
 
   /**
-   * 1.0 #1：会话归域判定（单根模型）。
-   * - 生产由 index 注入 resolveScope（根来自配置/持久化/推断）；
-   * - 直接 new CompressionGuard 且未给根时保留旧行为（不过滤，cwd 空计入 unattributed）；
-   * - 根已给时以根边界为准：根内 governed，根外 foreign-session（`onlyProject` 只作展示）。
+   * 1.0 #1：会话归域判定（单根模型，fail-closed）。
+   * - 生产 index 始终注入 resolveScope；未注入时也只用根边界判定，不留任何“全放行”兜底；
+   * - `projectRoot === ''` → `resolveScope` 返回 `no-project-root`、governed=false
+   *   （不观测/不保护/不写记忆）；
+   * - `onlyProject` 只作 status 展示，不参与作用域判定。
    */
   #scopeOf(session) {
     if (this.#scopeResolver !== null) {
@@ -303,26 +304,14 @@ export class CompressionGuard {
         const scope = this.#scopeResolver(session);
         if (scope !== null && typeof scope === 'object' && typeof scope.governed === 'boolean') return scope;
       } catch {
-        /* 归域判定失败走兜底 */
+        /* 注入的判定抛错 → 落到根边界 fail-closed */
       }
     }
-    const cwd = this.#sessionCwd(session);
-    if (this.#projectRoot === '') {
-      return {
-        mode: 'unresolved',
-        root: null,
-        cwd,
-        governed: true,
-        skipReason: null,
-        unattributed: cwd === '',
-      };
-    }
-    // 兼容旧 opt-out：未注入 resolveScope 的直接构造（历史测试/外部调用）保留
-    // `onlyProject=false` 的旧语义；生产路径由 index 注入 resolveScope，以根为准。
-    if (this.#scopeResolver === null && this.#onlyProject === false) {
-      return { mode: 'single-root', root: this.#projectRoot, cwd, governed: true, skipReason: null, unattributed: false };
-    }
-    return resolveScope({ root: this.#projectRoot, cwd, earlyEnabled: true });
+    return resolveScope({
+      root: this.#projectRoot === '' ? null : this.#projectRoot,
+      cwd: this.#sessionCwd(session),
+      earlyEnabled: true,
+    });
   }
 
   /** 记录只读原因；同一原因只 warn 一次，避免每周期刷屏。 */

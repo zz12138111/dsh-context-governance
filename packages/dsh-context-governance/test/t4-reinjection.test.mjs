@@ -109,7 +109,7 @@ test('T4-1：compaction/start 同步落盘；5 类保护项在 summary 之前可
     const built = buildCompaction({ before: orphanMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 11 });
     const session = liveSession(built);
     const ctx = makeCtx(new BasicCompactionEngine());
-    const guard = new CompressionGuard({ ctx, store, hostVersion: '0.2.1-rc.2' });
+    const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, store, hostVersion: '0.2.1-rc.2' });
     guard.start();
     try {
       emitStart(ctx, session, built);
@@ -133,7 +133,7 @@ test('T4-2：自动压缩完整周期只回注一次；ID+状态+标题，不含
     const built = buildCompaction({ before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 11 });
     const session = liveSession(built);
     const ctx = makeCtx(new BasicCompactionEngine());
-    const guard = new CompressionGuard({ ctx, store, hostVersion: '0.2.1-rc.2' });
+    const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, store, hostVersion: '0.2.1-rc.2' });
     guard.start();
     try {
       emitThroughEnd(ctx, session, built);
@@ -167,7 +167,7 @@ test('T4-3：手动压缩允许丢原文，但 audit 告警 + 回注最后用户
     eventOf(built, 'compaction/start').data.sourceCommandId = 'cmd-manual';
     const session = liveSession(built);
     const ctx = makeCtx(new BasicCompactionEngine());
-    const guard = new CompressionGuard({ ctx, store, hostVersion: '0.2.1-rc.2' });
+    const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, store, hostVersion: '0.2.1-rc.2' });
     guard.start();
     try {
       emitThroughEnd(ctx, session, built);
@@ -194,7 +194,7 @@ test('T4-4：写记忆失败 → audit + degraded，不阻断压缩、不抛宿�
       const built = buildCompaction({ before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 11 });
       const session = liveSession(built);
       const ctx = makeCtx(new BasicCompactionEngine());
-      const guard = new CompressionGuard({ ctx, store, hostVersion: '0.2.1-rc.2' });
+      const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, store, hostVersion: '0.2.1-rc.2' });
       guard.start();
       try {
         assert.doesNotThrow(() => emitThroughEnd(ctx, session, built));
@@ -220,7 +220,7 @@ test('T4-5：回注失败按阈值降级（maxFailures=1）；下一周期暂停
     const session = liveSession(built);
     session.append = () => { throw new Error('append rejected'); };
     const ctx = makeCtx(new BasicCompactionEngine());
-    const guard = new CompressionGuard({
+    const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }),
       ctx, store, hostVersion: '0.2.1-rc.2', reinjection: { maxFailures: 1 },
     });
     guard.start();
@@ -260,7 +260,7 @@ test('T4-5：回注失败按阈值降级（maxFailures=1）；下一周期暂停
 test('T8-1 自愈：一次回注失败不永久停写，下一周期恢复写入并清计数', async () => {
   await withStore(async (store) => {
     const ctx = makeCtx(new BasicCompactionEngine());
-    const guard = new CompressionGuard({ ctx, store, hostVersion: '0.2.1-rc.2' });
+    const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, store, hostVersion: '0.2.1-rc.2' });
     guard.start();
     try {
       const built = buildCompaction({ before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 11 });
@@ -298,7 +298,7 @@ test('T4-6：同一 cycle 不重复写/注（重复 start/end 被识别）', asy
     const built = buildCompaction({ before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 11 });
     const session = liveSession(built);
     const ctx = makeCtx(new BasicCompactionEngine());
-    const guard = new CompressionGuard({ ctx, store, hostVersion: '0.2.1-rc.2' });
+    const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, store, hostVersion: '0.2.1-rc.2' });
     guard.start();
     try {
       emitThroughEnd(ctx, session, built);
@@ -330,7 +330,7 @@ test('T4-7：自动压缩受保护内容“可恢复”口径（5 类都有指�
     const built = buildCompaction({ before: orphanMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 13 });
     const session = liveSession(built);
     const ctx = makeCtx(new BasicCompactionEngine());
-    const guard = new CompressionGuard({ ctx, store, hostVersion: '0.2.1-rc.2' });
+    const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, store, hostVersion: '0.2.1-rc.2' });
     guard.start();
     try {
       emitThroughEnd(ctx, session, built);
@@ -357,7 +357,7 @@ test('T4-8：audit 不写消息正文/路径内容', async () => {
     const built = buildCompaction({ before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 11 });
     const session = liveSession(built);
     const ctx = makeCtx(new BasicCompactionEngine());
-    const guard = new CompressionGuard({ ctx, store, hostVersion: '0.2.1-rc.2' });
+    const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, store, hostVersion: '0.2.1-rc.2' });
     guard.start();
     try {
       emitThroughEnd(ctx, session, built);
@@ -378,7 +378,7 @@ test('T4-10：provider 不可见时走事件级感知，仍能固化/回注', as
     const built = buildCompaction({ before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 11 });
     const session = liveSession(built);
     const ctx = makeCtx(null);
-    const guard = new CompressionGuard({ ctx, store, hostVersion: '0.2.1-rc.3' });
+    const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, store, hostVersion: '0.2.1-rc.3' });
     guard.start();
     try {
       assert.equal(guard.mode, 'event-level');
@@ -400,7 +400,7 @@ test('T4-9：摘要不可读时回注只放 ID+状态（手动最新用户仍保
     const built = buildCompaction({ before: healthyMessages(), summary: '', start: 2, end: 11 });
     const session = liveSession(built);
     const ctx = makeCtx(new BasicCompactionEngine());
-    const guard = new CompressionGuard({ ctx, store, hostVersion: '0.2.1-rc.2' });
+    const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, store, hostVersion: '0.2.1-rc.2' });
     guard.start();
     try {
       emitThroughEnd(ctx, session, built);

@@ -57,7 +57,7 @@ function emitAll(ctx, { session, events, postSurface }) {
 
 test('宿主默认：完整压缩事务产生 full 模式与通过报告', () => {
   const ctx = makeCtx(new BasicCompactionEngine());
-  const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.2' });
+  const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.2' });
   guard.start();
   assert.equal(ctx.handlers[0].event, 'session/event');
   assert.equal(guard.mode, 'full');
@@ -79,7 +79,7 @@ test('宿主默认：完整压缩事务产生 full 模式与通过报告', () =>
 
 test('context-zip：识别五段摘要并保持 full', () => {
   const ctx = makeCtx(new ContextZipEngine());
-  const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.2', backendVersion: '0.1.10' });
+  const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.2', backendVersion: '0.1.10' });
   guard.start();
   assert.equal(guard.adapter.kind, 'context-zip');
   const built = buildCompaction({ before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 11 });
@@ -91,7 +91,7 @@ test('context-zip：识别五段摘要并保持 full', () => {
 
 test('保护失败：报告 fail、写 warn，但不向宿主抛错', () => {
   const ctx = makeCtx(new BasicCompactionEngine());
-  const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.2' });
+  const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.2' });
   guard.start();
   const built = buildCompaction({ before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 13 });
   assert.doesNotThrow(() => emitAll(ctx, built));
@@ -108,7 +108,7 @@ test('0.2.2 保护失败：diagnostics 文件留一行（宿主 logger 之外的
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cg-diag-'));
   const file = path.join(dir, 'governance.log');
   const ctx = makeCtx(new BasicCompactionEngine());
-  const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.2', diagnosticsLogFile: file });
+  const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.2', diagnosticsLogFile: file });
   guard.start();
   const built = buildCompaction({ before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 13 });
   emitAll(ctx, built);
@@ -123,7 +123,7 @@ test('0.2.2 保护失败：diagnostics 文件留一行（宿主 logger 之外的
 
 test('插件在压缩事务中途挂上：用 summary 时补快照并标 lateSnapshot', () => {
   const ctx = makeCtx(new BasicCompactionEngine());
-  const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.2' });
+  const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.2' });
   guard.start();
   const built = buildCompaction({ before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 11 });
   const handler = ctx.handlers[0].handler;
@@ -141,7 +141,7 @@ test('插件在压缩事务中途挂上：用 summary 时补快照并标 lateSna
 
 test('没有 compaction 服务：走事件级感知（event-level），不抛错', () => {
   const ctx = makeCtx(null);
-  const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.2' });
+  const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.2' });
   guard.start();
   assert.equal(guard.mode, 'event-level');
   assert.ok(guard.status.reasons.includes('event-perception-only'));
@@ -151,7 +151,7 @@ test('没有 compaction 服务：走事件级感知（event-level），不抛错
 
 test('畸形事件被忽略而不是抛错', () => {
   const ctx = makeCtx(new BasicCompactionEngine());
-  const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.2' });
+  const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.2' });
   guard.start();
   const handler = ctx.handlers[0].handler;
   assert.doesNotThrow(() => handler(null, null));
@@ -163,7 +163,7 @@ test('畸形事件被忽略而不是抛错', () => {
 
 test('两个会话的压缩事务互不串报告', () => {
   const ctx = makeCtx(new BasicCompactionEngine());
-  const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.2' });
+  const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.2' });
   guard.start();
   const a = buildCompaction({ compactionId: 'A', startSeq: 100, summarySeq: 101, checkpointSeq: 102, endSeq: 103, before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 11 });
   const b = buildCompaction({ compactionId: 'B', startSeq: 200, summarySeq: 201, checkpointSeq: 202, endSeq: 203, before: healthyMessages(), summary: FREE_FORM_SUMMARY, start: 2, end: 11 });
@@ -193,7 +193,7 @@ test('两个会话的压缩事务互不串报告', () => {
 
 test('stop 幂等且释放订阅', () => {
   const ctx = makeCtx(new BasicCompactionEngine());
-  const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.2' });
+  const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.2' });
   guard.start();
   guard.stop();
   assert.equal(ctx.disposed, 1);
@@ -205,7 +205,7 @@ test('不替换 provider：引擎实例与自有配置保持原样', () => {
   engine.config = { thresholdRatio: 0.65 };
   const beforeKeys = Object.keys(engine).sort();
   const ctx = makeCtx(engine);
-  const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.2' });
+  const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.2' });
   guard.start();
   const built = buildCompaction({ before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 11 });
   emitAll(ctx, built);
@@ -217,7 +217,7 @@ test('不替换 provider：引擎实例与自有配置保持原样', () => {
 
 test('报告区分手动压缩与自动压缩', () => {
   const ctx = makeCtx(new BasicCompactionEngine());
-  const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.2' });
+  const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.2' });
   guard.start();
   const built = buildCompaction({ before: healthyMessages(), summary: FREE_FORM_SUMMARY, start: 2, end: 11 });
   // 把 start 事件替换成手动压缩（sourceCommandId）。

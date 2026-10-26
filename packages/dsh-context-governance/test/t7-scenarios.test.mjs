@@ -153,7 +153,7 @@ function pointerIds(text) {
 test('S1 压缩后接续不重问：最新用户消息有指针且下一轮可见', async () => {
   await withStore(async (store) => {
     const ctx = makeCtx();
-    const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.3', store, logger: ctx.logger });
+    const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.3', store, logger: ctx.logger });
     guard.start();
     const summary = '本阶段把 T3/T4 做完了，下一步按计划继续。'; // 故意不含最新用户消息标题
     const built = buildCompaction({ before: healthyMessages(), summary, start: 2, end: 11 });
@@ -178,7 +178,7 @@ test('S1 压缩后接续不重问：最新用户消息有指针且下一轮可�
 test('S2 批次进度接上：511/958 有指针、可按 ID 找回', async () => {
   await withStore(async (store) => {
     const ctx = makeCtx();
-    const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.3', store, logger: ctx.logger });
+    const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.3', store, logger: ctx.logger });
     guard.start();
     const built = buildCompaction({ before: healthyMessages(), summary: '本阶段完成。', start: 2, end: 11 });
     const session = liveSession(built);
@@ -263,7 +263,7 @@ test('S3c next() 返回 undefined：header 必须原样返回，不得 fabricate
 test('S4-A 自动压缩 5 类零丢失（可恢复、回注全 ID）', async () => {
   await withStore(async (store) => {
     const ctx = makeCtx();
-    const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.2', store, logger: ctx.logger });
+    const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.2', store, logger: ctx.logger });
     guard.start();
     const built = buildCompaction({ before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 11 });
     const session = liveSession(built);
@@ -287,7 +287,7 @@ test('S4-M 手动压缩（真实样本）：允许丢原文，但必须 audit �
   assert.equal(fixture.meta.synthetic, false);
   await withStore(async (store) => {
     const ctx = makeCtx();
-    const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.3', store, logger: ctx.logger });
+    const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.3', store, logger: ctx.logger });
     guard.start();
     const session = replaySession(fixture);
     const start = fixture.events.find((item) => item.type === 'compaction/start');
@@ -318,7 +318,7 @@ test('S4-M 手动压缩（真实样本）：允许丢原文，但必须 audit �
 test('S4-I 幂等：重复 start/end 不重复写/注', async () => {
   await withStore(async (store) => {
     const ctx = makeCtx();
-    const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.2', store, logger: ctx.logger });
+    const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.2', store, logger: ctx.logger });
     guard.start();
     const built = buildCompaction({ before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 11 });
     const session = liveSession(built);
@@ -339,7 +339,7 @@ test('S4-I 幂等：重复 start/end 不重复写/注', async () => {
 test('S4-F 写不进/注不进：按阈值降级，下一周期暂停写入并尝试回注', async () => {
   await withStore(async (store) => {
     const ctx = makeCtx();
-    const guard = new CompressionGuard({
+    const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }),
       ctx, hostVersion: '0.2.1-rc.2', store, logger: ctx.logger, reinjection: { maxFailures: 1 },
     });
     guard.start();
@@ -367,7 +367,7 @@ test('S4-F 写不进/注不进：按阈值降级，下一周期暂停写入并�
 test('S4-AUD 审计只含白名单字段，不落正文/路径/数字标题', async () => {
   await withStore(async (store) => {
     const ctx = makeCtx();
-    const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.2', store, logger: ctx.logger });
+    const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.2', store, logger: ctx.logger });
     guard.start();
     const built = buildCompaction({ before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 11 });
     const session = liveSession(built);
@@ -414,7 +414,7 @@ test('S4-R 崩溃恢复：journal 残留时重开 store 自动物化', async () 
 test('S5 摘要不可读：只回注 ID+状态，不带标题', async () => {
   await withStore(async (store) => {
     const ctx = makeCtx();
-    const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.3', store, logger: ctx.logger });
+    const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.3', store, logger: ctx.logger });
     guard.start();
     const built = buildCompaction({ before: healthyMessages(), summary: '', start: 2, end: 11 });
     const session = liveSession(built);
@@ -465,7 +465,7 @@ test('S7 版本单一来源：PLUGIN_VERSION 等于 package.json，且源码不�
 test('REQ-02 回注被吞：下一次压缩 shadow 掉回注 seq → reinjection-shadowed 审计', async () => {
   await withStore(async (store) => {
     const ctx = makeCtx();
-    const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.3', store, logger: ctx.logger });
+    const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.3', store, logger: ctx.logger });
     guard.start();
     const built = buildCompaction({ before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 11 });
     const session = liveSession(built);

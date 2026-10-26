@@ -307,7 +307,7 @@ test('0.2.0 guard.pressure：usage 实测与 tokenMeter 估算分开取，不互
     on: (event, handler) => { handlers.push(handler); return () => {}; },
     logger: { info: () => {}, warn: () => {} },
   };
-  const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.3' });
+  const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.3' });
   guard.start();
   try {
     const session = { id: 'session-pressure', header: { id: 'session-pressure', cwd: process.cwd() } };

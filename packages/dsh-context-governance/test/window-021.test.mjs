@@ -95,7 +95,7 @@ test('0.2.1 nativeFromWindow：观测窗口现算，非法→unknown，退化→
 
 test('0.2.1 窗口观察：current=#lastSession、conservative=min(已观察)、observed 全量', () => {
   const { ctx, handlers } = makeCtx();
-  const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.3' });
+  const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.3' });
   guard.start();
   try {
     const first = session('session-aaaaaaaa-1111');
@@ -117,7 +117,7 @@ test('0.2.1 窗口观察：current=#lastSession、conservative=min(已观察)、
 
 test('0.2.1 窗口删除：request/context 不带 contextWindow → 删除置 unknown，不沿用旧值', () => {
   const { ctx, handlers } = makeCtx();
-  const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.3' });
+  const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.3' });
   guard.start();
   try {
     const first = session('session-aaaaaaaa-1111');
@@ -224,7 +224,7 @@ test('0.2.1 /cg set：有保守窗口时按 conservative 校验（0.55 > 0.375 �
 
 test('0.2.1 验收#6：窗口观察/策略/状态全过程不产生任何压缩调用', () => {
   const { ctx, handlers, calls } = makeCtx();
-  const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.3' });
+  const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.3' });
   guard.start();
   const state = makePolicyState(() => guard.windowState);
   try {
@@ -520,7 +520,7 @@ test('0.2.1 P3-1：无观察时压力行标 config-fallback', async () => {
 
 test('0.2.1 P3-6：非法 contextWindow 值不当作删除，仅缺失才删', () => {
   const { ctx, handlers } = makeCtx();
-  const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.3' });
+  const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.3' });
   guard.start();
   try {
     const session = { id: 'session-aaaaaaaa', header: { id: 'session-aaaaaaaa', cwd: process.cwd() } };
@@ -576,7 +576,7 @@ test('0.2.1 backfill：首次事件从 contextPressure 回填历史窗口，obse
     on: (event, handler) => { handlers.push(handler); return () => {}; },
     logger: { info: () => {}, warn: () => {} },
   };
-  const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.3' });
+  const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.3' });
   guard.start();
   try {
     const historyTime = 1792940246973;
@@ -609,7 +609,7 @@ test('0.2.1 backfill：无历史窗口/字段缺失/非法值都不伪造（仍 
       on: (event, handler) => { handlers.push(handler); return () => {}; },
       logger: { info: () => {}, warn: () => {} },
     };
-    const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.3' });
+    const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.3' });
     guard.start();
     const session = { id: 'session-bbbbbbbb-2222', header: { id: 'session-bbbbbbbb-2222', cwd: process.cwd() }, ownEvents: () => [] };
     handlers[0](session, { type: 'assistant/message', seq: 1, data: {} });
@@ -636,7 +636,7 @@ test('0.2.1 backfill：投影服务晚到会重试；实时 request/context 优�
     on: (event, handler) => { handlers.push(handler); return () => {}; },
     logger: { info: () => {}, warn: () => {} },
   };
-  const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.3' });
+  const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.3' });
   guard.start();
   try {
     const session = { id: 'session-cccccccc-3333', header: { id: 'session-cccccccc-3333', cwd: process.cwd() }, ownEvents: () => [] };
@@ -727,7 +727,7 @@ test('0.2.1 P2-5 真机形态：sessionProjections 属性 getter 抛错、ctx.ge
   Object.defineProperty(ctx, 'sessionProjections', {
     get() { throw new Error('proxy service property throws'); },
   });
-  const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.3' });
+  const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.3' });
   guard.start();
   try {
     const session = { id: 'session-58a2e845-1111', header: { id: 'session-58a2e845-1111', cwd: process.cwd() }, ownEvents: () => [] };
@@ -749,7 +749,7 @@ test('0.2.1 P2-5 tokenMeter 同形态：属性 getter 抛错、ctx.get 可用 �
     logger: { info: () => {}, warn: () => {} },
   };
   Object.defineProperty(ctx, 'tokenMeter', { get() { throw new Error('proxy service property throws'); } });
-  const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.3' });
+  const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.3' });
   guard.start();
   try {
     const session = { id: 'session-aaaaaaaa-2222', header: { id: 'session-aaaaaaaa-2222', cwd: process.cwd() } };
@@ -769,7 +769,7 @@ test('0.2.1 P2-5 回填诊断：区分“服务取不到”与“state 无窗口
       logger: { info: (...args) => logs.push(args.join(' ')), warn: () => {} },
       ...ctxExtra,
     };
-    const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.3' });
+    const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.3' });
     guard.start();
     const session = { id: 'session-cccccccc-3333', header: { id: 'session-cccccccc-3333', cwd: process.cwd() }, ownEvents: () => [] };
     handlers[0](session, { type: 'assistant/message', seq: 1, data: {} });

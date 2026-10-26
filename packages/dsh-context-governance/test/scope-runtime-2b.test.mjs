@@ -212,6 +212,111 @@ test('2b runtime：只挂 resolveScope（生产形态）时 onlyProject=false �
   guard.stop();
 });
 
+test('2b runtime：无 resolver 时 onlyProject=false 也不放行外部会话（cost-only、store 零写）', async () => {
+  const rootDir = await tempDir();
+  const store = await MemoryStore.open({ rootDir, project: 'test-project' });
+  try {
+    const before = (await fs.readdir(rootDir)).sort();
+    const ctx = makeCtx();
+    const audit = makeAudit();
+    const guard = new CompressionGuard({
+      ctx,
+      hostVersion: '0.2.1-rc.2',
+      projectRoot: ROOT,
+      project: 'demo',
+      onlyProject: false,
+      store,
+      audit,
+    });
+    guard.start();
+    const foreign = sessionOf('foreign-no-resolver', OUTSIDE);
+    for (const item of foreignCycle('foreign-no-resolver')) emit(ctx, foreign, item);
+    await flush();
+    assert.equal(guard.status.stats.starts, 0);
+    assert.equal(guard.status.scope.foreignCosts, 1);
+    assert.equal(store.protectionPending, 0);
+    assert.equal(store.allEntries().length, 0);
+    assert.deepEqual((await fs.readdir(rootDir)).sort(), before, '外部会话不得在记忆根新增文件');
+    assert.equal(audit.entries.filter((entry) => entry.event === 'compaction-cost').length, 1);
+    guard.stop();
+  } finally {
+    await store.close().catch(() => {});
+    await fs.rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('2b runtime：无 resolver 且无根 → fail-closed（不观测、不写记忆、无 cost）', async () => {
+  const rootDir = await tempDir();
+  const store = await MemoryStore.open({ rootDir, project: 'test-project' });
+  try {
+    const ctx = makeCtx();
+    const audit = makeAudit();
+    const guard = new CompressionGuard({
+      ctx,
+      hostVersion: '0.2.1-rc.2',
+      store,
+      audit,
+    });
+    guard.start();
+    const session = sessionOf('session-no-root', ROOT);
+    for (const item of foreignCycle('no-root-1')) emit(ctx, session, item);
+    await flush();
+    assert.equal(guard.status.scope.mode, 'unresolved');
+    assert.equal(guard.status.stats.starts, 0);
+    assert.equal(guard.status.stats.events, 0, '无根会话不得进入观测主路径');
+    assert.equal(guard.status.scope.foreignCosts, 0, '无根会话不按外部会话记账（2c 另立）');
+    assert.equal(store.protectionPending, 0);
+    assert.equal(store.allEntries().length, 0);
+    assert.equal(audit.entries.some((entry) => entry.event === 'compaction-cost'), false);
+    guard.stop();
+  } finally {
+    await store.close().catch(() => {});
+    await fs.rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('2b runtime：resolver 抛错或返回非对象 → 落根边界判定（外部仍 skip/cost-only、store 零写）', async () => {
+  const resolvers = [
+    () => { throw new Error('resolver exploded'); },
+    () => null,
+    () => 'not-an-object',
+  ];
+  for (const [index, resolver] of resolvers.entries()) {
+    const rootDir = await tempDir();
+    const store = await MemoryStore.open({ rootDir, project: 'test-project' });
+    try {
+      const before = (await fs.readdir(rootDir)).sort();
+      const ctx = makeCtx();
+      const audit = makeAudit();
+      const guard = new CompressionGuard({
+        ctx,
+        hostVersion: '0.2.1-rc.2',
+        projectRoot: ROOT,
+        project: 'demo',
+        store,
+        audit,
+        resolveScope: resolver,
+      });
+      guard.start();
+      const foreign = sessionOf(`foreign-resolver-${index}`, OUTSIDE);
+      for (const item of foreignCycle(`cmp-resolver-${index}`)) emit(ctx, foreign, item);
+      await flush();
+      assert.equal(guard.status.stats.starts, 0, `resolver#${index}: 外部不得进入观测/保护主路径`);
+      assert.equal(guard.status.scope.foreignCosts, 1, `resolver#${index}: 仍须记 host-native cost`);
+      assert.equal(store.protectionPending, 0);
+      assert.equal(store.allEntries().length, 0);
+      assert.deepEqual((await fs.readdir(rootDir)).sort(), before, `resolver#${index}: 不得写记忆文件`);
+      const costs = audit.entries.filter((entry) => entry.event === 'compaction-cost');
+      assert.equal(costs.length, 1);
+      assert.equal(costs[0].source, 'host-native');
+      guard.stop();
+    } finally {
+      await store.close().catch(() => {});
+      await fs.rm(rootDir, { recursive: true, force: true });
+    }
+  }
+});
+
 test('2b runtime：外部压缩不写 store/记忆（真实 store 目录零新增）', async () => {
   const rootDir = await tempDir();
   const store = await MemoryStore.open({ rootDir, project: 'test-project' });

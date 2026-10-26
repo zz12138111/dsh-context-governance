@@ -148,7 +148,7 @@ test('T6-audit-failure：审计追加失败只告警，压缩周期照常完成'
     await fs.writeFile(blocker, 'x', 'utf8');
     const audit = new AuditLog({ file: path.join(blocker, 'audit.jsonl'), maxBytes: 64 * 1024 });
     const ctx = makeCtx();
-    const guard = new CompressionGuard({
+    const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }),
       ctx,
       hostVersion: '0.2.1-rc.2',
       store,
@@ -178,7 +178,7 @@ test('T6-readonly-root：记忆根不可写 → 只读降级，周期完成且�
     assert.equal(store.status.writable, false);
     assert.match(store.status.readOnlyReason ?? '', /^root-not-writable|^load-failed/);
     const ctx = makeCtx();
-    const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.2', store, logger: ctx.logger });
+    const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.2', store, logger: ctx.logger });
     guard.start();
     assert.equal(guard.readOnly, true);
     const built = buildCompaction({ before: healthyMessages(), summary: '', start: 2, end: 11 });
@@ -227,7 +227,7 @@ test('T6-external-change：外部改动转只读，周期完成；reload 后恢�
 
     // 只读期间仍要能跑完压缩周期（读旧记忆 + 回注既有指针）。
     const ctx = makeCtx();
-    const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.2', store, logger: ctx.logger });
+    const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.2', store, logger: ctx.logger });
     guard.start();
     assert.equal(guard.readOnly, true);
     const built = buildCompaction({ before: healthyMessages(), summary: '', start: 2, end: 11 });
@@ -250,7 +250,7 @@ test('T6-external-change：外部改动转只读，周期完成；reload 后恢�
 
 test('T6-ctx-on-throws：订阅抛错不崩，显式告警并保持未启动', () => {
   const ctx = makeCtx({ onThrows: true });
-  const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.2' });
+  const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.2' });
   assert.doesNotThrow(() => guard.start());
   assert.equal(guard.status.started, false);
   assert.match(warns(ctx), /registration failed/);
@@ -259,7 +259,7 @@ test('T6-ctx-on-throws：订阅抛错不崩，显式告警并保持未启动', (
 test('T6-cycle-interrupted：同会话新 start 未 end → cycle-interrupted；stop → cycle-abandoned', async () => {
   await withStore(async (store) => {
     const ctx = makeCtx();
-    const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.2', store, logger: ctx.logger });
+    const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.2', store, logger: ctx.logger });
     guard.start();
     const base = buildCompaction({ before: healthyMessages(), summary: '', start: 2, end: 11 });
     const session = liveSession(base);
@@ -308,7 +308,7 @@ test('T6-readonly-reinject：只读时仍可从既有记忆回注指针，不写
   try {
     assert.equal(store.status.writable, false);
     const ctx = makeCtx();
-    const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.2', store, logger: ctx.logger });
+    const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.2', store, logger: ctx.logger });
     guard.start();
     const built = buildCompaction({ before: healthyMessages(), summary: '', start: 2, end: 11 });
     const session = liveSession(built, sessionId);

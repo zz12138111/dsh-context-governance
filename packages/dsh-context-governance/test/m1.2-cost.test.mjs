@@ -121,7 +121,7 @@ async function readAudit(store) {
 test('M1.2 tokenMeter：晚注册服务在 apply 后可用（按需获取 + inject 回调）', async () => {
   await withStore(async (store) => {
     const ctx = makeCtx({ injectable: true });
-    const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.3', store, logger: ctx.logger });
+    const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.3', store, logger: ctx.logger });
     guard.start();
     // apply 时服务还不存在
     assert.equal(ctx.meterRef.current, null);
@@ -143,7 +143,7 @@ test('M1.2 tokenMeter：晚注册服务在 apply 后可用（按需获取 + inje
 test('M1.2 tokenMeter：无 inject 时按需读取也能拿到晚注册服务', async () => {
   await withStore(async (store) => {
     const ctx = makeCtx(); // 无 ctx.inject
-    const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.3', store, logger: ctx.logger });
+    const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.3', store, logger: ctx.logger });
     guard.start();
     ctx.setMeter(meterFor(50));
     const built = buildCompaction({ before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 11 });
@@ -166,7 +166,7 @@ test('P3-1 ctx.inject 返回 Fiber：stop 调 fiber.dispose()，不把返回值�
       callback({ tokenMeter: meterFor(10) });
       return { dispose() { disposed += 1; return Promise.resolve(); } };
     };
-    const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.3', store, logger: ctx.logger });
+    const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.3', store, logger: ctx.logger });
     guard.start();
     guard.stop();
     assert.equal(disposed, 1);
@@ -176,7 +176,7 @@ test('P3-1 ctx.inject 返回 Fiber：stop 调 fiber.dispose()，不把返回值�
 test('M1.2 usage 兜底：meters 缺失时 tokensBefore/After 来自 assistant/message.usage', async () => {
   await withStore(async (store) => {
     const ctx = makeCtx();
-    const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.3', store, logger: ctx.logger });
+    const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.3', store, logger: ctx.logger });
     guard.start();
     const built = buildCompaction({ before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 11 });
     const session = liveSession(built);
@@ -203,7 +203,7 @@ test('M1.2 usage 兜底：meters 缺失时 tokensBefore/After 来自 assistant/m
 test('M1.2 两路都缺：null + none，不伪造；stop 冲刷未等到 after 的成本行', async () => {
   await withStore(async (store) => {
     const ctx = makeCtx();
-    const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.3', store, logger: ctx.logger });
+    const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.3', store, logger: ctx.logger });
     guard.start();
     const built = buildCompaction({ before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 11 });
     const session = liveSession(built);
@@ -228,7 +228,7 @@ test('M1.2 两路都缺：null + none，不伪造；stop 冲刷未等到 after �
 test('M1.2 /cg status：last-cost 显示 before/after 与来源', async () => {
   await withStore(async (store) => {
     const ctx = makeCtx();
-    const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.3', store, logger: ctx.logger });
+    const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.3', store, logger: ctx.logger });
     guard.start();
     ctx.setMeter(meterFor(10));
     const built = buildCompaction({ before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 11 });

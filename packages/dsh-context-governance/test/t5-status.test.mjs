@@ -231,7 +231,7 @@ test('T5：压缩周期中的敏感用户消息不进 audit/记忆标题', async
     const built = buildCompaction({ before, summary: FIVE_SECTION_SUMMARY, start: 2, end: 11 });
     const session = liveSession(built);
     const ctx = makeCtx(new BasicCompactionEngine());
-    const guard = new CompressionGuard({ ctx, store, hostVersion: '0.2.1-rc.2' });
+    const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, store, hostVersion: '0.2.1-rc.2' });
     guard.start();
     try {
       emitThroughEnd(ctx, session, built);

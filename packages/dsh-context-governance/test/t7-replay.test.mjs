@@ -73,7 +73,7 @@ test('T7-R1 真实压缩回放：start/summary/checkpoint/end 全程无抛错，
   const store = await MemoryStore.open({ rootDir, project: 'test-project' });
   try {
     const ctx = makeCtx();
-    const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.3', store, logger: ctx.logger });
+    const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.3', store, logger: ctx.logger });
     guard.start();
     const session = replaySession(fixture);
     const handler = ctx.handlers[0].handler;

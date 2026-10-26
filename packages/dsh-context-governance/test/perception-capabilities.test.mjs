@@ -136,7 +136,7 @@ test('无事件订阅能力：perception=none，不得声称 event-level', async
 
 test('订阅抛错：guard 不崩，perception 退回契约值', () => {
   const ctx = fakeCtx({ onThrows: true });
-  const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.3' });
+  const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.3' });
   guard.start();
   assert.equal(guard.status.started, false);
   assert.equal(guard.perception, 'none');
@@ -145,7 +145,7 @@ test('订阅抛错：guard 不崩，perception 退回契约值', () => {
 
 test('订阅成功：perception=event，session/event 计数可见', () => {
   const ctx = fakeCtx();
-  const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.3' });
+  const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.3' });
   guard.start();
   assert.equal(guard.perception, 'event');
   assert.equal(guard.status.perception, 'event');

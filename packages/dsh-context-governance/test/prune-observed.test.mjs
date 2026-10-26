@@ -137,7 +137,7 @@ function runStartSummaryCheckpointEnd(ctx, session, start, summary, checkpointEv
 test('T2′ prune 归因：每条 prune 一行，callId 反查 tool，replacementSeq/cycle/字段齐全，无正文/路径', async () => {
   await withStore(async (store) => {
     const ctx = makeCtx();
-    const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.3', store, logger: ctx.logger });
+    const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.3', store, logger: ctx.logger });
     guard.start();
     const built = buildCompaction({
       before: [toolCall(1, 'call-1', 'read'), prune(2, 10, 10, 4797), replacement(3, 10, 'call-1')],
@@ -180,7 +180,7 @@ test('T2′ prune 归因：每条 prune 一行，callId 反查 tool，replacemen
 test('T2′ 归因失败：替换事件查不到 tool/call → tool=unknown，不猜', async () => {
   await withStore(async (store) => {
     const ctx = makeCtx();
-    const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.3', store, logger: ctx.logger });
+    const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.3', store, logger: ctx.logger });
     guard.start();
     const built = buildCompaction({
       before: [prune(2, 20, 20, 100), replacement(3, 20, 'call-missing')],
@@ -209,7 +209,7 @@ test('T2′ 归因失败：替换事件查不到 tool/call → tool=unknown，�
 test('T2′ 周期归属：summary 之后的 prune 记 outside，不进本周期成本', async () => {
   await withStore(async (store) => {
     const ctx = makeCtx({ meter: meterFor(10) });
-    const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.3', store, logger: ctx.logger });
+    const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.3', store, logger: ctx.logger });
     guard.start();
     const events = [
       compactionStart(100, 'cmp-out'),
@@ -239,7 +239,7 @@ test('T2′ 周期归属：summary 之后的 prune 记 outside，不进本周期
 test('T2′ 去重：同一 shadowedRange 只记一次、成本只计一次', async () => {
   await withStore(async (store) => {
     const ctx = makeCtx();
-    const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.3', store, logger: ctx.logger });
+    const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.3', store, logger: ctx.logger });
     guard.start();
     const built = buildCompaction({
       before: [
@@ -274,7 +274,7 @@ test('T2′ 去重：同一 shadowedRange 只记一次、成本只计一次', as
 test('T2′ 无 pruner：pruneCount=0 + tokensPruned=null；/cg status 显示 pruned=0', async () => {
   await withStore(async (store) => {
     const ctx = makeCtx({ meter: meterFor(10) });
-    const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.3', store, logger: ctx.logger });
+    const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.3', store, logger: ctx.logger });
     guard.start();
     const built = buildCompaction({ before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 11 });
     const session = liveSession(built.events);

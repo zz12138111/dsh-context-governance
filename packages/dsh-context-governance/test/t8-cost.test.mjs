@@ -108,7 +108,7 @@ async function readAudit(store) {
 test('T8-2 成本记录：主键/维度/数值/口径齐全，实测与估算分列', async () => {
   await withStore(async (store) => {
     const ctx = makeCtx({ meterNodes: 100 });
-    const guard = new CompressionGuard({
+    const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }),
       ctx, hostVersion: '0.2.1-rc.2', store, logger: ctx.logger, project: 'DSH插件开发',
     });
     guard.start();
@@ -157,7 +157,7 @@ test('T8-2 成本记录：主键/维度/数值/口径齐全，实测与估算分
 test('T8-2 成本记录：无 tokenMeter / 无 usage 时标 unknown，不伪造数字', async () => {
   await withStore(async (store) => {
     const ctx = makeCtx();
-    const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.2', store, logger: ctx.logger });
+    const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.2', store, logger: ctx.logger });
     guard.start();
     const built = buildCompaction({
       before: healthyMessages(),
@@ -190,7 +190,7 @@ test('T8-2 成本记录：无 tokenMeter / 无 usage 时标 unknown，不伪造�
 test('P3：usage={} 空对象时标 unknown，不写 backendUsage', async () => {
   await withStore(async (store) => {
     const ctx = makeCtx();
-    const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.2', store, logger: ctx.logger });
+    const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.2', store, logger: ctx.logger });
     guard.start();
     const built = buildCompaction({ before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 11 });
     const summaryEvent = built.events.find((item) => item.type === 'compaction/summary');
@@ -211,7 +211,7 @@ test('P3：usage={} 空对象时标 unknown，不写 backendUsage', async () => 
 test('P3：late-start 周期的 trigger 按 summary.sourceCommandId 判定 manual', async () => {
   await withStore(async (store) => {
     const ctx = makeCtx();
-    const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.2', store, logger: ctx.logger });
+    const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.2', store, logger: ctx.logger });
     guard.start();
     const built = buildCompaction({ before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 11 });
     const summary = built.events.find((item) => item.type === 'compaction/summary');
@@ -234,7 +234,7 @@ test('P3：late-start 周期的 trigger 按 summary.sourceCommandId 判定 manua
 test('T8-2 成本记录不含正文/标题/路径', async () => {
   await withStore(async (store) => {
     const ctx = makeCtx({ meterNodes: 10 });
-    const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.2', store, logger: ctx.logger });
+    const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.2', store, logger: ctx.logger });
     guard.start();
     const built = buildCompaction({ before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 11 });
     const session = liveSession(built);
@@ -251,7 +251,7 @@ test('T8-2 成本记录不含正文/标题/路径', async () => {
 test('T8-2 tokensDropped：下一次压缩 shadow 掉回注时计入成本', async () => {
   await withStore(async (store) => {
     const ctx = makeCtx({ meterNodes: 10 });
-    const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.2', store, logger: ctx.logger });
+    const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.2', store, logger: ctx.logger });
     guard.start();
     const built = buildCompaction({ before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 11 });
     const session = liveSession(built);
@@ -284,7 +284,7 @@ test('T8-2 tokensDropped：下一次压缩 shadow 掉回注时计入成本', asy
 test('P3-2 shadowedSeqs 缺失时用 shadowedRange 兜底判定回注被吞', async () => {
   await withStore(async (store) => {
     const ctx = makeCtx({ meterNodes: 10 });
-    const guard = new CompressionGuard({ ctx, hostVersion: '0.2.1-rc.2', store, logger: ctx.logger });
+    const guard = new CompressionGuard({ resolveScope: () => ({ mode: 'single-root', root: 'test-root', cwd: '', governed: true, skipReason: null, unattributed: false }), ctx, hostVersion: '0.2.1-rc.2', store, logger: ctx.logger });
     guard.start();
     const built = buildCompaction({ before: healthyMessages(), summary: FIVE_SECTION_SUMMARY, start: 2, end: 11 });
     const session = liveSession(built);
