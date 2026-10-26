@@ -3,6 +3,7 @@
  * projectRoot 空（D9=A）与 project 由根 basename 推导。
  */
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
@@ -45,6 +46,30 @@ test('#8 resolveConfig：logFile 非空必须是绝对路径，相对直接 CONF
   assert.equal(resolveConfig({ diagnostics: { logFile: '' } }).diagnostics.logFile, '');
   const absolute = path.resolve('C:/tmp/cg-diag.log');
   assert.equal(resolveConfig({ diagnostics: { logFile: `  ${absolute}  ` } }).diagnostics.logFile, absolute);
+});
+
+function packedFiles() {
+  const raw = execFileSync('npm', ['pack', '--dry-run', '--json'], {
+    cwd: PACKAGE_ROOT,
+    encoding: 'utf8',
+    shell: true,
+  });
+  const info = JSON.parse(raw)[0];
+  return info.files.map((file) => file.path);
+}
+
+test('#8 npm pack 清单：test/ 不打包、全部文件 0 本机路径/用户名', async () => {
+  const files = packedFiles();
+  assert.equal(files.includes('package.json'), true);
+  assert.equal(files.includes('cordis.patch.yml'), true);
+  assert.equal(files.includes('README.md'), true);
+  assert.equal(files.some((file) => file.startsWith('test/')), false, 'test/ 不得进发布包');
+  const forbidden = /D:\/DS-PROJECT|DS-PROJECT|C:\\Users|19091|Users[\\/]/i;
+  for (const relative of files) {
+    const buffer = await fs.readFile(path.join(PACKAGE_ROOT, relative)).catch(() => null);
+    if (buffer === null || buffer.includes(0)) continue; // 跳过缺失/二进制
+    assert.doesNotMatch(buffer.toString('utf8'), forbidden, `${relative} 含本机路径/用户名`);
+  }
 });
 
 test('#8 包内 0 绝对路径；projectRoot/logFile/project 默认空、memoryRoot 相对', async () => {

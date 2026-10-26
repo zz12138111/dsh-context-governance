@@ -17,7 +17,6 @@
   },
   "files": [
     "src",
-    "test",
     "README.md",
     "cordis.patch.yml"
   ],
