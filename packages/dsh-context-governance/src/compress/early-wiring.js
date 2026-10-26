@@ -7,7 +7,8 @@
  * - 判定用 `decideEarly`（纯函数），本模块只负责取事实、审计与调用；
  * - `protection=failed` 不触发重试/关开关（由 `shouldEscalateEarly` 约束，接线后续批次使用）。
  */
-import { computePressure } from '../policy.js';
+import { computePressure, shortSessionId } from '../policy.js';
+import { SCOPE_SKIP } from '../scope.js';
 import { EarlyCompactor } from './early.js';
 import { EARLY_DECISION, decideEarly } from './early-gate.js';
 
@@ -68,6 +69,7 @@ export function wireEarlyCompaction(options = {}) {
     getGuard = () => null,
     getPolicy = () => null,
     getArmed = () => false,
+    getScope = null,
     audit = null,
     logger = null,
     onDecision = null,
@@ -96,7 +98,32 @@ export function wireEarlyCompaction(options = {}) {
     // armed=false：完全静默（不审计、不取服务）——接线 ≠ 触发。
     if (!armedNow(session)) return;
     const policy = getPolicy(session);
-    if (policy === null || policy === undefined || policy.early === false) return;
+    if (policy === null || policy === undefined) return;
+    const sessionId = session?.id ?? null;
+    const at = policy.values?.['compact.at'] ?? null;
+    const native = policy.window?.native ?? policy.native ?? null;
+    const auditScopeSkip = (reason) => {
+      audit?.append?.('early-skipped', {
+        sessionId,
+        sessionShortId: sessionId === null ? null : shortSessionId(sessionId),
+        reason,
+        effective: null,
+        threshold: at,
+        native,
+      });
+      record({ event: 'early-skipped', reason, effective: null, time: new Date(now()).toISOString() });
+    };
+    // 1.0 #1（B-1）：归域判定必须在 armed/policy 之后、pressure 之前；
+    // 否则外部会话会先落 unknown-pressure，foreign-session 无法区分。
+    if (policy.early === false) {
+      auditScopeSkip(SCOPE_SKIP.OUT_OF_SCOPE);
+      return;
+    }
+    const scope = typeof getScope === 'function' ? getScope(session) : null;
+    if (scope !== null && typeof scope === 'object' && typeof scope.skipReason === 'string' && scope.skipReason !== '') {
+      auditScopeSkip(scope.skipReason);
+      return;
+    }
 
     const guard = getGuard();
     const pressureStatus = (typeof guard?.pressureFor === 'function'
@@ -109,11 +136,8 @@ export function wireEarlyCompaction(options = {}) {
       estimateSafety: policy.values?.['compact.estimateSafety'],
     });
     const effective = pressure?.effective ?? null;
-    const at = policy.values?.['compact.at'] ?? null;
-    const native = policy.window?.native ?? policy.native ?? null;
     const agent = findAgent(ctx, session);
     const engine = agent === null ? null : engineFor(ctx, agent);
-    const sessionId = session?.id ?? null;
     const previous = sessionId === null ? null : state.get(sessionId) ?? null;
     const nowMs = now();
     // 1a/#3：cooldownMin / minDeltaTokens 从生效策略读取（不再只用常量）；显式选项优先（单测）。

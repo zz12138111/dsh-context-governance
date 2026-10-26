@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { wireEarlyCompaction } from '../src/compress/early-wiring.js';
+import { shortSessionId } from '../src/policy.js';
 import { SCOPE_MODE, SCOPE_SKIP, resolveScope } from '../src/scope.js';
 
 const ROOT = 'D:\\DS-PROJECT\\DSH插件开发';
@@ -152,3 +153,90 @@ test('2b B-2：accepted 且有 fresh report → compaction 采用报告枚举（
   assert.equal(forced.compaction, 'committed');
   assert.equal(forced.protection, 'ok');
 });
+
+// ---------------------------------------------------------------- 接线顺序（armed→policy→scope→pressure）
+
+function scopeFor(session, earlyEnabled = true) {
+  return resolveScope({ root: ROOT, cwd: session?.cwd, earlyEnabled });
+}
+
+function makeScopeWiring({ guard = makeGuard(), policy = POLICY, audit = makeAudit(), engine = null } = {}) {
+  const built = makeCtx({ engine });
+  const wiring = wireEarlyCompaction({
+    ctx: built.ctx,
+    getGuard: () => guard,
+    getPolicy: () => policy,
+    audit,
+    getArmed: () => true,
+    getScope: (session) => scopeFor(session, policy.early !== false),
+    now: () => 0,
+  });
+  return { wiring, audit, engine };
+}
+
+test('2b 接线：外部会话 + 已知压力 → compactNow=0、无 early-forced、reason=foreign-session', async () => {
+  const engine = { calls: 0, async compactNow() { this.calls += 1; } };
+  const audit = makeAudit();
+  const { wiring } = makeScopeWiring({ engine, audit });
+  await wiring.check({ id: 's-external', cwd: OUTSIDE });
+  assert.equal(engine.calls, 0);
+  assert.deepEqual(audit.entries.map((entry) => entry.event), ['early-skipped']);
+  assert.equal(audit.entries[0].reason, SCOPE_SKIP.FOREIGN);
+  assert.equal(audit.entries[0].sessionId, 's-external');
+  assert.equal(audit.entries[0].sessionShortId, shortSessionId('s-external'));
+  assert.equal(wiring.getLast().event, 'early-skipped');
+});
+
+test('2b 接线：外部会话 + unknown 压力 → 仍是 foreign-session（不是 unknown-pressure）', async () => {
+  const engine = { calls: 0, async compactNow() { this.calls += 1; } };
+  const audit = makeAudit();
+  const { wiring } = makeScopeWiring({
+    engine, audit, guard: makeGuard({ measuredTokens: null, estimatedTokens: null }),
+  });
+  await wiring.check({ id: 's-external', cwd: OUTSIDE });
+  assert.equal(engine.calls, 0);
+  assert.equal(audit.entries[0].reason, SCOPE_SKIP.FOREIGN);
+  assert.notEqual(audit.entries[0].reason, 'unknown-pressure');
+});
+
+test('2b 接线：本项目 + 已知压力 → early-forced；本项目 + unknown → unknown-pressure', async () => {
+  const engine = {
+    calls: 0,
+    async compactNow() {
+      this.calls += 1;
+      guard.status.lastReport = {
+        compactionId: 'new', compaction: 'committed', protection: 'ok', failures: [], reinjected: true,
+      };
+    },
+  };
+  const guard = makeGuard({ lastReport: { compactionId: 'old', compaction: 'committed', protection: 'ok', failures: [], reinjected: true } });
+  const audit = makeAudit();
+  const { wiring } = makeScopeWiring({ engine, audit, guard });
+  await wiring.check({ id: 's1', cwd: `${ROOT}\\src` });
+  assert.equal(engine.calls, 1);
+  assert.deepEqual(audit.entries.map((entry) => entry.event), ['early-decision', 'early-forced']);
+
+  const unknownAudit = makeAudit();
+  const unknown = makeScopeWiring({
+    guard: makeGuard({ measuredTokens: null, estimatedTokens: null }),
+    audit: unknownAudit,
+    engine: { calls: 0, async compactNow() {} },
+  });
+  await unknown.wiring.check({ id: 's1', cwd: `${ROOT}\\src` });
+  assert.deepEqual(unknownAudit.entries.map((entry) => entry.event), ['early-decision', 'early-skipped']);
+  assert.equal(unknownAudit.entries.at(-1).reason, 'unknown-pressure');
+});
+
+test('2b 接线：总闸 early=false → out-of-scope（根内/根外一致），不取 pressure', async () => {
+  for (const cwd of [`${ROOT}\\src`, OUTSIDE]) {
+    const engine = { calls: 0, async compactNow() { this.calls += 1; } };
+    const audit = makeAudit();
+    const { wiring } = makeScopeWiring({ engine, audit, policy: { ...POLICY, early: false } });
+    await wiring.check({ id: 's1', cwd });
+    assert.equal(engine.calls, 0);
+    assert.equal(audit.entries.length, 1);
+    assert.equal(audit.entries[0].event, 'early-skipped');
+    assert.equal(audit.entries[0].reason, SCOPE_SKIP.OUT_OF_SCOPE);
+  }
+});
+
