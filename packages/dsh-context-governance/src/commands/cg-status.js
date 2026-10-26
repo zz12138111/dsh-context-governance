@@ -90,7 +90,7 @@ function formatEarlyStatus(earlyStatus) {
   return `last-early: ${event}${reason}${effective}${at}`;
 }
 
-function statusText({ store, guard, audit, rootAudit = null, rootsView = null, rootCounts = null, diagnosticsLogFile = null, diagnosticsError = null, now, policy = null, earlyStatus = null, sessionId = null, rootInfo = null, identity = null }) {
+function statusText({ store, guard, audit, rootAudit = null, rootsView = null, rootCounts = null, poolStats = null, diagnosticsLogFile = null, diagnosticsError = null, now, policy = null, earlyStatus = null, sessionId = null, rootInfo = null, identity = null }) {
   const lines = [];
   const status = guard?.status ?? null;
   lines.push('context-governance status');
@@ -291,6 +291,12 @@ function statusText({ store, guard, audit, rootAudit = null, rootsView = null, r
   }
   // P1：全部纳管根视图（只读；不打开 store、不建目录）。
   lines.push(...rootsStatusLines({ rootsView, rootCounts }));
+  if (poolStats !== null) {
+    lines.push(
+      `stores: open=${poolStats.open ?? 0} refs=${poolStats.refs ?? 0} idle=${poolStats.idle ?? 0} ` +
+      `pinned=${poolStats.pinned ?? 0}${poolStats.warned ? ', warn=over-threshold' : ''}`,
+    );
+  }
   return lines.join('\n');
 }
 
@@ -324,7 +330,7 @@ function rootsStatusLines({ rootsView = null, rootCounts = null }) {
  *
  * @param {{store?:object|null, guard?:object|null, getGuard?:() => object|null, audit?:object|null, now?:() => Date}} options
  */
-export function createStatusCommand({ store = null, guard = null, getGuard = null, audit = null, rootAudit = null, policy = null, now = () => new Date(), logger = null, getEarlyStatus = null, sessionIdOf = defaultSessionIdOf, getRootInfo = null, getPersistenceIdentity = null, getRootsView = null, getRootCounts = null, getDiagnosticsLogFile = null, getDiagnosticsError = null } = {}) {
+export function createStatusCommand({ store = null, guard = null, getGuard = null, audit = null, rootAudit = null, policy = null, now = () => new Date(), logger = null, getEarlyStatus = null, sessionIdOf = defaultSessionIdOf, getRootInfo = null, getPersistenceIdentity = null, getRootsView = null, getRootCounts = null, getPoolStats = null, getDiagnosticsLogFile = null, getDiagnosticsError = null } = {}) {
   const currentGuard = () => (typeof getGuard === 'function' ? getGuard() : guard);
 
   const parseBoolean = (text) => {
@@ -690,6 +696,7 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
       try {
         const rootsView = typeof getRootsView === 'function' ? getRootsView() : null;
         const rootCounts = typeof getRootCounts === 'function' ? getRootCounts() : null;
+        const poolStats = typeof getPoolStats === 'function' ? getPoolStats() : null;
         const diagnosticsLogFile = typeof getDiagnosticsLogFile === 'function' ? getDiagnosticsLogFile() : null;
         const diagnosticsError = typeof getDiagnosticsError === 'function' ? getDiagnosticsError() : null;
         return {
@@ -701,6 +708,7 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
             rootAudit,
             rootsView,
             rootCounts,
+            poolStats,
             diagnosticsLogFile,
             diagnosticsError,
             now,

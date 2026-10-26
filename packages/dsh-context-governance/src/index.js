@@ -16,12 +16,13 @@ import { registerStatusCommand } from './commands/cg-status.js';
 import { identityDiagnostic, inferRootFromCwd, loadStateV2, resolvePersistenceIdentity, samePath, sessionCwd } from './root-state.js';
 import { MEMORY_ROOT_REL, memoryRootFor, resolveDiagnosticsPath, userLevelDir } from './roots/paths.js';
 import { RootRegistry } from './roots/registry.js';
+import { RootStorePool } from './roots/store-pool.js';
 import { POLICY_FILE_MAX_BYTES, WINDOW_USABLE_MARGIN, atExceedsUsableWindow, nativeFromWindow, nativeRatio, profileLayer, resolvePolicy, shortSessionId, usableAtCeiling, validateLayer } from './policy.js';
 import { detectHostVersion, normalizeBackendVersion } from './compress/adapters.js';
 import { CompressionGuard } from './compress/runtime.js';
 import { wireEarlyCompaction } from './compress/early-wiring.js';
 import { formatCapability, probeCapability } from './capabilities.js';
-import { DEFAULT_AUDIT_MAX_BYTES, MAX_AUDIT_MAX_BYTES, MIN_AUDIT_MAX_BYTES, createRootAudit } from './audit.js';
+import { DEFAULT_AUDIT_MAX_BYTES, MAX_AUDIT_MAX_BYTES, MIN_AUDIT_MAX_BYTES, AuditLog, createRootAudit } from './audit.js';
 import { appendDiagnosticLine, capabilityLine, PLUGIN_VERSION, registerDiagnosticPath, startupLine } from './diagnostics.js';
 import { DEFAULT_MEMORY_DIR, MemoryStore, MemoryStoreError } from './memory/store.js';
 import { registerMemoryHeader } from './memory/header.js';
@@ -687,10 +688,23 @@ export async function apply(ctx, rawConfig = {}) {
     };
 
     const store = await openStore(config);
-    // P1：mem_* 只允许本会话根 managed；unmanaged/no-root 必须拒绝（审核 ②）。
-    // P2 起这里的 store 由 per-root 池按会话根提供；接口形状不变。
-    const resolveStore = (exec) => {
-      if (registry === null) {
+    // P2：主根 store 已打开并 seed 进池；其他根由池懒打开，mem_* 按会话根路由。
+    const primaryAudit = new AuditLog({
+      file: path.join(store.rootDir, 'audit.jsonl'),
+      maxBytes: config.audit.maxBytes,
+      allowedBase: store.rootDir,
+    });
+    const pool = registry === null
+      ? null
+      : new RootStorePool({
+        registry,
+        rootAudit,
+        logger: ctx.logger,
+        maxBytes: config.audit.maxBytes,
+      });
+    if (pool !== null) pool.seed(attachEntry, store, primaryAudit);
+    const resolveStore = async (exec) => {
+      if (pool === null || registry === null) {
         return {
           ok: false,
           code: 'ROOT_UNAVAILABLE',
@@ -700,7 +714,6 @@ export async function apply(ctx, rawConfig = {}) {
       }
       const session = exec?.agent?.session ?? null;
       const resolved = registry.resolveSessionRoot(session);
-      if (resolved.status === 'managed') return { ok: true, store, entry: resolved.entry };
       if (resolved.status === 'no-root') {
         return {
           ok: false,
@@ -710,7 +723,10 @@ export async function apply(ctx, rawConfig = {}) {
         };
       }
       const entry = resolved.entry;
-      if (entry !== null && entry.state === 'fail-closed') {
+      if (entry === null || entry === undefined) {
+        return { ok: false, code: 'ROOT_UNAVAILABLE', message: 'session root is unavailable', reason: 'root-unavailable' };
+      }
+      if (entry.state === 'fail-closed') {
         return {
           ok: false,
           code: 'ROOT_FAIL_CLOSED',
@@ -720,16 +736,28 @@ export async function apply(ctx, rawConfig = {}) {
           rootId: entry.rootId,
         };
       }
-      return {
-        ok: false,
-        code: 'ROOT_UNMANAGED',
-        message: `root ${entry?.root ?? 'unknown'} is registered but not managed in P1`,
-        reason: 'unmanaged-root',
-        root: entry?.root,
-        rootId: entry?.rootId,
-      };
+      try {
+        const opened = await pool.get(entry);
+        return {
+          ok: true,
+          store: opened.store,
+          audit: opened.audit,
+          entry: opened.entry,
+          project: opened.store?.status?.project ?? opened.entry?.project,
+          release: opened.release,
+        };
+      } catch (error) {
+        return {
+          ok: false,
+          code: typeof error?.code === 'string' && error.code !== '' ? error.code : 'ROOT_UNAVAILABLE',
+          message: String(error?.message ?? error),
+          reason: error?.details?.reason ?? 'store-open-failed',
+          root: error?.details?.root ?? entry.root,
+          rootId: error?.details?.rootId ?? entry.rootId,
+        };
+      }
     };
-    const registration = registerMemoryTools(ctx, store, { resolveStore, audit: rootAudit });
+    const registration = registerMemoryTools(ctx, null, { resolveStore, audit: rootAudit });
     for (const failure of registration.failures) {
       ctx.logger?.warn?.(`[context-governance] tool ${failure.name} was not registered: ${failure.message}`);
     }
@@ -812,6 +840,7 @@ export async function apply(ctx, rawConfig = {}) {
           logger: ctx.logger,
           diagnosticsLogFile: config.diagnostics.logFile,
           store,
+          audit: primaryAudit,
           auditMaxBytes: config.audit.maxBytes,
           auditBase: config.memoryRoot,
           projectRoot: config.projectRoot,
@@ -1014,7 +1043,7 @@ export async function apply(ctx, rawConfig = {}) {
     const commandOptions = {
       store,
       getGuard: () => guard,
-      audit: guard?.auditLog ?? null,
+      audit: primaryAudit,
       rootAudit,
       policy: policyState,
       logger: ctx.logger,
@@ -1024,6 +1053,7 @@ export async function apply(ctx, rawConfig = {}) {
       getPersistenceIdentity: () => identity,
       getRootsView: () => (registry === null ? null : registry.view()),
       getRootCounts: () => (registry === null ? null : registry.counts()),
+      getPoolStats: () => (pool === null ? null : pool.stats()),
       getDiagnosticsLogFile: () => config.diagnostics.logFile,
       getDiagnosticsError: () => rootInfo.diagnosticsError,
     };
@@ -1057,7 +1087,11 @@ export async function apply(ctx, rawConfig = {}) {
         commandRef.current.dispose?.();
         earlyWiring?.stop();
         guard?.stop();
-        await store.close();
+        if (pool !== null) await pool.closeAll();
+        else {
+          await store.close();
+          primaryAudit.close();
+        }
       }, 'context-governance cleanup');
     } else {
       // cordis 没有 `dispose` 事件（app.asar 全量扫描 0 命中），旧兜底是死代码。
@@ -1124,6 +1158,7 @@ export async function apply(ctx, rawConfig = {}) {
       getPersistenceIdentity: () => identity,
       getRootsView: () => (registry === null ? null : registry.view()),
       getRootCounts: () => (registry === null ? null : registry.counts()),
+      getPoolStats: () => null,
       getDiagnosticsLogFile: () => config.diagnostics.logFile,
       getDiagnosticsError: () => rootInfo.diagnosticsError,
       logger: ctx.logger,

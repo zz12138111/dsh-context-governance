@@ -129,12 +129,46 @@ test('P1/T14 apply 接线：非主根/无根会话 mem_* 拒绝，主根会话�
     const write = registered.find((definition) => definition.name === MEM_WRITE_NAME);
     const exec = (header) => ({ agent: { session: { id: header.id ?? 's', header } } });
 
-    await assert.rejects(query.execute({}, exec({ id: 's-other', cwd: other })), /\[ROOT_UNMANAGED\]/);
+    const otherQuery = await query.execute({}, exec({ id: 's-other', cwd: other }));
+    assert.equal(otherQuery.count, 0, 'P2：非主根会话可以只读自己的根');
+    const otherWrite = await write.execute(
+      { op: 'create', type: 'fact', title: 'other-root', writer: 'rule' },
+      exec({ id: 's-other', cwd: other }),
+    );
+    assert.match(otherWrite.id, /^MEM-/);
+    const otherMemory = await fs.readFile(path.join(other, 'memory', 'governance', 'MEMORY.md'), 'utf8');
+    assert.match(otherMemory, /other-root/);
+    const ownWrite = await write.execute(
+      { op: 'create', type: 'fact', title: 'own-root', writer: 'rule' },
+      exec({ id: 's-own', cwd: primary }),
+    );
+    assert.match(ownWrite.id, /^MEM-/);
+    const primaryMemory = await fs.readFile(path.join(primary, 'memory', 'governance', 'MEMORY.md'), 'utf8');
+    assert.match(primaryMemory, /own-root/);
+    assert.equal(primaryMemory.includes('other-root'), false, 'A 根不得写 B 根内容');
+    assert.equal(otherMemory.includes('own-root'), false, 'B 根不得写 A 根内容');
+    const cross = await query.execute({ ids: [otherWrite.id] }, exec({ id: 's-own', cwd: primary }));
+    // 记忆 ID 是 per-store 的：两套 store 可能生成同号 ID；A 根即使匹配到同号，
+    // 也只能返回 A 自己的条目，绝不能返回 B 的正文/标题。
+    assert.ok(cross.count <= 1, '跨根 ids 最多命中本根同号条目');
+    if (cross.count === 1) {
+      assert.notEqual(cross.entries[0].title, 'other-root', '不得读到 B 根内容');
+    }
+    const crossText = await query.execute({ text: 'other-root' }, exec({ id: 's-own', cwd: primary }));
+    assert.equal(crossText.count, 0, '跨根 text 查询不得命中');
     const noRoot = path.join(base, 'nogit');
     await fs.mkdir(noRoot, { recursive: true });
     await assert.rejects(query.execute({}, exec({ id: 's-noroot', cwd: noRoot })), /\[NO_ROOT\]/);
     const own = await query.execute({}, exec({ id: 's-own', cwd: primary }));
-    assert.equal(own.count, 0);
+    assert.equal(own.count, 1);
+    assert.equal(own.entries[0].title, 'own-root');
+    await assert.rejects(
+      write.execute(
+        { op: 'create', type: 'fact', title: 'bad-project', writer: 'rule', project: 'not-this-root' },
+        exec({ id: 's-own', cwd: primary }),
+      ),
+      /\[BAD_ARGS\]/,
+    );
     await assert.rejects(
       write.execute({ op: 'create', type: 'fact', title: 't' }, exec({ id: 's-sub', origin: 'subagent', parentSession: 's-own' })),
       /\[SUBAGENT_NO_MEMORY_WRITE\]/,

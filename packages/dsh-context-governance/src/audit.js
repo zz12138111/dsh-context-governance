@@ -181,8 +181,13 @@ export const AUDIT_EVENTS = Object.freeze([
   'containment-violation',
   'root-unmanaged',
   'root-drift',
-  // P2 预留：mem_* 根路由拒绝。
+  // P2 预留：mem_* 根路由拒绝 / 每根 store 池。
   'memory-tool-rejected',
+  'memory-store-open',
+  'memory-store-close',
+  'memory-store-readonly',
+  'memory-store-pool-warn',
+  'memory-store-open-failed',
 ]);
 
 function redactText(value) {
@@ -248,6 +253,7 @@ export class AuditLog {  #file;
   #writeFailures = 0;
   #lastError = null;
   #allowedBase = null;
+  #closed = false;
 
   /**
    * @param {object} options
@@ -273,6 +279,13 @@ export class AuditLog {  #file;
   get rotations() { return this.#rotations; }
   get writeFailures() { return this.#writeFailures; }
   get lastError() { return this.#lastError; }
+  get closed() { return this.#closed; }
+
+  /** P2：池 dispose 时丢弃内存态；之后 append 不再写盘。 */
+  close() {
+    this.#closed = true;
+    this.#memory.length = 0;
+  }
 
   /** v3：实际写入前 containment 复核（无 allowedBase 时兼容旧单测/无守卫构造）。 */
   #guard(target = this.#file) {
@@ -353,6 +366,7 @@ export class AuditLog {  #file;
    * @returns {boolean} 是否落盘成功（无文件时视为成功，只留内存）
    */
   append(event, details = {}) {
+    if (this.#closed) return false;
     const record = {
       ts: this.#now().toISOString(),
       event: redactText(String(event)).slice(0, 80),

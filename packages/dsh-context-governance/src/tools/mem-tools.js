@@ -169,42 +169,48 @@ function defaultResolver(store) {
 }
 
 
-async function runWrite(store, args, exec) {
-  const op = String(args?.op ?? '');
-  const source = typeof args?.source === 'string' && args.source.trim() !== ''
-    ? args.source
+async function runWrite(store, args, exec, expectedProject = undefined) {
+  if (expectedProject !== undefined && args?.project !== undefined && args.project !== expectedProject) {
+    throw new Error('[BAD_ARGS] project must match the session root project');
+  }
+  const input = expectedProject === undefined || args?.project !== undefined
+    ? args
+    : { ...args, project: expectedProject };
+  const op = String(input?.op ?? '');
+  const source = typeof input?.source === 'string' && input.source.trim() !== ''
+    ? input.source
     : exec?.agent?.session?.id !== undefined ? `session:${exec.agent.session.id}` : undefined;
   switch (op) {
     case 'create': {
-      const entry = await store.create({ ...args, source });
+      const entry = await store.create({ ...input, source });
       return { id: entry.id, status: entry.status, type: entry.type, title: entry.title };
     }
     case 'update': {
-      if (args.status !== undefined) {
+      if (input.status !== undefined) {
         throw new Error('[BAD_OP] status transitions use confirm/expire/supersede, not update');
       }
-      const entry = await store.update(args.id, {
-        ...(args.title === undefined ? {} : { title: args.title }),
-        ...(args.detail === undefined ? {} : { detail: args.detail }),
-        ...(args.source === undefined && source === undefined ? {} : { source: args.source ?? source }),
-        ...(args.evidence === undefined ? {} : { evidence: args.evidence }),
-        ...(args.confidence === undefined ? {} : { confidence: args.confidence }),
-        ...(args.risk === undefined ? {} : { risk: args.risk }),
-        ...(args.project === undefined ? {} : { project: args.project }),
-        ...(args.type === undefined ? {} : { type: args.type }),
+      const entry = await store.update(input.id, {
+        ...(input.title === undefined ? {} : { title: input.title }),
+        ...(input.detail === undefined ? {} : { detail: input.detail }),
+        ...(input.source === undefined && source === undefined ? {} : { source: input.source ?? source }),
+        ...(input.evidence === undefined ? {} : { evidence: input.evidence }),
+        ...(input.confidence === undefined ? {} : { confidence: input.confidence }),
+        ...(input.risk === undefined ? {} : { risk: input.risk }),
+        ...(input.project === undefined ? {} : { project: input.project }),
+        ...(input.type === undefined ? {} : { type: input.type }),
       });
       return { id: entry.id, status: entry.status, type: entry.type, title: entry.title };
     }
     case 'confirm': {
-      const entry = await store.confirm(args.id);
+      const entry = await store.confirm(input.id);
       return { id: entry.id, status: entry.status, type: entry.type, title: entry.title };
     }
     case 'expire': {
-      const entry = await store.expire(args.id);
+      const entry = await store.expire(input.id);
       return { id: entry.id, status: entry.status, type: entry.type, title: entry.title };
     }
     case 'supersede': {
-      const result = await store.supersede(args.id, { ...args, source });
+      const result = await store.supersede(input.id, { ...input, source });
       return {
         id: result.entry.id,
         status: result.entry.status,
@@ -232,9 +238,9 @@ export function createMemoryTools(store, options = {}) {
   const subagentOf = typeof options.isSubagent === 'function' ? options.isSubagent : isSubagentExec;
   const audit = options.audit ?? null;
 
-  const rejectWith = (tool, exec, code, message, extra = {}) => {
+  const rejectWith = (tool, exec, code, message, extra = {}, targetAudit = audit) => {
     try {
-      audit?.append?.('memory-tool-rejected', {
+      targetAudit?.append?.('memory-tool-rejected', {
         tool,
         code,
         sessionId: execSessionId(exec),
@@ -249,12 +255,17 @@ export function createMemoryTools(store, options = {}) {
     return reject(code, message);
   };
 
-  const storeFor = (tool, exec) => {
+  const storeFor = async (tool, exec) => {
     let resolved;
     try {
-      resolved = resolveStore(exec);
+      resolved = await resolveStore(exec);
     } catch (error) {
-      throw rejectWith(tool, exec, 'ROOT_UNAVAILABLE', String(error?.message ?? error), { reason: 'resolver-threw' });
+      const code = typeof error?.code === 'string' && error.code !== '' ? error.code : 'ROOT_UNAVAILABLE';
+      throw rejectWith(tool, exec, code, String(error?.message ?? error), {
+        reason: error?.details?.reason ?? 'resolver-threw',
+        root: error?.details?.root,
+        rootId: error?.details?.rootId,
+      });
     }
     if (resolved === null || typeof resolved !== 'object' || resolved.ok !== true) {
       const code = typeof resolved?.code === 'string' && resolved.code !== '' ? resolved.code : 'NO_ROOT';
@@ -267,7 +278,15 @@ export function createMemoryTools(store, options = {}) {
         rootId: resolved?.rootId,
       });
     }
-    return resolved.store;
+    return resolved;
+  };
+
+  const releaseQuietly = (resolution) => {
+    try {
+      resolution?.release?.();
+    } catch {
+      /* release 失败不影响工具结果 */
+    }
   };
 
   return {
@@ -306,11 +325,24 @@ export function createMemoryTools(store, options = {}) {
               { reason: 'subagent' },
             );
           }
-          const target = storeFor(MEM_WRITE_NAME, exec);
+          let resolution = null;
           try {
-            return await runWrite(target, args, exec);
+            resolution = await storeFor(MEM_WRITE_NAME, exec);
+            return await runWrite(resolution.store, args, exec, resolution.project ?? resolution.entry?.project);
           } catch (error) {
+            if (error instanceof MemoryReadOnlyError) {
+              throw rejectWith(
+                MEM_WRITE_NAME,
+                exec,
+                'READ_ONLY',
+                `memory is read-only: ${error.reason}`,
+                { reason: error.reason },
+                resolution?.audit ?? audit,
+              );
+            }
             throw toolError(error);
+          } finally {
+            releaseQuietly(resolution);
           }
         },
       },
@@ -356,15 +388,22 @@ export function createMemoryTools(store, options = {}) {
           if (Array.isArray(args?.ids) && args.ids.length > 20) {
             throw new Error('[BAD_ARGS] mem_query accepts at most 20 ids per call');
           }
-          const target = storeFor(MEM_QUERY_NAME, exec);
-          const ids = Array.isArray(args?.ids) ? args.ids : undefined;
-          return target.query({
-            ...(ids === undefined ? {} : { ids }),
-            ...(args?.type === undefined ? {} : { type: args.type }),
-            ...(args?.status === undefined ? {} : { status: args.status }),
-            ...(args?.text === undefined ? {} : { text: args.text }),
-            ...(args?.limit === undefined ? {} : { limit: args.limit }),
-          });
+          let resolution = null;
+          try {
+            resolution = await storeFor(MEM_QUERY_NAME, exec);
+            const ids = Array.isArray(args?.ids) ? args.ids : undefined;
+            return resolution.store.query({
+              ...(ids === undefined ? {} : { ids }),
+              ...(args?.type === undefined ? {} : { type: args.type }),
+              ...(args?.status === undefined ? {} : { status: args.status }),
+              ...(args?.text === undefined ? {} : { text: args.text }),
+              ...(args?.limit === undefined ? {} : { limit: args.limit }),
+            });
+          } catch (error) {
+            throw toolError(error);
+          } finally {
+            releaseQuietly(resolution);
+          }
         },
       },
     },

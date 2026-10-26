@@ -172,7 +172,9 @@ test('P1/T12 apply：persistence-identity / project-root-changed 只进 root aud
     assert.ok(events.includes('persistence-identity'), `root audit 缺身份事件：${events.join(',')}`);
     assert.ok(events.includes('project-root-changed'), `root audit 缺根变化事件：${events.join(',')}`);
     // 没有 guard 时不应创建 per-root audit。
-    await assert.rejects(fs.access(path.join(newRoot, 'memory', 'governance', 'audit.jsonl')));
+    const perRootAudit = await fs.readFile(path.join(newRoot, 'memory', 'governance', 'audit.jsonl'), 'utf8').catch(() => '');
+    assert.equal(perRootAudit.includes('persistence-identity'), false);
+    assert.equal(perRootAudit.includes('project-root-changed'), false);
     const status = await commands[0].handler({ rawInput: 'status' });
     assert.match(status.text, /^root-audit: file=.*root-audit-prof\.jsonl/m);
   } finally {
@@ -203,7 +205,9 @@ test('P1/T12 apply：首次推断 inferred-fresh 进 root audit（per-root 无�
     assert.equal(attached, true, 'root audit 应出现 inferred-fresh');
     const events = (await readEvents(rootAuditFile)).map((record) => record.event);
     assert.ok(events.includes('persistence-identity'));
-    await assert.rejects(fs.access(path.join(repo, 'memory', 'governance', 'audit.jsonl')));
+    const perRootAudit = await fs.readFile(path.join(repo, 'memory', 'governance', 'audit.jsonl'), 'utf8').catch(() => '');
+    assert.equal(perRootAudit.includes('persistence-identity'), false);
+    assert.equal(perRootAudit.includes('inferred-fresh'), false);
   } finally {
     await closeContext(cleanups);
     await fs.rm(base, { recursive: true, force: true });
