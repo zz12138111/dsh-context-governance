@@ -620,6 +620,54 @@ test('2a apply：config 移除后回落到持久化根 → changed-from 可见�
   }
 });
 
+test('2a apply：两段采样——先非 git 会话（no-project-root，不写盘）后本区会话（inferred-fresh）', async () => {
+  const dir = await tempDir('cg-2a-twophase-');
+  const home = path.join(dir, 'home');
+  const profile = { name: 'prof', dir: path.join(dir, 'profile'), home };
+  const repo = path.join(dir, 'repo');
+  const deep = path.join(repo, 'src');
+  const nogit = path.join(dir, 'nogit');
+  await fs.mkdir(path.join(repo, '.git'), { recursive: true });
+  await fs.mkdir(deep, { recursive: true });
+  await fs.mkdir(nogit, { recursive: true });
+  const diagFile = path.join(dir, 'diag.log');
+  const commands = [];
+  const handlers = [];
+  const cleanups = [];
+  const logs = { info: [], warn: [], error: [] };
+  const stateFile = path.join(home, 'context-governance', 'root-state-prof.json');
+  try {
+    assert.equal(inferRootFromCwd(nogit), null, '前置：nogit 目录不得落在任何 git 仓内');
+    await apply(
+      makeApplyContext({ profile, commands, handlers, cleanups, logs }),
+      { diagnostics: { logFile: diagFile }, compression: { enabled: false }, project: 'test-project' },
+    );
+    // 第一段：非 git 会话（模拟 00 的 G:\DS-HARNESS）→ no-project-root，根未知、不写盘。
+    fireSessionEvent(handlers, { id: 'sess-nogit', header: { cwd: nogit } });
+    const failedSeen = await until(() => logs.warn.some((line) => line.includes('no-project-root')));
+    assert.equal(failedSeen, true, `应留 no-project-root 警告，实际 warn=${JSON.stringify(logs.warn)}`);
+    await assert.rejects(fs.access(stateFile), '第一段失败不得写状态文件');
+    assert.equal(commands.length, 1, '第一段失败不得挂载 runtime');
+    assert.match(await fs.readFile(diagFile, 'utf8'), /persistence: no-project-root/);
+
+    // 第二段：本区 git 会话 → 推断成功 + 落盘 + 完整 runtime。
+    fireSessionEvent(handlers, { id: 'sess-repo', header: { cwd: deep } });
+    const attached = await until(() => commands.length >= 2 && fs.access(stateFile).then(() => true, () => false));
+    assert.equal(attached, true, '第二段应推断成功并落盘');
+    const state = JSON.parse(await fs.readFile(stateFile, 'utf8'));
+    assert.equal(state.root, normalizeRootPath(repo));
+    assert.equal(state.inferredFromCwd, path.resolve(deep));
+    const status = await commands.at(-1).handler({ rawInput: 'status' });
+    assert.match(status.text, /^project-root: .*\(source=inferred, inferred-fresh\)$/m);
+    const diag = await fs.readFile(diagFile, 'utf8');
+    assert.match(diag, /persistence: no-project-root/);
+    assert.match(diag, /persistence-identity: source=profileContext name=prof/);
+  } finally {
+    await closeContext(cleanups);
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('2a apply：推断失败（cwd 缺失）→ no-project-root 警告，根保持未知、不写盘', async () => {
   const dir = await tempDir('cg-2a-noroot-');
   const home = path.join(dir, 'home');
