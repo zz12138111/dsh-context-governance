@@ -228,6 +228,15 @@ test('P2/删状态（默认空根）：A 重推 inferred-fresh；A 旧记忆可�
       await apply(ctx2.ctx, { compression: { enabled: false }, project: 'test' });
       fire(ctx2.handlers, { id: 'sA2', header: { cwd: rootA } });
       assert.equal(await until(() => fs.stat(stateFile).then(() => true, () => false)), true, '应重新推断并落盘');
+      // Readiness barrier: wait for the rootA runtime/store attach before closing
+      // this context; product-side attach tracking is a 1.0.1 candidate.
+      let query = null;
+      const queryReady = await until(() => {
+        query = tool(ctx2.registered, MEM_QUERY_NAME);
+        return query !== undefined;
+      });
+      if (queryReady !== true) throw new Error('rootA mem_query did not register');
+      await query.execute({}, execFor('sA2', rootA));
       const rootAudit = await readJsonl(path.join(home, 'context-governance', 'root-audit-prof.jsonl'));
       const fresh = [...rootAudit].reverse().find((entry) => entry.event === 'inferred-fresh');
       assert.ok(fresh, 'root audit 应有 inferred-fresh');
