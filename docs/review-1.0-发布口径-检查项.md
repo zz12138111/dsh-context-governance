@@ -97,6 +97,7 @@
 2. 三句话（真实压缩/不可逆 + 如何关闭 + 项目层不生效）逐句必须在，不能合并成一句模糊表述；
 3. 项目层语义已定（§4.6）：项目层一律不生效；若未来有新的需求/用户决定改变它，本段与 §4.2 需同步改并重新复核。
 4. **项目边界段必须出现**；不得写「自动跟随 cwd」或「多项目」；**持久化 / 重启沿用 / 根变化可见**三句必须在（v0.6 `416fac6`）。
+5. **`onlyProject` 若在配置或 status 出现**：发布说明必须写「仅兼容展示，`only-project=on/off` 不代表作用域；作用域始终由项目根决定，根外会话一律外部（不提前压、不写记忆，仅 cost-only）」；**不得写 false 会扩大作用域**。`cwd` 为空的 `unattributed` 放行只在内部验收记录，不写 Release。
 
 ### 4.6 项目层对 `armed` 的语义（已定，按需求版）
 
@@ -205,4 +206,5 @@
 - 2026-10-26（2a 签收）：单测 **377/377**（我跑）+ 真机核心通过——首次推断（root=repo、source=inferred、inferredFromCwd 同根）、持久化（C:\Users\19091\.dsh\context-governance\root-state-desktop.json，sha256 E254490B…C767AA）、二次重启沿用不重推（pid 19664；mtime/hash 不变；无 inferred-fresh/oot-unknown/
 o-project-root）。**真机待补（I3 前）**：双 profile、根变化可见、/cg status 文本（均有单测）。#11 状态=单测+真机核心签收。
 - 2026-10-26（2b.1 裁决）：需求确认 REQUIREMENTS.md:453 主语=成本记录，记忆工具不在 1.0 作用域；**撤回 2b.1 作为 #1 条件，降级 1.1**。补 §4.8b 已知限制 + §4.5 发布必需段：「mem_write/mem_query 未按会话隔离，外部会话可读写本项目记忆；1.0 的『不读写外部记忆』承诺仅限压缩观测/保护/回注/成本记录」。Release/README 不得暗示工具面已隔离；1.1 预登记同一作用域判定 + memory-tool-rejected。
+
 
