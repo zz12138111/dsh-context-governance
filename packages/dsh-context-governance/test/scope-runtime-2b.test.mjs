@@ -132,6 +132,10 @@ test('2b runtime：外部会话压缩 → 一条 host-native cost（字段齐全
   assert.equal(row.tokensShadowed, 500);
   assert.equal(typeof row.backend, 'string');
   assert.equal(row.project, undefined, '外部会话不冒充本项目 project');
+  assert.equal(row.tokensInjected, undefined, '外部 cost 不含回注字段');
+  assert.equal(row.injectedEntries, undefined);
+  assert.equal(row.pruneCount, undefined, '外部 cost 不含 prune 字段');
+  assert.equal(row.governanceCostSource, undefined);
   assert.equal(audit.entries.some((entry) => /^protection-/.test(entry.event)), false, '不得写 protection-*');
   assert.equal(audit.entries.some((entry) => /^reinjection/.test(entry.event)), false, '不得写 reinjection*');
   assert.equal(guard.status.lastCost, null, '外部 cost 不覆盖本项目 last-cost');
@@ -148,9 +152,13 @@ test('2b runtime：外部会话只观测到 end（中途挂载）→ 仍写一�
   const guard = makeGuard({ ctx, audit });
   guard.start();
   const session = sessionOf('foreign-late', OUTSIDE);
-  emit(ctx, session, { seq: 9, type: 'compaction/end', time: 1790000000009, data: { compactionId: 'late-1' } });
+  const end = { seq: 9, type: 'compaction/end', time: 1790000000009, data: { compactionId: 'late-1' } };
+  emit(ctx, session, end);
+  emit(ctx, session, end); // 同一个 end 重复到达：不得重复记账
   await flush();
-  const row = audit.entries.find((entry) => entry.event === 'compaction-cost');
+  const rows = audit.entries.filter((entry) => entry.event === 'compaction-cost');
+  assert.equal(rows.length, 1, '同一 compactionId 的重复 end 不得重复写 cost');
+  const row = rows[0];
   assert.ok(row, '不得整行缺失');
   assert.equal(row.source, 'host-native');
   assert.equal(row.reason, 'compaction/start was not observed');

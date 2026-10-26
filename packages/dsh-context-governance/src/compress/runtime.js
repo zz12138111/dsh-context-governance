@@ -1059,6 +1059,17 @@ export class CompressionGuard {
     // 0.1.18（cost-v1.4）：backend 字段解析统一走 resolveBackendFields（与 /cg status 同一来源）。
     const backendFields = resolveBackendFields(this.#adapter);
     const foreign = state.foreign === true;
+    // R-SCOPE-2：外部会话只含压缩事实与用量；不带 protection/reinjection/prune 字段。
+    const governanceFields = foreign ? {} : {
+      tokensInjected: cost.tokensInjected,
+      injectedEntries: cost.injectedEntries,
+      tokensDropped: cost.tokensDropped,
+      tokensPruned,
+      pruneCount: prunes.length,
+      pruneTools,
+      governanceCostSource: governanceEstimated ? 'estimated' : 'unknown',
+      estimateMethod: governanceEstimated ? 'chars/4' : 'none',
+    };
     this.#auditEvent('compaction-cost', {
       sessionId: state.sessionId,
       compactionId: state.compactionId,
@@ -1077,16 +1088,9 @@ export class CompressionGuard {
       tokensAfterParts: cost.tokensAfterParts,
       tokensShadowed: cost.tokensShadowed,
       tokensSummary: cost.tokensSummary,
-      tokensInjected: cost.tokensInjected,
-      injectedEntries: cost.injectedEntries,
-      tokensDropped: cost.tokensDropped,
       backendUsage: cost.backendUsage,
-      tokensPruned,
-      pruneCount: prunes.length,
-      pruneTools,
       backendCostSource: backendMeasured ? 'measured' : 'unknown',
-      governanceCostSource: governanceEstimated ? 'estimated' : 'unknown',
-      estimateMethod: governanceEstimated ? 'chars/4' : 'none',
+      ...governanceFields,
       auditVersion: 'cost-v1.4',
     });
     // 外部会话的 cost 行只进审计，不覆盖本项目 `/cg status last-cost`。
@@ -1117,7 +1121,7 @@ export class CompressionGuard {
     const id = event?.data?.compactionId ?? null;
     if (id === null) return;
     if (type === 'compaction/start') {
-      if (this.#pending.has(id)) return;
+      if (this.#pending.has(id) || this.#completedCycles.has(id)) return;
       this.#stats.foreignStarts += 1;
       this.#pending.set(id, this.#foreignCostState(session, id, event, null));
       return;
@@ -1145,8 +1149,14 @@ export class CompressionGuard {
       return;
     }
     if (type === 'compaction/end') {
+      if (this.#completedCycles.has(id)) return;
       const state = this.#pending.get(id) ?? this.#foreignCostState(session, id, event, 'compaction/start was not observed');
       this.#pending.delete(id);
+      this.#completedCycles.add(id);
+      this.#completedOrder.push(id);
+      while (this.#completedOrder.length > 200) {
+        this.#completedCycles.delete(this.#completedOrder.shift());
+      }
       state.cost.occurredAt = Number.isFinite(event?.time)
         ? new Date(event.time).toISOString()
         : this.#now().toISOString();
