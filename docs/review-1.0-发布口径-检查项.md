@@ -206,5 +206,5 @@
 - 2026-10-26（2a 签收）：单测 **377/377**（我跑）+ 真机核心通过——首次推断（root=repo、source=inferred、inferredFromCwd 同根）、持久化（C:\Users\19091\.dsh\context-governance\root-state-desktop.json，sha256 E254490B…C767AA）、二次重启沿用不重推（pid 19664；mtime/hash 不变；无 inferred-fresh/oot-unknown/
 o-project-root）。**真机待补（I3 前）**：双 profile、根变化可见、/cg status 文本（均有单测）。#11 状态=单测+真机核心签收。
 - 2026-10-26（2b.1 裁决）：需求确认 REQUIREMENTS.md:453 主语=成本记录，记忆工具不在 1.0 作用域；**撤回 2b.1 作为 #1 条件，降级 1.1**。补 §4.8b 已知限制 + §4.5 发布必需段：「mem_write/mem_query 未按会话隔离，外部会话可读写本项目记忆；1.0 的『不读写外部记忆』承诺仅限压缩观测/保护/回注/成本记录」。Release/README 不得暗示工具面已隔离；1.1 预登记同一作用域判定 + memory-tool-rejected。
-
+- 2026-10-26（2b #1 签收）：单测 **394/394** + 真机 arly-skipped(foreign-session)（session 53ece2c2，threshold .6/native .6934；无 arly-forced/compaction-cost；scope 先于 pressure）；rmed 已恢复 false（pid 4640，04:20Z 后 arly-*=0）。**剩余观察项**：外部会话真实 host-native cost 行未出现，单测覆盖字段边界；Release 不得声称已有实机证据。证据 nalysis/req-20261025-12/1.0-10条-复验/01-B1/real-skip-foreign-session.md。
 
