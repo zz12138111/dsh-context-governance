@@ -208,5 +208,5 @@ oot-unknown/
 o-project-root）。**真机待补（I3 前）**：双 profile、根变化可见、/cg status 文本（均有单测）。#11 状态=单测+真机核心签收。
 - 2026-10-26（2b.1 裁决）：需求确认 REQUIREMENTS.md:453 主语=成本记录，记忆工具不在 1.0 作用域；**撤回 2b.1 作为 #1 条件，降级 1.1**。补 §4.8b 已知限制 + §4.5 发布必需段：「mem_write/mem_query 未按会话隔离，外部会话可读写本项目记忆；1.0 的『不读写外部记忆』承诺仅限压缩观测/保护/回注/成本记录」。Release/README 不得暗示工具面已隔离；1.1 预登记同一作用域判定 + memory-tool-rejected。
 - 2026-10-26（2b #1 签收）：单测 **394/394** + 真机 `early-skipped(foreign-session)`（session `53ece2c2`，threshold .6/native .6934；无 `early-forced`/`compaction-cost`；scope 先于 pressure）；`armed` 已恢复 false（pid 4640，04:20Z 后 `early-*`=0）。**剩余观察项**：外部会话真实 host-native cost 行未出现，单测覆盖字段边界；Release 不得声称已有实机证据。证据 `analysis/req-20261025-12/1.0-10条-复验/01-B1/real-skip-foreign-session.md`。
-- 2026-10-26（3b 签收）：#4/#5 代码/测试面通过——全量 **407/407**；reason 新旧兼容（allback-over-native 保留）、transient 按会话过滤/成功清除/fallback 传 sessionId、unvalidated 不裸 on；README 4A 单独提交。真机 /cg status 文本待桌面窗口，不阻塞本批。
+- 2026-10-26（3b 签收）：#4/#5 代码/测试面通过——全量 **407/407**；reason 新旧兼容（`fallback-over-native` 保留）、transient 按会话过滤/成功清除/fallback 传 sessionId、unvalidated 不裸 on；README 4A 单独提交。真机 `/cg status` 文本待桌面窗口，不阻塞本批。
 
