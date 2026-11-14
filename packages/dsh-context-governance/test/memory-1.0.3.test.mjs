@@ -311,10 +311,18 @@ test('1.0.3 守卫扩散：`#entries.set(` 只允许经 `#admitEntry`（低层�
     if (line.includes('#entries.set(')) hits.push({ method, line: index + 1 });
   });
   assert.ok(hits.length > 0, '应能扫到写入点');
+  // 名单是契约（docs/记忆契约-v1.md §12）：新增直写点必须先改本节并由需求签，否则测试红。
   const allowed = new Set(['#loadAll', '#recoverCorruptTopic', '#admitEntry', 'create', 'update', 'confirm', 'expire', 'supersede']);
   for (const hit of hits) {
     assert.ok(allowed.has(hit.method), `第 ${hit.line} 行在 ${hit.method} 内直写 #entries.set(；保护链路只能经 #admitEntry`);
   }
+  // 条数断言：直写点恰好 9 处，多一处（含名单外方法）即红。
+  assert.equal(hits.length, 9, `#entries.set( 直写点应恰 9 处，实际 ${hits.length}：${JSON.stringify(hits)}`);
+  assert.deepEqual(
+    hits.map((hit) => hit.method).sort(),
+    ['#admitEntry', '#loadAll', '#recoverCorruptTopic', 'confirm', 'create', 'expire', 'supersede', 'supersede', 'update'].sort(),
+    '直写点方法名单被改动（扩名单须需求签）',
+  );
   assert.ok(hits.some((hit) => hit.method === '#admitEntry'), '`#admitEntry` 必须存在且是写入口');
   assert.ok(!hits.some((hit) => hit.method === 'materializeProtection'), 'materializeProtection 不得直写 #entries.set(');
   assert.ok(!hits.some((hit) => hit.method === '#loadProtectionJournals'), '#loadProtectionJournals 不得直写 #entries.set(');
@@ -351,8 +359,12 @@ test('1.0.3 守卫扩容：`#protectionEntries.set(` 只允许在 intake（prote
     if (line.includes('#protectionEntries.set(')) hits.push({ method, line: index + 1 });
   });
   assert.ok(hits.length > 0, '应能扫到保护条目写入点');
+  // 名单是契约（docs/记忆契约-v1.md §12）：新增 intake 必须先改本节并由需求签，否则测试红。
   const allowed = new Set(['protectSync', '#loadProtectionJournals']);
   for (const hit of hits) {
     assert.ok(allowed.has(hit.method), `第 ${hit.line} 行在 ${hit.method} 内直写 #protectionEntries.set(；只允许 intake 两处`);
   }
+  // 条数断言：intake 写点恰好 2 处；materializeProtection 显式钉死不得出现。
+  assert.equal(hits.length, 2, `#protectionEntries.set( 直写点应恰 2 处，实际 ${hits.length}：${JSON.stringify(hits)}`);
+  assert.ok(!hits.some((hit) => hit.method === 'materializeProtection'), 'materializeProtection 不得直写 #protectionEntries.set(');
 });
