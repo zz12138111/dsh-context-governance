@@ -1138,10 +1138,10 @@ C 的初步证据：启动后本项目根 `audit.jsonl` 只有 `capability@ready
 | **R5** | 双插件共存不重复触发 | C | 真机窗口回归（`dsh-context@0.84.1` + 本插件同时在场） | 一次压缩只产生**一轮**保护写入/回注（按审计行计数：同 cycle 不出现双份 `memory-store-open`/`header-injected`）；升级前后各取一次基线对比 |
 | **R6** | 单写者锁不误判 | C | 同 G 根多会话并发 | `memory-store-readonly writer-lock:<pid>` **属设计内**（只读不写、不抢锁），**不得记缺陷**；真机能写回那次须成功 |
 | **B1** | 标题可读性主观 | B | 用户看真机窗口输出 | 用户判断（不计 A，不当阻断项） |
-| **C8** | D2 显示生效值+来源层 | A | 渲染/组件单测 + 文案断言 | 界面同时给出**当前生效值**（比例与百分比可互相换算）与**来源层**（`builtin`/`profile`/`plugin`/`project`/`session`），并标「本会话有效」或「重启后失效」 |
+| **C8** | D2 显示生效值+来源层+生命周期 | A | 渲染/组件单测 + 文案断言 | 界面必须同时给出：①**当前生效值**（百分比与比例可换算）②**来源层**（`builtin`/`profile`/`plugin`/`project`/`session`）③**生命周期**——`source=session` 时必须写「**本会话有效，重启后失效**」；`source` 为持久层（plugin/profile/project/builtin）时写「保存后生效、重启仍有效」。**"生效时点"必须随 `source` 变化，不得用一句常量盖所有来源** |
 | **C9** | D2 百分比换算与边界 | A | 单测（UI 层换算函数 + 校验） | `55 → 0.55`、`20 → 0.20` 通过；`19` 被拒；`<30` 且无 `lowThresholdAck` 被拒；项目层写 `<45` 被拒；`> native−0.02` 被拒；拒绝文案与 `/cg set` 一致 |
 | **C10** | D2 不绕过安全边界 | A | 单测 + 写入口审查 | UI 写入必须经现有 `validateLayer` 同一路径；`compact.estimateSafety`/`compact.lowThresholdAck`/`armed` **在 UI 中不可写**；不存在"UI 特批"分支 |
-| **C11** | D2 层与生效提示 | A | 文案断言 | 界面写明"改的是哪一层"与"立即生效/需重启"；缺任一句判不过 |
+| **C11** | D2 层与生效提示 | A | 文案断言 | 界面必须同时写明：①**本次修改写入哪一层**（本实现固定 = `plugin` 层 / profile patch，须为静态可见文案）②**生效时点**（随 `source` 的两种分支，见 C8）。**缺①或缺②即判不过** |
 | **C12** | A 主入口（输入框下条目） | A | 注册形状单测 + 渲染文本 | `conversation.composer.dock` 注册项形状正确（唯一 id、order、返回 React 节点）；渲染文本为 `压 NN%`，**数值与快照 `at` 一致**；快照失败时渲染 `压 —` 且不抛错 |
 | **C13** | A 气泡三行信息 | A | 渲染文本断言 | 气泡含「当前生效 / 来源层 / 生效时点」三行，值取自快照 `{at, source, effectiveAt}`，与 `/cg status` 口径一致；含"打开设置页"兜底链接 |
 | **C14** | A 保存路径与拒绝 | A | 纯函数 + 单测 | 保存调 `configForms.get('dsh-context-governance').set('policy.at', ratio)`；`55→0.55`；越界（<20、<30 未 ack、项目层 <45、>native−0.02）**拒绝理由与 `/cg set` 同源**；成功后 chip/气泡刷新 |
@@ -1178,6 +1178,7 @@ C 的初步证据：启动后本项目根 `audit.jsonl` 只有 `capability@ready
 > 4. **回滚点**：`v1.0.3`@`9d62299`；预验期回退备份 `_backup\20261114-dsh-0.2.2-window\governance-1.0.3\`。
 > 5. **当前判定基线**：本机宿主 `0.2.1-rc.3` + 治理 **1.0.3**（已回退），D2 在离线环境开发与验证；**不动宿主、不动已装插件**，直到 D2 自测过且需求验完 C8-C15。
 > 6. **A 实现验收（2026-11-14 23:2x，需求侧自跑，判"可装"）**：`HEAD=34e49f6`；`node --test "test/*.test.mjs"` **548/548**（连跑 2 次全绿）、`test/settings-d2.test.mjs` **9/9**（C8-C15）、`test/no-control-chars.test.mjs` 1/1；flake 取证 `analysis/req-20261114-02/flake-30-A4/` **30/30 全绿且逐轮绑定 `head=34e49f6`**；`src/` 相对 `20bf20d` **零改动**；`package.json` `files=src,lib/client.js,README.md,cordis.patch.yml`（`locale` 已删），**文件集 39**；`lib/client.js` 249 行、`dsh.client={platform:'web'}`、无本机绝对路径。**结论：可装（预验）**，等 00 按 `GRANT-20261114-03` 执行。
+> 7. **测试判 C8/C11 字面不过（`TEST-2026-11-14-08`@`34e49f6`）→ 需求裁定：补文案，不收窄判据**（2026-11-14）。缺口两处：①`source=session` 时"生效时点"仍是常量「立即生效（保存后重新加载配置）」——**语义错**，必须随 `source` 改为「本会话有效，重启后失效」，持久层则「保存后生效、重启仍有效」；②界面缺「**本次修改写入哪一层**」（本实现固定 = `plugin` 层 / profile patch，需静态可见）。C8/C11 已按此精确化（见上表）；**不接受"只显示 source 就算过"**。开发补 `lib/client.js` 后，测试按原字面重判，不改判据、不挂 waiver。
 
 **窗口物料（00 已备，2026-11-14 22:30；**本轮暂不使用**，重开窗口时再用；明细见 `G:\DS-HARNESS\tasks\TASK-20261114-02-本体升级-0.2.2-rc.3.md`）**：
 
