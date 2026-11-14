@@ -268,7 +268,7 @@ test('1.0.3-5c 回归：生成侧 anchor 标题不留残句（安全切分/退�
   const anchor = bad.items.find((item) => item.type === 'anchor');
   assert.ok(anchor, '应生成 anchor 保护项');
   assert.equal(detectTitleTruncation(anchor.title), null, `标题不得截断：${anchor.title}`);
-  assert.equal(anchor.title, '回滚点');
+  assert.equal(anchor.title, '回滚点（见 source）');
 
   // 超长标题仍只在安全边界切，切完不得被判截断。
   const long = buildProtectionItems(

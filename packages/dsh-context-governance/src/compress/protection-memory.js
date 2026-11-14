@@ -90,7 +90,9 @@ export function buildProtectionItems(snapshot, {
 
   // ① 最新用户消息：首行/摘要 + 原文指针。
   if (snapshot.latestUser !== null) {
-    const title = snapshot.latestUser.title || '最新用户消息（非文本）';
+    const fullTitle = snapshot.latestUser.title || '最新用户消息（非文本）';
+    // 1.1.0 #4③：标题按 80 字收口（拼前缀后 ≈87 字），全文仍走 detail 的 coverageText，信息不丢。
+    const title = fullTitle.slice(0, 80);
     const prefix = title.startsWith('最新用户消息') ? '' : '最后用户消息：';
     push({
       type: 'fact',
@@ -100,8 +102,8 @@ export function buildProtectionItems(snapshot, {
     }, {
       kind: 'latest-user',
       seq: snapshot.latestUser.seq,
-      title,
-      coverageText: title,
+      title: fullTitle,
+      coverageText: fullTitle,
     });
   }
 
@@ -134,22 +136,25 @@ export function buildProtectionItems(snapshot, {
   // ③ 未完成批次：优先 STATE 文件指针，其次批次数字。
   if (snapshot.batch !== null) {
     const ratios = snapshot.batch.ratios ?? [];
-    const title = snapshot.batch.statePath
-      ? `批次 STATE：${snapshot.batch.statePath}`
-      : `批次进度：${ratios.join('、') || '有批次标记'}`;
-    push({
-      type: 'progress',
-      title,
-      fallback: '批次进度',
-      source: pointer(snapshot.batch.seq),
-    }, {
-      kind: 'batch',
-      seq: snapshot.batch.seq,
-      ratios,
-      paths: snapshot.batch.statePath === null ? [] : [snapshot.batch.statePath],
-      keyword: snapshot.batch.keyword ?? null,
-      coverageText: [ratios.join(' '), snapshot.batch.statePath ?? ''].filter(Boolean).join(' '),
-    });
+    // 1.1.0 #4②：statePath 与 ratios 都空 → 不发占位条目（空信息条目只占 TTL 名额与去重窗口）。
+    if (snapshot.batch.statePath || ratios.length > 0) {
+      const title = snapshot.batch.statePath
+        ? `批次 STATE：${snapshot.batch.statePath}`
+        : `批次进度：${ratios.join('、')}`;
+      push({
+        type: 'progress',
+        title,
+        fallback: '批次进度',
+        source: pointer(snapshot.batch.seq),
+      }, {
+        kind: 'batch',
+        seq: snapshot.batch.seq,
+        ratios,
+        paths: snapshot.batch.statePath === null ? [] : [snapshot.batch.statePath],
+        keyword: snapshot.batch.keyword ?? null,
+        coverageText: [ratios.join(' '), snapshot.batch.statePath ?? ''].filter(Boolean).join(' '),
+      });
+    }
   }
 
   // ④ 最近回滚点/映射指针。
@@ -157,13 +162,15 @@ export function buildProtectionItems(snapshot, {
     const paths = snapshot.rollback.paths ?? [];
     const keyword = String(snapshot.rollback.keyword ?? '').trim();
     // 1.0.3：不给"回滚点：回滚"这种残句；无路径又只有泛词时落到指针说明。
+    // 1.1.0 #4①：与 5c 截断兜底（`:43`+`:166`）同文案 `回滚点（见 source）`——detail 允许为空（5a），
+    // "见正文"可能指向空，能保证可解析的只有 source/evidence。
     const title = paths.length > 0
       ? `回滚点：${paths[0]}`
-      : (keyword !== '' && keyword !== '回滚点' && keyword !== '回滚' ? `回滚点：${keyword}` : '回滚点（指针见正文）');
+      : (keyword !== '' && keyword !== '回滚点' && keyword !== '回滚' ? `回滚点：${keyword}` : '回滚点（见 source）');
     push({
       type: 'anchor',
       title,
-      fallback: '回滚点',
+      fallback: '回滚点（见 source）',
       source: pointer(snapshot.rollback.seq),
     }, {
       kind: 'rollback',
