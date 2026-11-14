@@ -15,6 +15,16 @@ import { tempDir } from './helpers.mjs';
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** 轮询到条件 + 硬超时（C7 定性修复：异步清理/microtask 不能靠墙钟）。 */
+const waitFor = async (probe, { timeoutMs = 2000, intervalMs = 10 } = {}) => {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (await probe()) return true;
+    if (Date.now() >= deadline) return false;
+    await wait(intervalMs);
+  }
+};
+
 function makePolicy() {
   return {
     early: true,
@@ -130,8 +140,11 @@ test('P3 G8：子会话保护 journal 只回注，不 materialize 成持久 topi
     f.built.session.surface.nodes = f.built.postSurface;
     f.guard.handleEvent(f.built.session, f.built.events.find((item) => item.type === 'compaction/end'));
     await f.guard.flush();
-    await wait(20);
+    // C7 定性修复：结束周期的 discard 是 microtask，靠墙钟 20ms 会读到尚未清理的 pending 条目。
+    const drained = await waitFor(() => f.store.allEntries().length === 0 && f.store.protectionPending === 0);
+    assert.equal(drained, true, '2s 内应清理完子会话保护 journal');
     assert.equal(f.store.allEntries().length, 0, '子会话不得写持久记忆条目');
+    assert.equal(f.store.entries().length, 0, 'topics 恒 0（子会话不写持久记忆）');
     assert.equal(f.store.protectionPending, 0, '周期结束应清理临时 journal');
     const rows = await readRows(f.audit);
     assert.ok(rows.some((row) => row.event === 'protection-materialize-skipped' && row.reason === 'subagent'));
@@ -318,3 +331,4 @@ test('B2d：start 永不出现，终态归档 orphan，status=unknown，不得�
     await f.cleanup();
   }
 });
+
