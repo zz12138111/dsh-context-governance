@@ -1208,6 +1208,7 @@ C 的初步证据：启动后本项目根 `audit.jsonl` 只有 `capability@ready
 >    - **下次预验必须带**：用户浏览器 Console 的 `[context-governance]` 行 + Network 中 `policy-snapshot` 的状态码（本轮缺这两项，只能靠代码推断）。
 > 14. **第二真因（2026-11-15，开发自查 + 需求确认，新增 C20）**：三个组件里 `react.useEffect(() => store.subscribe(...)())` —— **订阅后立刻执行了退订**，快照写进 store 后无监听者 → chip 永远停初始 `压 —`；且 `open` 与 `snapshot` 混在一个 state，气泡打不开。修法：`useEffect(() => store.subscribe(...))` **返回退订函数**；`snapshot`/`open` 拆独立 state；新增 **C20**（静态守卫：禁止 `subscribe(<args>)()` 立即调用 + 独立 state + 真机数值随动）。
 >    - **教训**：这两个真因（取数静默失败、订阅被立即取消）都属"离线单测不可能抓到"的渲染生命周期缺陷——**C19/C20 把可静态化/可假测的部分补上，剩下的只能靠真机**。开发本轮自查出订阅 bug，比等下一轮预验再抓省一轮。
+> 15. **C19/C20 修复提交（2026-11-15，锚 `cf24cc2`）**：`5c07744`（订阅退订真因 + 快照退避重试/多时机重取 + C20 守卫）→ `cf24cc2`（`focusTarget = globalThis.window ?? globalThis`，浏览器语义优先）。范围**仅** `lib/client.js` + `test/settings-d2.test.mjs`（累计、两提交），`src/**`、`package.json` 未动，包树干净。需求侧自跑：全量 **557/557**、`settings-d2` **18/18**、`no-control-chars` 1/1，**5 轮绑 `cf24cc2`**。**待测试按 C19 6 条 + C20 3 条（含 focus 复测）复判 → 可装（预验）**。
 
 **窗口物料（00 已备，2026-11-14 22:30；**本轮暂不使用**，重开窗口时再用；明细见 `G:\DS-HARNESS\tasks\TASK-20261114-02-本体升级-0.2.2-rc.3.md`）**：
 
