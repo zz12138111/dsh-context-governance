@@ -65,6 +65,16 @@ export const AUDIT_FIELD_WHITELIST = Object.freeze({
   acceptedSeqs: 'number-array',
   /** a/b 判定的内容证据：同 kind 副本文本 sha256 是否与压缩前快照一致（hash 本身不入审计）。 */
   hashMatch: 'boolean',
+  /** D-MGMT-021 v3b：pending 对账字段。 */
+  contentSha256: 'text',
+  match: 'text',
+  windowTurnId: 'nullable-number',
+  status: 'text',
+  matchedSeq: 'number',
+  scanFrom: 'text',
+  scanTo: 'text',
+  lines: 'number',
+  rotated: 'boolean',
   manual: 'boolean',
   count: 'number',
   moved: 'number',
@@ -179,8 +189,12 @@ export const AUDIT_EVENTS = Object.freeze([
   'compaction-loss',
   /** D-MGMT-021：accept 类损失汇总（不逐条报警，判据只读 compaction-loss）。 */
   'compaction-loss-accepted',
-  /** D-MGMT-021：A 形态跳过 system/message 重建（每条规则一条，reason=no-open-step）。 */
+  /** D-MMGT-021 v3b：A 形态跳过 system/message 重建（每条规则一条，reason=no-open-step）。 */
   'surface-rebuild-skipped',
+  /** D-MGMT-021 v3b：pending 终态（accepted/unacceptable），对账键 compactionId+ruleSeq。 */
+  'surface-rebuild-resolved',
+  /** D-MGMT-021 v3b：重启恢复扫描盲区（可能存在未结算 pending）。 */
+  'surface-rebuild-recovery-incomplete',
   /** D-MGMT-021 回滚开关：protection.rebuild.enabled=false 时整段跳过。 */
   'surface-rebuild-disabled',
   'prune-observed',

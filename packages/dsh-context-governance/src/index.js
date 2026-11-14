@@ -1062,6 +1062,8 @@ export async function apply(ctx, rawConfig = {}) {
         reinjection: { maxFailures: config.reinjection.maxFailures },
         // D-MGMT-021 回滚开关：false 时整段 surface 重建跳过（改 patch 后重启生效）。
         rebuildEnabled: config.protection?.rebuild?.enabled !== false,
+        // D-MGMT-021 v3b：重启恢复扫描 per-root audit（补 pending 终态）。
+        auditFile: path.join(resources.store.rootDir, 'audit.jsonl'),
         startWaitMs: resources.startWaitMs,
       });
       // P3：订阅由 RootGuardPool 持有；guard 只初始化 tokenMeter/感知状态。

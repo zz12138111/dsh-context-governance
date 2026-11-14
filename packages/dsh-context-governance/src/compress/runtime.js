@@ -17,6 +17,7 @@
  * 永不：替换 provider、抛错给宿主、写消息正文到记忆/审计。
  */
 
+import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 
@@ -147,6 +148,17 @@ export class CompressionGuard {
   #completedCycles = new Set();
   #completedOrder = [];
   #reports = [];
+  /** D-MGMT-021 v3b：被 skip 的 system 规则，等待后续轮次对账（pending 第三态）。 */
+  #pendingReposts = new Map();
+  /** 每个会话的 pending 轮询定时器（宿主重发可能不触发可观测事件）。 */
+  #repostTimers = new Map();
+  /** 重启恢复扫描用的 per-root audit 文件。 */
+  #auditFile = '';
+  /** D-MGMT-021 v3b：已结算 pending 的键（compactionId|ruleSeq），保证 resolved 只写一次。 */
+  #resolvedPendingKeys = new Set();
+  /** accepted 按 compactionId 聚合（一条汇总，不逐规则报警）。 */
+  #acceptedAggregate = new Map();
+  #acceptedFlushScheduled = false;
   /** S1：已写完保护/回注、可供 early 审计读取的本 cycle 报告 id。 */
   #readyReports = new Set();
   /** S1.2：等待本 cycle 报告的 early 接线（最多 `EARLY_REPORT_WAIT_MS`，当前 60000ms）。 */
@@ -253,6 +265,7 @@ export class CompressionGuard {
     this.#captureTitle = options.captureTitle !== false;
     this.#rebuildEnabled = options.rebuildEnabled !== false;
     this.#readOnly = this.#store?.status?.readOnlyReason !== null && this.#store?.status?.readOnlyReason !== undefined;
+    this.#auditFile = typeof options.auditFile === 'string' ? options.auditFile : '';
     this.#readOnlyReason = this.#readOnly ? this.#store.status.readOnlyReason : null;
     this.#reinjection = {
       enabled: options.reinjection?.enabled !== false,
@@ -438,6 +451,8 @@ export class CompressionGuard {
     } catch (error) {
       this.#logger?.warn?.(`[context-governance] compaction observer registration failed: ${String(error?.message ?? error)}`);
     }
+    // D-MGMT-021 v3b：重启后 pending 一律转 unacceptable（不猜）；扫描盲区显式披露。
+    this.#recoverPendingOnStartup();
     return this;
   }
 
@@ -484,6 +499,8 @@ export class CompressionGuard {
       });
     }
     this.#pending.clear();
+    // D-MGMT-021 v3b：卸载时未对账的 pending 显式结算为 session-ended，不留悬空。
+    this.#settleAllPending('session-ended');
     // P3：early 预写未关联 start 的 journal 只归档，不 discard；异步清理，dispose() 可 await。
     if (this.#earlyStopArchive === null) {
       this.#earlyStopArchive = this.#archiveAllEarly('observer-disposed');
@@ -864,6 +881,309 @@ export class CompressionGuard {
       } catch {
         /* 单个监听失败不影响主流程 */
       }
+    }
+  }
+
+  /**
+   * D-MGMT-021 v3b：登记一条待对账的 system 规则。宿主重发发生在 compaction/end
+   * 之后的下一轮，不能在 end 时刻判定；只登记 pending，后续靠事件/短轮询观察。
+   */
+  #registerPendingRepost(session, rule) {
+    const sessionId = this.#sessionKey(session);
+    if (sessionId === null) return;
+    let list = this.#pendingReposts.get(sessionId);
+    if (list === undefined) {
+      list = [];
+      this.#pendingReposts.set(sessionId, list);
+    }
+    list.push({ ...rule, sessionId, recordedAt: Date.now(), windowTurnId: null });
+    this.#ensureRepostPolling(sessionId, session);
+  }
+
+  /**
+   * pending 轮询：固定 500ms 慢兜底（事件通道覆盖 `turn/start`/`system/message`/`turn/end`/
+   * `turn/abort`；轮询只兜“宿主重发无可观测事件”的异常路径，最坏多等半秒结算）。
+   */
+  #ensureRepostPolling(sessionId, session) {
+    if (this.#repostTimers.has(sessionId)) return;
+    const timer = setInterval(() => {
+      try {
+        this.#checkPendingReposts(sessionId, session);
+      } catch {
+        /* 轮询异常不打断主流程 */
+      }
+    }, 500);
+    if (typeof timer?.unref === 'function') timer.unref();
+    this.#repostTimers.set(sessionId, timer);
+  }
+
+  #stopRepostPolling(sessionId) {
+    const timer = this.#repostTimers.get(sessionId);
+    if (timer !== undefined) {
+      try {
+        clearInterval(timer);
+      } catch {
+        /* ignore */
+      }
+      this.#repostTimers.delete(sessionId);
+    }
+  }
+
+  /** 检查 pending：出现“更新的同 kind 原生 system/message”即结算 accepted。 */
+  #checkPendingReposts(sessionId, session) {
+    const list = this.#pendingReposts.get(sessionId);
+    if (list === undefined || list.length === 0) {
+      this.#pendingReposts.delete(sessionId);
+      this.#stopRepostPolling(sessionId);
+      return;
+    }
+    const nodes = Array.isArray(session?.surface?.nodes) ? session.surface.nodes : [];
+    const at = typeof session?.eventAt === 'function' ? session.eventAt.bind(session) : null;
+    if (at === null) return;
+    for (let index = list.length - 1; index >= 0; index -= 1) {
+      const rule = list[index];
+      const matched = this.#findRepost(rule, nodes, at);
+      if (matched === null) continue;
+      list.splice(index, 1);
+      this.#resolvePendingAccepted(rule, matched);
+    }
+    if (list.length === 0) {
+      this.#pendingReposts.delete(sessionId);
+      this.#stopRepostPolling(sessionId);
+    }
+  }
+
+  /**
+   * 找“更新的原生同 kind system/message”（审核 v3）：kind 非空只看 kind；kind 为空才要求
+   * sha256 相等。重建副本（plugin=context-governance / form=surface-rebuild）不算宿主重发。
+   */
+  #findRepost(rule, nodes, at) {
+    for (const seq of nodes) {
+      if (!(seq > rule.ruleSeq)) continue;
+      const candidate = at(seq);
+      if (candidate?.type !== 'system/message') continue;
+      const message = candidate.data?.message ?? null;
+      if (message === null || typeof message !== 'object') continue;
+      const source = message.source ?? null;
+      if (source === null || typeof source !== 'object') continue;
+      if (source.plugin === 'context-governance' || source.form === 'surface-rebuild') continue;
+      const text = Array.isArray(message.content)
+        ? message.content.filter((block) => block?.type === 'text' && typeof block.text === 'string')
+          .map((block) => block.text).join('\n')
+        : '';
+      const kind = source.kind ?? null;
+      if (rule.kind !== null) {
+        if (kind !== rule.kind) continue;
+        const hashMatch = typeof rule.text === 'string'
+          && createHash('sha256').update(text, 'utf8').digest('hex')
+            === createHash('sha256').update(rule.text, 'utf8').digest('hex');
+        return { seq, match: 'kind', hashMatch };
+      }
+      if (typeof rule.text !== 'string') continue;
+      const sameHash = createHash('sha256').update(text, 'utf8').digest('hex')
+        === createHash('sha256').update(rule.text, 'utf8').digest('hex');
+      if (sameHash) return { seq, match: 'sha256', hashMatch: true };
+    }
+    return null;
+  }
+
+  /** 幂等：同一 compactionId+ruleSeq 的终态只写一次（轮询/事件/stop 竞态保护）。 */
+  #claimPendingKey(compactionId, ruleSeq) {
+    const key = `${compactionId ?? ''}|${ruleSeq ?? ''}`;
+    if (this.#resolvedPendingKeys.has(key)) return false;
+    this.#resolvedPendingKeys.add(key);
+    if (this.#resolvedPendingKeys.size > 500) {
+      const first = this.#resolvedPendingKeys.values().next().value;
+      if (first !== undefined) this.#resolvedPendingKeys.delete(first);
+    }
+    return true;
+  }
+
+  #resolvePendingAccepted(rule, matched) {
+    if (!this.#claimPendingKey(rule.compactionId, rule.ruleSeq)) return;
+    this.#auditEvent('surface-rebuild-resolved', {
+      sessionId: rule.sessionId ?? null,
+      cycle: rule.cycle ?? null,
+      compactionId: rule.compactionId,
+      ruleSeq: rule.ruleSeq,
+      kind: rule.kind,
+      matchedSeq: matched.seq,
+      match: matched.match,
+      hashMatch: matched.hashMatch,
+      disposition: 'accepted',
+      dispositionRule: 'v1',
+      status: 'accepted',
+      lossClass: 'system-prompt-skip',
+    });
+    // C34：accepted 按 compactionId 聚合，一条汇总（不逐规则报警）。
+    let aggregate = this.#acceptedAggregate.get(rule.compactionId);
+    if (aggregate === undefined) {
+      aggregate = { seqs: [], cycle: rule.cycle ?? null, manual: rule.manual === true, sessionId: rule.sessionId ?? null };
+      this.#acceptedAggregate.set(rule.compactionId, aggregate);
+    }
+    if (!aggregate.seqs.includes(rule.ruleSeq)) aggregate.seqs.push(rule.ruleSeq);
+    this.#scheduleAcceptedFlush();
+  }
+
+  #scheduleAcceptedFlush() {
+    if (this.#acceptedFlushScheduled) return;
+    this.#acceptedFlushScheduled = true;
+    queueMicrotask(() => {
+      this.#acceptedFlushScheduled = false;
+      for (const [compactionId, aggregate] of [...this.#acceptedAggregate.entries()]) {
+        this.#acceptedAggregate.delete(compactionId);
+        if (aggregate.seqs.length === 0) continue;
+        this.#auditEvent('compaction-loss-accepted', {
+          sessionId: aggregate.sessionId ?? null,
+          cycle: aggregate.cycle,
+          compactionId,
+          manual: aggregate.manual,
+          trigger: aggregate.manual ? 'manual' : 'auto',
+          acceptedCount: aggregate.seqs.length,
+          acceptedSeqs: aggregate.seqs,
+          lossClass: 'system-prompt-skip',
+          disposition: 'accepted',
+          dispositionRule: 'v1',
+          auditVersion: 'loss-v1.0',
+        });
+      }
+    });
+  }
+
+  /**
+   * 结算剩余 pending：`ttl-expired` / `session-ended` / `turn-aborted` / `restart`。
+   * 每个 pending 恰一条 `surface-rebuild-resolved` 终态 + 一条 compaction-loss。
+   * `onlyBound=true` 时只结算已绑定窗口轮的 pending（turn/end 到期用）。
+   */
+  #settlePending(sessionId, reason, { onlyBound = false } = {}) {
+    const list = this.#pendingReposts.get(sessionId);
+    if (list === undefined || list.length === 0) {
+      this.#pendingReposts.delete(sessionId);
+      this.#stopRepostPolling(sessionId);
+      return;
+    }
+    const targets = onlyBound ? list.filter((rule) => rule.windowTurnId !== null) : [...list];
+    if (targets.length === 0) return;
+    for (const rule of targets) {
+      // 幂等：accept 已结算或同键已写过终态时不再重复 resolved/loss（轮询/turn/end/stop 竞态）。
+      if (!this.#claimPendingKey(rule.compactionId, rule.ruleSeq)) continue;
+      this.#auditEvent('surface-rebuild-resolved', {
+        sessionId: rule.sessionId ?? null,
+        cycle: rule.cycle ?? null,
+        compactionId: rule.compactionId,
+        ruleSeq: rule.ruleSeq,
+        kind: rule.kind,
+        reason,
+        disposition: 'unacceptable',
+        dispositionRule: 'v1',
+        status: 'unacceptable',
+        lossClass: 'b-class-loss',
+      });
+      this.#auditEvent('compaction-loss', {
+        sessionId: rule.sessionId ?? null,
+        compactionId: rule.compactionId,
+        manual: rule.manual === true,
+        trigger: rule.manual === true ? 'manual' : 'auto',
+        failures: ['rule-injection'],
+        entries: 0,
+        lossClass: 'b-class-loss',
+        disposition: 'unacceptable',
+        dispositionRule: 'v1',
+        auditVersion: 'loss-v1.0',
+      });
+    }
+    const remaining = list.filter((rule) => !targets.includes(rule));
+    if (remaining.length === 0) {
+      this.#pendingReposts.delete(sessionId);
+      this.#stopRepostPolling(sessionId);
+    } else {
+      this.#pendingReposts.set(sessionId, remaining);
+    }
+  }
+
+  #settleAllPending(reason) {
+    for (const sessionId of [...this.#pendingReposts.keys()]) this.#settlePending(sessionId, reason);
+  }
+
+  /**
+   * 重启恢复（审核第 4 条 + 盲区）：扫 audit 尾部，找 `surface-rebuild-skipped(pending)`
+   * 且同 `compactionId+ruleSeq` 无 `surface-rebuild-resolved` 的行 → 补终态 `unacceptable/restart`。
+   * 轮转或窗口未覆盖 → `surface-rebuild-recovery-incomplete`（可能存在未结算 pending）。
+   */
+  #recoverPendingOnStartup() {
+    if (this.#auditFile === '' || this.#readOnly) return;
+    try {
+      if (!fs.existsSync(this.#auditFile)) return;
+      const lines = fs.readFileSync(this.#auditFile, 'utf8').split(/\r?\n/).filter((line) => line.trim() !== '');
+      const tail = lines.slice(-500);
+      const truncated = lines.length > tail.length;
+      const rotated = fs.existsSync(`${this.#auditFile}.1`) || fs.existsSync(`${this.#auditFile}.gz`);
+      let firstTs = null;
+      try {
+        firstTs = tail.length > 0 ? (JSON.parse(tail[0])?.ts ?? null) : null;
+      } catch {
+        firstTs = null;
+      }
+      // 只有“审计已轮转”或“窗口外仍存在未结算 pending”才披露；小文件/仅截断但无待判行
+      // 不报，避免 1670 行 audit 每次启动都写 recovery-incomplete（披露变常驻噪声）。
+      const resolvedKeys = new Set();
+      const pendingRows = [];
+      for (let index = 0; index < lines.length; index += 1) {
+        let row = null;
+        try {
+          row = JSON.parse(lines[index]);
+        } catch {
+          continue;
+        }
+        const key = `${row?.compactionId ?? ''}|${row?.ruleSeq ?? ''}`;
+        if (row?.event === 'surface-rebuild-resolved') resolvedKeys.add(key);
+        if (row?.event === 'surface-rebuild-skipped') pendingRows.push({ key, row, index });
+      }
+      const tailStart = Math.max(0, lines.length - 500);
+      const outsidePending = pendingRows.some((item) => item.index < tailStart && !resolvedKeys.has(item.key));
+      if (rotated || outsidePending) {
+        this.#auditEvent('surface-rebuild-recovery-incomplete', {
+          sessionId: null,
+          scanFrom: typeof firstTs === 'string' ? firstTs : null,
+          scanTo: new Date().toISOString(),
+          lines: lines.length,
+          rotated,
+          reason: '可能存在未结算 pending（扫描窗口未覆盖或审计已轮转）',
+        });
+      }
+      const seen = new Set();
+      for (const { key, row, index } of pendingRows) {
+        // 窗口外的待判行已由 recovery-incomplete 披露，不在本轮结算（避免用不完整数据猜）。
+        if (index < tailStart) continue;
+        if (resolvedKeys.has(key) || seen.has(key)) continue;
+        seen.add(key);
+        this.#auditEvent('surface-rebuild-resolved', {
+          sessionId: row?.sessionId ?? null,
+          cycle: row?.cycle ?? null,
+          compactionId: row?.compactionId ?? null,
+          ruleSeq: row?.ruleSeq ?? null,
+          kind: row?.kind ?? null,
+          reason: 'restart',
+          disposition: 'unacceptable',
+          dispositionRule: 'v1',
+          status: 'unacceptable',
+          lossClass: 'b-class-loss',
+        });
+        this.#auditEvent('compaction-loss', {
+          sessionId: row?.sessionId ?? null,
+          compactionId: row?.compactionId ?? null,
+          manual: false,
+          trigger: 'auto',
+          failures: ['rule-injection'],
+          entries: 0,
+          lossClass: 'b-class-loss',
+          disposition: 'unacceptable',
+          dispositionRule: 'v1',
+          auditVersion: 'loss-v1.0',
+        });
+      }
+    } catch {
+      /* 恢复扫描失败不阻断启动 */
     }
   }
 
@@ -1970,6 +2290,32 @@ export class CompressionGuard {
       }
       const id = event?.data?.compactionId ?? null;
       switch (event?.type) {
+        // D-MGMT-021 v3b：pending 对账的事件通道（真实宿主）。
+        case 'turn/start': {
+          const key = this.#sessionKey(session);
+          const list = key === null ? undefined : this.#pendingReposts.get(key);
+          if (list !== undefined) {
+            for (const rule of list) {
+              if (rule.windowTurnId === null) rule.windowTurnId = event?.data?.turn ?? null;
+            }
+          }
+          return;
+        }
+        case 'turn/end': {
+          const key = this.#sessionKey(session);
+          if (key !== null) this.#settlePending(key, 'ttl-expired', { onlyBound: true });
+          return;
+        }
+        case 'turn/abort': {
+          const key = this.#sessionKey(session);
+          if (key !== null) this.#settlePending(key, 'turn-aborted');
+          return;
+        }
+        case 'system/message': {
+          const key = this.#sessionKey(session);
+          if (key !== null) this.#checkPendingReposts(key, session);
+          return;
+        }
         case 'request/context': {
           // 0.2.1：路由窗口来源（DEC-20261025-66）。不带 contextWindow = 显式移除。
           this.#observeWindow(session, event);
@@ -2334,41 +2680,14 @@ export class CompressionGuard {
             });
           }
           if (this.#rebuildEnabled) {
-          // D-MGMT-021 分型（v1）：a 类 = 压缩后宿主逐字节重发同 kind 的 system/message
-          //（accepted，只记录、不证明保护、不参与覆盖计数）；否则 b 类（unacceptable，仍落 compaction-loss）。
-          // 口径与测试 `tests/probe-1.1.0/classify-a-b.mjs` 一致：kind 相同 + 内容逐字节（sha256）相同
-          // 才算"宿主重发"。kind 为 null/缺失一律按 b 从严——null 会与另一条 null 误配，等于
-          // 静默接受一次真实丢失，宁可报警。
-          // 枚举对齐：skip `lossClass=system-prompt-skip` ↔ accepted `disposition=accepted`；
-          //           skip `lossClass=b-class-loss`      ↔ loss     `disposition=unacceptable`。
-          const textHashOf = (text) => createHash('sha256').update(text, 'utf8').digest('hex');
-          const inspectReposted = (rule) => {
-            if (rule.kind === null || typeof rule.text !== 'string' || !Array.isArray(postSurfaceNodes)) {
-              return { reposted: false, hashMatch: false };
-            }
-            const expectedHash = textHashOf(rule.text);
-            let sameKindSeen = false;
-            for (const seq of postSurfaceNodes) {
-              if (seq <= rule.ruleSeq) continue;
-              const candidate = session.eventAt?.(seq);
-              if (candidate?.type !== 'system/message') continue;
-              const kind = candidate.data?.message?.source?.kind ?? null;
-              if (kind !== rule.kind) continue;
-              sameKindSeen = true;
-              const content = candidate.data?.message?.content;
-              const text = Array.isArray(content)
-                ? content.filter((block) => block?.type === 'text' && typeof block.text === 'string')
-                  .map((block) => block.text).join('\n')
-                : '';
-              if (textHashOf(text) === expectedHash) return { reposted: true, hashMatch: true };
-            }
-            // 同 kind 存在但内容不同 → hashMatch=false（便于事后查"kind 同、内容不同"）。
-            return { reposted: false, hashMatch: sameKindSeen ? false : false };
-          };
-          const acceptedSeqs = [];
-          const skippedUnacceptable = [];
+          // D-MGMT-021 v3b：pending 第三态。system 规则不重建 → 每条登记 pending，
+          // 等后续轮次出现"更新的原生同 kind system/message"再转 accepted；窗口无重发/
+          // 会话结束/重启 → unacceptable。kind 非空时不看 sha256（宿主重发内容会变），
+          // hashMatch 仅观察；kind 为空时才要求 sha256（从严）。
           for (const skipped of rebuilt.skipped) {
-            const { reposted, hashMatch } = inspectReposted(skipped);
+            const contentSha256 = typeof skipped.text === 'string'
+              ? createHash('sha256').update(skipped.text, 'utf8').digest('hex')
+              : null;
             this.#auditEvent('surface-rebuild-skipped', {
               sessionId: state.sessionId,
               cycle: state.protectionCycleKey ?? null,
@@ -2376,46 +2695,35 @@ export class CompressionGuard {
               ruleSeq: skipped.ruleSeq,
               kind: skipped.kind,
               reason: skipped.reason,
-              lossClass: reposted ? 'system-prompt-skip' : 'b-class-loss',
-              disposition: reposted ? 'accepted' : 'unacceptable',
+              disposition: 'pending',
               dispositionRule: 'v1',
-              hashMatch,
+              status: 'pending',
+              lossClass: 'pending',
+              contentSha256,
             });
-            if (reposted) acceptedSeqs.push(skipped.ruleSeq);
-            else skippedUnacceptable.push(skipped.ruleSeq);
+            this.#registerPendingRepost(session, {
+              compactionId: id,
+              cycle: state.protectionCycleKey ?? null,
+              ruleSeq: skipped.ruleSeq,
+              kind: skipped.kind,
+              text: typeof skipped.text === 'string' ? skipped.text : null,
+              manual: state.manual === true,
+            });
           }
-          const accepted = [];
-          const unacceptable = [];
+          // 未被 skip 承接的其余保护失败仍即时 unacceptable（不因 pending 而静默）。
+          const skippedSeqs = new Set(rebuilt.skipped.map((item) => item.ruleSeq));
+          const immediateFailures = [];
           for (const failure of report.failures) {
             if (!['latest-user-message', 'batch-list', 'rollback-point', 'rule-injection'].includes(failure.name)) continue;
             if (failure.name === 'rule-injection' && Array.isArray(failure.seqs)) {
-              const acc = failure.seqs.filter((seq) => acceptedSeqs.includes(seq));
-              const rest = failure.seqs.filter((seq) => !acceptedSeqs.includes(seq));
-              if (acc.length > 0) accepted.push({ seqs: acc, lossClass: 'system-prompt-skip' });
-              // 被 skip 且宿主未重发的 system 规则属于 b 类；其余 rule 丢失才是 user 规则丢失。
-              const bSeqs = rest.filter((seq) => skippedUnacceptable.includes(seq));
-              const uSeqs = rest.filter((seq) => !skippedUnacceptable.includes(seq));
-              if (bSeqs.length > 0) unacceptable.push({ name: 'rule-injection', seqs: bSeqs, lossClass: 'b-class-loss' });
-              if (uSeqs.length > 0) unacceptable.push({ name: 'rule-injection', seqs: uSeqs, lossClass: 'user-rule-loss' });
-            } else if (failure.name === 'rule-injection') {
-              // 无 seqs 的 rule-injection fail 无法归因到 skip → 保守 unacceptable。
-              unacceptable.push({ name: failure.name, lossClass: 'user-rule-loss' });
-            } else {
-              unacceptable.push({ name: failure.name, lossClass: 'b-class-loss' });
+              const rest = failure.seqs.filter((seq) => !skippedSeqs.has(seq));
+              if (rest.length > 0) immediateFailures.push({ name: failure.name, lossClass: 'user-rule-loss' });
+            } else if (failure.name !== 'rule-injection') {
+              immediateFailures.push({ name: failure.name, lossClass: 'b-class-loss' });
             }
           }
-          if (skippedUnacceptable.length > 0
-            && !unacceptable.some((item) => item.name === 'rule-injection')) {
-            // 已跳过的 system 规则若宿主未重发 → 真丢失（b 类），必须进 unacceptable。
-            unacceptable.push({ name: 'rule-injection', seqs: skippedUnacceptable, lossClass: 'b-class-loss' });
-          }
-          if (unacceptable.length > 0) {
-            // 1.0 #10：auto/manual 的保护失败都落统一 compaction-loss（旧名只读、不双写）。
-            // D-MGMT-021：lossClass/disposition/dispositionRule 标注分型（判据只读本事件）。
+          if (immediateFailures.length > 0) {
             const manual = state.manual === true;
-            const lossClass = unacceptable.some((item) => item.lossClass === 'b-class-loss')
-              ? 'b-class-loss'
-              : (unacceptable.some((item) => item.lossClass === 'user-rule-loss') ? 'user-rule-loss' : 'system-prompt-skip');
             this.#auditEvent('compaction-loss', {
               sessionId: state.sessionId,
               compactionId: id,
@@ -2423,36 +2731,18 @@ export class CompressionGuard {
               manual,
               trigger: manual ? 'manual' : 'auto',
               ...(state.manual === null ? { reason: 'late-mount' } : {}),
-              failures: [...new Set(unacceptable.map((item) => item.name))],
+              failures: [...new Set(immediateFailures.map((item) => item.name))],
               entries: state.entries?.length ?? 0,
-              lossClass,
+              lossClass: immediateFailures.some((item) => item.lossClass === 'b-class-loss') ? 'b-class-loss' : 'user-rule-loss',
               disposition: 'unacceptable',
               dispositionRule: 'v1',
               auditVersion: 'loss-v1.0',
             });
           }
-          const allAcceptedSeqs = [...new Set([...acceptedSeqs, ...accepted.flatMap((item) => item.seqs)])];
-          if (allAcceptedSeqs.length > 0) {
-            // accepted：允许丢（宿主可逐字节重发），只汇总、不逐条报警、不参与已保护计数。
-            const manual = state.manual === true;
-            this.#auditEvent('compaction-loss-accepted', {
-              sessionId: state.sessionId,
-              cycle: state.protectionCycleKey ?? null,
-              compactionId: id,
-              manual,
-              trigger: manual ? 'manual' : 'auto',
-              acceptedCount: allAcceptedSeqs.length,
-              acceptedSeqs: allAcceptedSeqs,
-              lossClass: 'system-prompt-skip',
-              disposition: 'accepted',
-              dispositionRule: 'v1',
-              auditVersion: 'loss-v1.0',
-            });
-          }
-          // 审核 §7：`/cg status` 的 protection=failed 分流前带分型信息（accepted 不证明保护）。
-          if (state.report !== undefined && state.report !== null) {
-            state.report.disposition = allAcceptedSeqs.length > 0 ? 'accepted' : 'unacceptable';
-            state.report.acceptedSeqs = allAcceptedSeqs;
+          // pending 期间不计入“已保护/已通过”：报告显式标 pending，acceptedSeqs 为空。
+          if (state.report !== undefined && state.report !== null && rebuilt.skipped.length > 0) {
+            state.report.disposition = 'pending';
+            state.report.acceptedSeqs = [];
           }
           } else {
             // 回滚开关关闭：回到 1.0.3 旧口径（无分型字段，failures 列表不变）。

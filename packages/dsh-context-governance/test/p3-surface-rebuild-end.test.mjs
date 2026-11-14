@@ -102,24 +102,30 @@ test('D-MGMT-021 end-order：latest/user 副本重建，system 形态 skip 并�
     assert.ok(session.surface.nodes.includes(latestCopy.seq));
     assert.ok(session.surface.nodes.includes(ruleCopy.seq));
 
-    // 审计闭环：恰一条 skip（带 lossClass），loss 只含 unacceptable。
+    // 审计闭环（v3b pending）：skip 进 pending 第三态，window 内无重发 → stop 时结算 unacceptable。
     const skipped = audits.filter((item) => item.event === 'surface-rebuild-skipped');
     assert.equal(skipped.length, 1);
     assert.equal(skipped[0].details.ruleSeq, 0);
     assert.equal(skipped[0].details.kind, 'system-prompt');
     assert.equal(skipped[0].details.reason, 'no-open-step');
-    assert.equal(skipped[0].details.lossClass, 'b-class-loss', '宿主未重发 → 不得判 accepted');
+    assert.equal(skipped[0].details.disposition, 'pending', 'pending 期间不得判死');
+    assert.equal(skipped[0].details.lossClass, 'pending');
     assert.equal(skipped[0].details.compactionId, built.compactionId);
-    const loss = audits.filter((item) => item.event === 'compaction-loss');
-    assert.equal(loss.length, 1);
-    assert.equal(loss[0].details.disposition, 'unacceptable');
-    assert.equal(loss[0].details.lossClass, 'b-class-loss');
-    assert.deepEqual(loss[0].details.failures, ['rule-injection']);
-    const accepted = audits.filter((item) => item.event === 'compaction-loss-accepted');
-    assert.equal(accepted.length, 0, '无宿主重发时不得产生 accepted');
+    // pending 期间不得写 loss / accepted。
+    assert.equal(audits.filter((item) => item.event === 'compaction-loss').length, 0);
+    assert.equal(audits.filter((item) => item.event === 'compaction-loss-accepted').length, 0);
 
     await guard.flush();
     guard.stop();
+    // stop = session-ended 兜底结算：一条终态 resolved(unacceptable) + 一条 loss。
+    const resolved = audits.filter((item) => item.event === 'surface-rebuild-resolved');
+    assert.equal(resolved.length, 1);
+    assert.equal(resolved[0].details.disposition, 'unacceptable');
+    assert.equal(resolved[0].details.reason, 'session-ended');
+    const loss = audits.filter((item) => item.event === 'compaction-loss');
+    assert.equal(loss.length, 1);
+    assert.equal(loss[0].details.disposition, 'unacceptable');
+    assert.deepEqual(loss[0].details.failures, ['rule-injection']);
   } finally {
     await store.close().catch(() => {});
     await fs.rm(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
