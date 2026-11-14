@@ -149,12 +149,13 @@ test('C11 多根策略热更新：单 root 生效、两 root 不串、来源层�
 });
 // ---- 入口形态 A（C12-C15）：手写 client bundle 的纯函数与注册计划 ----
 
+let clientImportSeq = 0;
 async function loadClient() {
   const captured = [];
   const previousWindow = globalThis.window;
   globalThis.window = { __ModuleLoader__: { load: (spec) => captured.push(spec) } };
   try {
-    await import(pathToFileURL(path.join(process.cwd(), 'lib/client.js')).href + `?t=${Date.now()}`);
+    await import(pathToFileURL(path.join(process.cwd(), 'lib/client.js')).href + `?v=${clientImportSeq += 1}`);
   } finally {
     globalThis.window = previousWindow;
   }
@@ -234,3 +235,4 @@ test('C15 降级鲁棒：slot 缺失/注册抛错不崩，三处入口各自独�
   assert.equal(client.inject.includes('configForms'), true, '卡片的写入口仍是 configForms');
   assert.equal(client.inject.includes('estimateSafety'), false, '安全参数不在客户端注入面');
 });
+
