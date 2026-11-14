@@ -1,17 +1,18 @@
 /**
- * dsh-context-governance · 浏览器半侧（1.1.0 D2）
+ * dsh-context-governance · 浏览器半侧（1.1.0 D2，入口形态 A）
  *
  * 格式：手写 `window.__ModuleLoader__.load({ id, factory })`（与宿主已装插件 cost-meter / dsh-context 同形；
  * 本仓不引打包器，此文件即产物，审核按本注释与文件本体核对）。
  * id：`dsh-context-governance`（= 宿主 settings 命名空间 = Cordis 条目 id，见 cordis.patch.yml）。
  *
- * 依赖的共享模块（由 factory 的 require 形参从宿主模块表解析，不随包发布）：
- *   - `react`                       仅用于创建组件元素
- * 注入的客户端服务（`inject`）：
- *   - `slots`      向宿主 `settings.section` 槽位注册卡片
- *   - `configForms` 读写当前 profile 条目 `dsh-context-governance` 的形态表单（写 → profile Cordis patch）
- *   - `locale`     卡片双语标签
- * 数据来源：同源 `GET /context-governance/policy-snapshot`（宿主侧只读路由）。
+ * 入口：
+ *   1. `conversation.composer.dock` → 条目标签 `压 65%`（快照 at；取不到 → `压 —`），点击/Enter 展开气泡；
+ *   2. `conversation.input.overlay` → 输入框锚点气泡（百分比输入 + 当前生效值/来源层/生效时点 + 打开设置页）；
+ *   3. `settings.section` → 完整设置页卡片（保留，同一份数据、同一写入口）。
+ *
+ * 依赖的共享模块（由 factory 的 require 形参从宿主模块表解析，不随包发布）：`react`
+ * 注入的客户端服务：`slots`（注册三处入口）、`locale`、`configForms`（读写 profile 条目 `dsh-context-governance`）；
+ * 只读数据：同源 `GET /context-governance/policy-snapshot`（宿主侧已实现的只读路由，本文件不新增接口）。
  * 安全边界：只暴露 `compact.at`（百分比 0–100，内部 /100）；estimateSafety/lowThresholdAck/armed 无入口。
  */
 window.__ModuleLoader__.load({
@@ -23,44 +24,63 @@ window.__ModuleLoader__.load({
     const SNAPSHOT_PATH = '/context-governance/policy-snapshot';
     const AT_MIN = 0.2;
     const LOW_THRESHOLD_ACK_MIN = 0.3;
+    const PROJECT_AT_MIN = 0.45;
+    const USABLE_MARGIN = 0.02;
     const LABELS = {
-      zh: { sectionLabel: '上下文治理', title: '压缩触发阈值', percent: '触发百分比（0–100）', save: '保存', reset: '恢复默认', effective: '当前生效', source: '来源层', when: '生效时点', invalid: '输入无效' },
-      en: { sectionLabel: 'Context governance', title: 'Compaction threshold', percent: 'Trigger percent (0–100)', save: 'Save', reset: 'Reset', effective: 'Effective', source: 'Source layer', when: 'Takes effect', invalid: 'Invalid input' },
+      zh: {
+        sectionLabel: '上下文治理', title: '压缩触发阈值', percent: '触发百分比（0–100）', save: '保存', effective: '当前生效', source: '来源层', when: '生效时点', invalid: '输入无效', openSettings: '打开设置页', chipUnknown: '压 —', chip: (t) => `压 ${t}`,
+      },
+      en: {
+        sectionLabel: 'Context governance', title: 'Compaction threshold', percent: 'Trigger percent (0–100)', save: 'Save', effective: 'Effective', source: 'Source layer', when: 'Takes effect', invalid: 'Invalid input', openSettings: 'Open settings', chipUnknown: 'At —', chip: (t) => `At ${t}`,
+      },
     };
 
-    /** 比例 → 百分比文本；非数字 → '—'（C11 三态渲染共用）。 */
+    /** 比例 → 百分比文本；非数字 → '—'。 */
     const toPercentText = (at) => (Number.isFinite(at) ? `${Math.round(Number(at) * 100)}%` : '—');
 
-    /** 百分比输入 → 比例（0–1，两位小数）；非法 → null。 */
+    /** 百分比输入 → 比例（0–1，整数百分比）；非法 → null。 */
     const toRatio = (raw) => {
       const value = Number(String(raw ?? '').trim());
       if (!Number.isFinite(value) || value < 0 || value > 100) return null;
       return Math.round(value) / 100;
     };
 
-    /**
-     * 校验（与 /cg set 同一套规则；返回 null 表示通过，否则返回原因文本）。
-     * 规则：0.20 下限；<0.30 需配置 lowThresholdAck=true（UI 无入口，故拒绝并给出与 /cg set 一致的原因）；
-     * 上限由宿主窗口动态决定（非 1.0），这里只拒绝 >100%。
-     */
-    const validateRatio = (ratio, { projectLayer = false } = {}) => {
+    /** 校验（与 `/cg set` 同源规则；返回 null 表示通过，否则原因文本）。 */
+    const validateRatio = (ratio, { projectLayer = false, native = null } = {}) => {
       if (ratio === null) return '请输入 0–100 的百分比';
-      const min = projectLayer ? 0.45 : AT_MIN;
+      const min = projectLayer ? PROJECT_AT_MIN : AT_MIN;
       if (ratio < min) return `compact.at 下限 ${min}`;
       if (ratio < LOW_THRESHOLD_ACK_MIN) return 'compact.at<0.30 需 compact.lowThresholdAck=true';
-      if (ratio > 100 / 100) return 'compact.at 上限 100%';
+      if (Number.isFinite(native) && ratio > native - USABLE_MARGIN) return `compact.at 不能超过宿主可用上限 ${(native - USABLE_MARGIN).toFixed(2)}`;
       return null;
     };
 
-    /** 渲染文本（纯函数，C11 测试直接调用）：生效值 + 来源层 + 生效时点。 */
-    const renderPolicyText = (snapshot = {}, labels = LABELS.zh) => {
+    /** dock 条目标签：`压 65%`；快照缺失 → `压 —`（不抛错）。 */
+    const chipLabel = (snapshot, lang = 'zh') => {
+      const labels = LABELS[lang] ?? LABELS.zh;
+      if (!snapshot || !Number.isFinite(snapshot.at)) return labels.chipUnknown;
+      return labels.chip(toPercentText(snapshot.at));
+    };
+
+    /** 气泡三行文本（C13）：当前生效 / 来源层 / 生效时点。 */
+    const renderBubbleText = (snapshot = {}, labels = LABELS.zh) => {
       const line1 = `${labels.effective}: ${toPercentText(snapshot.at)}`;
       const line2 = `${labels.source}: ${snapshot.source ?? 'unknown'}`;
       const line3 = `${labels.when}: ${snapshot.effectiveAt ?? ''}`;
       return [line1, line2, line3].join('\n');
     };
 
-    /** 拉取同源快照（只读 GET）；失败返回 null。 */
+    /** 保存前计算：返回 {ok, ratio} 或 {ok:false, reason}（C14 拒绝理由同源）。 */
+    const computeSave = (raw, snapshot = {}) => {
+      const ratio = toRatio(raw);
+      const reason = validateRatio(ratio, {
+        projectLayer: snapshot?.source === 'project',
+        native: Number.isFinite(snapshot?.native) ? snapshot.native : null,
+      });
+      return reason === null ? { ok: true, ratio } : { ok: false, reason };
+    };
+
+    /** 拉取同源快照（只读 GET）；失败返回 null（不抛错）。 */
     const fetchSnapshot = async (fetchImpl = globalThis.fetch) => {
       if (typeof fetchImpl !== 'function') return null;
       try {
@@ -74,62 +94,156 @@ window.__ModuleLoader__.load({
 
     const h = react.createElement;
 
-    /** 卡片组件：一个百分比输入框 + 三行信息；保存写 policy.at（profile patch）。 */
-    const ContextGovernanceCard = (props) => {
+    /** 三处入口共享的视图状态（open + 快照读到的值）。 */
+    const createViewState = () => ({ open: false, snapshot: null, listeners: new Set() });
+    const createStore = (state) => ({
+      set(next) { Object.assign(state, next); for (const listener of state.listeners) listener(state); },
+      subscribe(listener) { state.listeners.add(listener); return () => state.listeners.delete(listener); },
+    });
+
+    const pickLabels = (ctx) => ((ctx?.locale?.language ?? 'zh').startsWith('zh') ? LABELS.zh : LABELS.en);
+
+    /** 保存 policy.at（同一写入口；失败只提示，不抛）。 */
+    const saveRatio = async (ctx, ratio) => {
+      try {
+        const form = ctx?.configForms?.get?.(ENTRY_ID);
+        if (form && typeof form.set === 'function') { await form.set('policy.at', ratio); return true; }
+        if (form && typeof form.mutate === 'function') { await form.mutate([{ path: 'policy.at', value: ratio }], form.revision); return true; }
+        return false;
+      } catch {
+        return false;
+      }
+    };
+
+    /** chip 组件（composer.dock）：按钮 + Tab/Enter/Esc；点击切换气泡。 */
+    const createChip = (state, store) => (props) => {
       const ctx = props?.ctx ?? props;
-      const labels = (ctx?.locale?.language ?? 'zh').startsWith('zh') ? LABELS.zh : LABELS.en;
-      const [draft, setDraft] = react.useState('');
-      const [snapshot, setSnapshot] = react.useState(null);
-      const [error, setError] = react.useState('');
+      const labels = pickLabels(ctx);
+      const [view, setView] = react.useState(state.snapshot);
+      react.useEffect(() => store.subscribe((next) => setView(next.snapshot))(), [store]);
       react.useEffect(() => {
         let alive = true;
-        fetchSnapshot(ctx?.fetch ?? globalThis.fetch).then((view) => { if (alive && view) setSnapshot(view); });
+        fetchSnapshot(ctx?.fetch ?? globalThis.fetch).then((snapshot) => { if (alive && snapshot) store.set({ snapshot }); });
         return () => { alive = false; };
-      }, [ctx]);
+      }, [ctx, store]);
+      return h('button', {
+        type: 'button',
+        className: 'cg-at-chip',
+        'aria-haspopup': 'dialog',
+        'aria-expanded': state.open ? 'true' : 'false',
+        'aria-label': labels.percent,
+        onClick: () => store.set({ open: !state.open }),
+        onKeyDown: (event) => {
+          if (event?.key === 'Enter' || event?.key === ' ') { event.preventDefault?.(); store.set({ open: true }); }
+          else if (event?.key === 'Escape') { store.set({ open: false }); }
+        },
+      }, chipLabel(view, ctx?.locale?.language?.startsWith('zh') === false ? 'en' : 'zh'));
+    };
+
+    /** 气泡组件（conversation.input.overlay）：百分比输入 + 三行 + 保存 + 去设置页。 */
+    const createBubble = (state, store) => (props) => {
+      const ctx = props?.ctx ?? props;
+      const labels = pickLabels(ctx);
+      const [view, setView] = react.useState(state.snapshot);
+      const [draft, setDraft] = react.useState('');
+      const [error, setError] = react.useState('');
+      react.useEffect(() => store.subscribe((next) => setView(next.snapshot))(), [store]);
+      if (!state.open) return null;
       const save = async () => {
-        const ratio = toRatio(draft);
-        const reason = validateRatio(ratio, { projectLayer: snapshot?.source === 'project' });
-        if (reason !== null) { setError(reason); return; }
-        try {
-          const form = ctx?.configForms?.get?.(ENTRY_ID);
-          if (form && typeof form.set === 'function') await form.set('policy.at', ratio);
-          else if (form && typeof form.mutate === 'function') await form.mutate([{ path: 'policy.at', value: ratio }], form.revision);
-          setError('');
-          const next = await fetchSnapshot(ctx?.fetch ?? globalThis.fetch);
-          if (next) setSnapshot(next);
-        } catch (failure) {
-          setError(String(failure?.message ?? failure));
-        }
+        const result = computeSave(draft, view ?? {});
+        if (result.ok !== true) { setError(result.reason); return; }
+        const ok = await saveRatio(ctx, result.ratio);
+        if (!ok) { setError(labels.invalid); return; }
+        setError('');
+        const next = await fetchSnapshot(ctx?.fetch ?? globalThis.fetch);
+        if (next) store.set({ snapshot: next, open: false });
+      };
+      return h('div', { className: 'cg-at-bubble', role: 'dialog', 'aria-label': labels.title, onKeyDown: (event) => { if (event?.key === 'Escape') store.set({ open: false }); } },
+        h('div', { className: 'cg-at-title' }, labels.title),
+        h('label', { className: 'cg-at-row' }, labels.percent,
+          h('input', {
+            type: 'number', min: 0, max: 100, step: 1, value: draft, 'aria-label': labels.percent,
+            onChange: (event) => setDraft(event.target.value),
+            onKeyDown: (event) => { if (event?.key === 'Enter') save(); },
+          })),
+        h('div', { className: 'cg-at-info' }, renderBubbleText(view ?? {}, labels)),
+        error === '' ? null : h('div', { className: 'cg-at-error', role: 'alert' }, `${labels.invalid}: ${error}`),
+        h('button', { type: 'button', className: 'cg-at-save', onClick: save }, labels.save),
+        h('button', { type: 'button', className: 'cg-at-settings-link', onClick: () => { try { ctx?.openSettings?.(); } catch { /* ignore */ } } }, labels.openSettings),
+      );
+    };
+
+    /** 设置页卡片（保留 `20bf20d` 的 settings.section；同一份数据/写入口）。 */
+    const createSettingsCard = (state, store) => (props) => {
+      const ctx = props?.ctx ?? props;
+      const labels = pickLabels(ctx);
+      const [view, setView] = react.useState(state.snapshot);
+      const [draft, setDraft] = react.useState('');
+      const [error, setError] = react.useState('');
+      react.useEffect(() => store.subscribe((next) => setView(next.snapshot))(), [store]);
+      react.useEffect(() => {
+        let alive = true;
+        fetchSnapshot(ctx?.fetch ?? globalThis.fetch).then((snapshot) => { if (alive && snapshot) store.set({ snapshot }); });
+        return () => { alive = false; };
+      }, [ctx, store]);
+      const save = async () => {
+        const result = computeSave(draft, view ?? {});
+        if (result.ok !== true) { setError(result.reason); return; }
+        const ok = await saveRatio(ctx, result.ratio);
+        if (!ok) { setError(labels.invalid); return; }
+        setError('');
+        const next = await fetchSnapshot(ctx?.fetch ?? globalThis.fetch);
+        if (next) store.set({ snapshot: next });
       };
       return h('div', { className: 'cg-settings-card' },
         h('div', { className: 'cg-settings-title' }, labels.title),
-        h('label', { className: 'cg-settings-row' },
-          labels.percent,
-          h('input', {
-            type: 'number', min: 0, max: 100, step: 1, value: draft,
-            'aria-label': labels.percent,
-            onChange: (event) => setDraft(event.target.value),
-          }),
-        ),
-        h('div', { className: 'cg-settings-info' }, renderPolicyText(snapshot ?? {}, labels)),
+        h('label', { className: 'cg-settings-row' }, labels.percent,
+          h('input', { type: 'number', min: 0, max: 100, step: 1, value: draft, 'aria-label': labels.percent, onChange: (event) => setDraft(event.target.value) })),
+        h('div', { className: 'cg-settings-info' }, renderBubbleText(view ?? {}, labels)),
         error === '' ? null : h('div', { className: 'cg-settings-error', role: 'alert' }, `${labels.invalid}: ${error}`),
-        h('button', { type: 'button', className: 'cg-settings-save', onClick: save }, labels.save),
-      );
+        h('button', { type: 'button', className: 'cg-settings-save', onClick: save }, labels.save));
     };
 
     const inject = ['slots', 'locale', 'configForms'];
 
+    /** 注册三处入口（C12：dock id/order；C15：slot 缺失时逐个 try，不崩）。 */
+    const registrationPlan = (state) => [
+      { slot: 'conversation.composer.dock', id: 'context-governance.at', order: 6, component: 'chip' },
+      { slot: 'conversation.input.overlay', id: 'context-governance.overlay', order: 60, component: 'bubble' },
+      { slot: 'settings.section', id: 'context-governance', order: 60, component: 'section' },
+    ];
+
     const apply = (ctx) => {
-      const lang = (ctx?.locale?.language ?? 'zh').startsWith('zh') ? 'zh' : 'en';
-      ctx.slots.register({
-        name: 'settings.section',
-        id: 'context-governance',
-        order: 60,
-        label: () => LABELS[lang].sectionLabel,
-        inject: () => inject,
-      }, ContextGovernanceCard);
+      const state = createViewState();
+      const store = createStore(state);
+      const components = { chip: createChip(state, store), bubble: createBubble(state, store), section: createSettingsCard(state, store) };
+      const labels = pickLabels(ctx);
+      for (const entry of registrationPlan(state)) {
+        try {
+          ctx.slots?.register?.({
+            name: entry.slot,
+            id: entry.id,
+            order: entry.order,
+            label: () => labels.sectionLabel,
+            inject: () => inject,
+          }, components[entry.component]);
+        } catch {
+          /* C15：单个 slot 缺失不影响其余入口（chip 退化为「压 —」，设置页仍可用）。 */
+        }
+      }
     };
 
-    return { apply, inject, ContextGovernanceCard, renderPolicyText, toPercentText, toRatio, validateRatio, fetchSnapshot };
+    return {
+      apply,
+      inject,
+      registrationPlan,
+      chipLabel,
+      renderBubbleText,
+      computeSave,
+      toPercentText,
+      toRatio,
+      validateRatio,
+      fetchSnapshot,
+    };
   },
 });

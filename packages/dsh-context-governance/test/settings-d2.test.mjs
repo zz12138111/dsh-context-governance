@@ -147,45 +147,90 @@ test('C11 多根策略热更新：单 root 生效、两 root 不串、来源层�
   assert.equal(pool.policyForSession({ cwd: 'B' }).mark, 'initial', 'B 不得被串改');
   assert.equal(pool.policyForSession({ cwd: 'B' }).sources, undefined);
 });
+// ---- 入口形态 A（C12-C15）：手写 client bundle 的纯函数与注册计划 ----
 
-test('C11 客户端渲染文本三态（builtin / plugin / session 覆盖）', async () => {
+async function loadClient() {
   const captured = [];
-  const fakeWindow = {
-    __ModuleLoader__: { load: (spec) => captured.push(spec) },
-  };
   const previousWindow = globalThis.window;
-  globalThis.window = fakeWindow;
+  globalThis.window = { __ModuleLoader__: { load: (spec) => captured.push(spec) } };
   try {
-    await import(pathToFileURL(path.join(process.cwd(), 'lib/client.js')).href);
+    await import(pathToFileURL(path.join(process.cwd(), 'lib/client.js')).href + `?t=${Date.now()}`);
   } finally {
     globalThis.window = previousWindow;
   }
   assert.equal(captured.length, 1, 'client.js 必须自执行 load');
-  const spec = captured[0];
-  assert.equal(spec.id, 'dsh-context-governance');
-  const stubReact = { createElement: () => null, useState: () => ['', () => {}], useEffect: () => {} };
-  const exports = spec.factory((name) => {
+  assert.equal(captured[0].id, 'dsh-context-governance');
+  const reactStub = { createElement: () => null, useState: (initial) => [initial, () => {}], useEffect: () => {} };
+  const exports = captured[0].factory((name) => {
     assert.equal(name, 'react');
-    return stubReact;
+    return reactStub;
   });
-  assert.equal(exports.apply.length, 1);
+  return exports;
+}
 
-  const builtin = exports.renderPolicyText({ at: 0.6, source: 'builtin', effectiveAt: EFFECTIVE_AT_TEXT });
-  assert.match(builtin, /60%/);
-  assert.match(builtin, /builtin/);
-  assert.match(builtin, new RegExp(EFFECTIVE_AT_TEXT.replace(/[()]/g, '\\$&')));
-  const plugin = exports.renderPolicyText({ at: 0.55, source: 'plugin', effectiveAt: EFFECTIVE_AT_TEXT });
-  assert.match(plugin, /55%/);
-  assert.match(plugin, /plugin/);
-  const session = exports.renderPolicyText({ at: 0.5, source: 'session', effectiveAt: EFFECTIVE_AT_TEXT });
-  assert.match(session, /50%/);
-  assert.match(session, /session/);
-  assert.match(exports.renderPolicyText({}, {}), /unknown/);
+test('C12 主入口：dock 条目 id/order + chip 文案与快照一致（缺快照 → 压 —）', async () => {
+  const client = await loadClient();
+  const plan = client.registrationPlan({});
+  const dock = plan.find((entry) => entry.slot === 'conversation.composer.dock');
+  assert.ok(dock, '必须注册 conversation.composer.dock');
+  assert.equal(dock.id, 'context-governance.at');
+  assert.equal(dock.order, 6, '排在 usage(order 1) 之后');
+  assert.ok(plan.some((entry) => entry.slot === 'conversation.input.overlay'), '必须注册输入框气泡');
+  assert.ok(plan.some((entry) => entry.slot === 'settings.section'), '保留设置页入口');
 
-  assert.equal(exports.toRatio('55'), 0.55);
-  assert.equal(exports.toRatio('101'), null);
-  assert.equal(exports.validateRatio(0.55), null);
-  assert.match(exports.validateRatio(0.15), /下限 0\.2/);
-  assert.match(exports.validateRatio(0.25), /lowThresholdAck/);
-  assert.match(exports.validateRatio(null), /0–100/);
+  assert.equal(client.chipLabel({ at: 0.65, source: 'plugin' }), '压 65%');
+  assert.equal(client.chipLabel({ at: 0.6 }), '压 60%');
+  assert.equal(client.chipLabel(null), '压 —');
+  assert.equal(client.chipLabel({}), '压 —');
+  assert.equal(client.chipLabel({ at: 0.65 }, 'en'), 'At 65%');
+});
+
+test('C13 气泡三行：当前生效 / 来源层 / 生效时点', async () => {
+  const client = await loadClient();
+  const text = client.renderBubbleText({ at: 0.55, source: 'plugin', effectiveAt: EFFECTIVE_AT_TEXT });
+  const lines = text.split('\n');
+  assert.equal(lines.length, 3);
+  assert.match(lines[0], /55%/);
+  assert.match(lines[1], /plugin/);
+  assert.match(lines[2], new RegExp(EFFECTIVE_AT_TEXT.replace(/[()]/g, '\\$&')));
+  assert.match(client.renderBubbleText({}, {}), /unknown/);
+});
+
+test('C14 保存前计算：校验与 /cg set 同源（<20% / <30% ack / 项目层 <45% / native 上限）', async () => {
+  const client = await loadClient();
+  assert.deepEqual(client.computeSave('55', { at: 0.6, source: 'plugin' }), { ok: true, ratio: 0.55 });
+  assert.equal(client.computeSave('60', {}).ratio, 0.6);
+
+  const low = client.computeSave('15', {});
+  assert.equal(low.ok, false);
+  assert.match(low.reason, /下限 0\.2/);
+  const ack = client.computeSave('25', {});
+  assert.equal(ack.ok, false);
+  assert.match(ack.reason, /lowThresholdAck/);
+  const project = client.computeSave('44', { source: 'project' });
+  assert.equal(project.ok, false);
+  assert.match(project.reason, /下限 0\.45/);
+  const ceiling = client.computeSave('66', { native: 0.6785 });
+  assert.equal(ceiling.ok, false);
+  assert.match(ceiling.reason, /上限 0\.66/);
+  const over = client.computeSave('101', {});
+  assert.equal(over.ok, false);
+  assert.match(over.reason, /0–100/);
+});
+
+test('C15 降级鲁棒：slot 缺失/注册抛错不崩，三处入口各自独立', async () => {
+  const client = await loadClient();
+  const registered = [];
+  client.apply({
+    locale: { language: 'zh' },
+    slots: { register: (spec) => { if (spec.name === 'conversation.input.overlay') throw new Error('slot missing'); registered.push(spec.name); } },
+  });
+  assert.deepEqual(registered, ['conversation.composer.dock', 'settings.section'], '一个 slot 抛错不得中断其余入口');
+
+  const none = [];
+  client.apply({ slots: undefined });
+  assert.deepEqual(none, [], '无 slots 时静默退化（不抛错）');
+  assert.equal(client.chipLabel(null), '压 —');
+  assert.equal(client.inject.includes('configForms'), true, '卡片的写入口仍是 configForms');
+  assert.equal(client.inject.includes('estimateSafety'), false, '安全参数不在客户端注入面');
 });

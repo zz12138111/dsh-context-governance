@@ -24,7 +24,6 @@
   "files": [
     "src",
     "lib/client.js",
-    "locale",
     "README.md",
     "cordis.patch.yml"
   ],
