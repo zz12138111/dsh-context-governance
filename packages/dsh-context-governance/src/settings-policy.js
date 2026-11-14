@@ -99,3 +99,30 @@ export function createSnapshotHandler({ getPolicy, getNative }) {
   };
 }
 
+/**
+ * 注册只读快照路由（C17：webServer 是后挂服务，必须经 `ctx.inject(['webServer'])`；
+ * 与 `@local/dsh-computer-use` 的写法一致）。返回是否已挂载或已排队等待服务。
+ * @param {object} ctx 宿主插件 ctx
+ * @param {{getPolicy: () => object, getNative: () => number|null, path?: string}} deps
+ */
+export function mountSnapshotRoute(ctx, { getPolicy, getNative, path = '/context-governance/policy-snapshot' } = {}) {
+  const handler = createSnapshotHandler({ getPolicy, getNative });
+  const mount = (host) => {
+    if (host === null || host === undefined || typeof host.webServer?.register !== 'function') return false;
+    try {
+      const dispose = host.webServer.register({ kind: 'exact', path, handler });
+      if (typeof dispose === 'function' && typeof host.effect === 'function') {
+        host.effect(() => () => { try { dispose(); } catch { /* ignore */ } }, 'context-governance: policy-snapshot route');
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  if (typeof ctx?.inject === 'function') {
+    ctx.inject(['webServer'], (scoped) => { mount(scoped); });
+    return true;
+  }
+  return mount(ctx);
+}
+

@@ -30,7 +30,7 @@ import { DEFAULT_MEMORY_DIR, MemoryStore, MemoryStoreError } from './memory/stor
 import { registerMemoryHeader } from './memory/header.js';
 import { SCOPE_SKIP, resolveScope } from './scope.js';
 import { MEM_QUERY_NAME, MEM_WRITE_NAME, registerMemoryTools } from './tools/mem-tools.js';
-import { createSnapshotHandler, mergeSettingsAt, policySnapshot, readVolatileAt } from './settings-policy.js';
+import { mergeSettingsAt, mountSnapshotRoute, policySnapshot, readVolatileAt } from './settings-policy.js';
 
 export const name = 'dsh-context-governance';
 
@@ -924,22 +924,16 @@ export async function apply(ctx, rawConfig = {}) {
       });
     }
     // 1.1.0 D2：只读快照路由（仅 GET；非 GET → 405；只出阈值/来源，无记忆内容、无本机路径）。
-    if (typeof ctx.webServer?.register === 'function') {
+    // webServer 是后挂服务：经 `ctx.inject(['webServer'])` 注册（与 @local/dsh-computer-use 同写法）。
+    {
       const snapshotNative = () => nativeRatio({
         windowTokens: config.policy.windowTokens,
         reservedTokens: config.policy.reservedTokens,
       });
-      const disposeSnapshot = ctx.webServer.register({
-        kind: 'exact',
-        path: '/context-governance/policy-snapshot',
-        handler: createSnapshotHandler({
-          getPolicy: () => policyForSession({}),
-          getNative: snapshotNative,
-        }),
+      mountSnapshotRoute(ctx, {
+        getPolicy: () => policyForSession({}),
+        getNative: snapshotNative,
       });
-      if (typeof ctx.effect === 'function' && typeof disposeSnapshot === 'function') {
-        ctx.effect(() => () => { try { disposeSnapshot(); } catch { /* ignore */ } }, 'context-governance: policy-snapshot route');
-      }
     }
     // 1.1.0 D2：声明本实例自带设置页（非自动表单），供宿主 settings 服务登记策略。
     if (typeof ctx.inject === 'function') {

@@ -12,6 +12,7 @@ import {
   PERSISTENT_LIFECYCLE_TEXT,
   createSnapshotHandler,
   mergeSettingsAt,
+  mountSnapshotRoute,
   percentToRatio,
   policySnapshot,
   ratioToPercentText,
@@ -247,22 +248,121 @@ test('C14 保存前计算：校验与 /cg set 同源（<20% / <30% ack / 项目�
   assert.match(over.reason, /0–100/);
 });
 
-test('C15 降级鲁棒：slot 缺失/注册抛错不崩，三处入口各自独立', async () => {
+test('C17 迟挂 slots：先 inject 等声明，声明后 register 成功；注册抛错带 slot 名 warn 不吞', async () => {
   const client = await loadClient();
-  const registered = [];
-  client.apply({
-    locale: { language: 'zh' },
-    slots: { register: (spec) => { if (spec.name === 'conversation.input.overlay') throw new Error('slot missing'); registered.push(spec.name); } },
-  });
-  assert.deepEqual(registered, ['conversation.composer.dock', 'settings.section'], '一个 slot 抛错不得中断其余入口');
+  const warned = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => { warned.push(args.map(String).join(' ')); };
+  try {
+    const injected = [];
+    const registered = [];
+    const disposers = [];
+    const ctx = {
+      locale: { language: 'zh' },
+      get: () => undefined,
+      effect: (factory) => { disposers.push(factory()); },
+      slots: {
+        inject: (slot, callback) => { injected.push({ slot, callback }); return () => {}; },
+        register: (spec) => { if (spec.name === 'conversation.input.overlay') throw new Error('slot not declared'); registered.push(spec.name); },
+      },
+    };
+    client.apply(ctx);
+    assert.deepEqual(injected.map((item) => item.slot), ['conversation.composer.dock', 'conversation.input.overlay', 'settings.section'],
+      '三处入口各自 inject 等声明（不是直调 register）');
+    assert.deepEqual(registered, [], '声明之前不得 register');
 
-  const none = [];
-  client.apply({ slots: undefined });
-  assert.deepEqual(none, [], '无 slots 时静默退化（不抛错）');
-  assert.equal(client.chipLabel(null), '压 —');
+    // 模拟宿主随后声明 docks 与 settings.section：回调触发后注册成功；overlay 回调用同一 register（会抛 → 必须 warn）。
+    for (const item of injected) {
+      try { item.callback(); } catch { /* callback 内部已由 apply 包装的 try? 这里只验 register 行为 */ }
+    }
+    assert.deepEqual(registered, ['conversation.composer.dock', 'settings.section'], '一个 slot 抛错不得中断其余入口');
+    assert.equal(warned.some((line) => /slot (inject|register) failed/.test(line) && /conversation\.input\.overlay/.test(line)), true,
+      '失败必须 warn 带 slot 名（不许无痕吞）');
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
+test('C17 无 slots：warn 一次、不抛、不注册', async () => {
+  const client = await loadClient();
+  const warned = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => { warned.push(args.map(String).join(' ')); };
+  try {
+    assert.doesNotThrow(() => client.apply({ locale: { language: 'zh' } }));
+    assert.equal(warned.some((line) => /slots service unavailable/.test(line)), true);
+  } finally {
+    console.warn = originalWarn;
+  }
   assert.equal(client.inject.includes('configForms'), true, '卡片的写入口仍是 configForms');
   assert.equal(client.inject.includes('estimateSafety'), false, '安全参数不在客户端注入面');
 });
 
+test('C16 静态断言：apply 用到的服务 ⊆ 导出 inject ∪ dsh.client.inject（且不含安全参数）', async () => {
+  const client = await loadClient();
+  const { readFile } = await import('node:fs/promises');
+  const source = await readFile(path.join(process.cwd(), 'lib/client.js'), 'utf8');
+  const declared = new Set([...client.inject]);
+  const used = new Set();
+  for (const match of source.matchAll(/ctx\??\.get\(\s*'([a-zA-Z][\w.]*)'\s*\)/g)) used.add(match[1]);
+  for (const match of source.matchAll(/ctx\??\.(slots|locale|configForms|webServer)\b/g)) used.add(match[1]);
+  for (const service of used) {
+    assert.ok(declared.has(service) || service === 'webServer', `apply 使用了未声明的服务 ${service}`);
+  }
+  for (const forbidden of ['estimateSafety', 'lowThresholdAck', 'armed']) {
+    assert.equal(declared.has(forbidden), false, `安全参数不得进入客户端注入面：${forbidden}`);
+  }
+  assert.equal(declared.has('slots') && declared.has('locale') && declared.has('configForms'), true);
 
+  const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.deepEqual(manifest.dsh.client, { platform: 'web' }, 'C16：dsh.client 只声明 platform（inject 非服务注入，Q1 已核）');
+  assert.equal(manifest.exports['./client'], './lib/client.js');
+});
+test('C17 迟挂 webServer：注入回调之后才注册；GET→200、非 GET→405', () => {
+  const injected = [];
+  const routes = [];
+  const disposeCalls = [];
+  const fakeIframe = () => {
+    const record = { status: 0, headers: null, body: '' };
+    return {
+      record,
+      writeHead(code, headers) { record.status = code; record.headers = headers ?? null; },
+      end(body) { record.body = body ?? ''; },
+    };
+  };
+  const ctx = {
+    inject: (deps, callback) => { injected.push({ deps, callback }); },
+  };
+  const mounted = mountSnapshotRoute(ctx, {
+    getPolicy: () => ({ values: { 'compact.at': 0.55 }, sources: { 'compact.at': 'plugin' } }),
+    getNative: () => 0.6785,
+  });
+  assert.equal(mounted, true);
+  assert.deepEqual(injected.map((item) => item.deps), [['webServer']], 'late service：经 inject([\'webServer\']) 排队');
+  assert.deepEqual(routes, [], '注入回调触发前不得注册路由');
+
+  // 模拟宿主 webServer 就绪：注入回调被调用。
+  injected[0].callback({
+    webServer: { register: (route) => { routes.push(route); return () => disposeCalls.push(route.path); } },
+    effect: (factory) => { factory(); },
+  });
+  assert.equal(routes.length, 1);
+  assert.equal(routes[0].kind, 'exact');
+  assert.equal(routes[0].path, '/context-governance/policy-snapshot');
+
+  const ok = fakeIframe();
+  routes[0].handler({ method: 'GET' }, ok);
+  assert.equal(ok.record.status, 200);
+  assert.match(ok.record.headers['content-type'], /application\/json/);
+  assert.equal(JSON.parse(ok.record.body).at, 0.55);
+  for (const method of ['POST', 'PUT', 'DELETE', 'PATCH']) {
+    const denied = fakeIframe();
+    routes[0].handler({ method }, denied);
+    assert.equal(denied.record.status, 405, method);
+    assert.equal(denied.record.body, '');
+  }
+  // 直挂路径（无 inject 的测试 ctx）也返回布尔，不抛。
+  assert.equal(mountSnapshotRoute({ webServer: { register: () => () => {} }, effect: () => {} }, { getPolicy: () => ({}), getNative: () => null }), true);
+  assert.equal(mountSnapshotRoute({}, { getPolicy: () => ({}), getNative: () => null }), false);
+});
 

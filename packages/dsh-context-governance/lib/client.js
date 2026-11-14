@@ -227,17 +227,43 @@ window.__ModuleLoader__.load({
       const store = createStore(state);
       const components = { chip: createChip(state, store), bubble: createBubble(state, store), section: createSettingsCard(state, store) };
       const labels = pickLabels(ctx);
+      // 一次性诊断（低噪）：下次真机预验据此区分"没加载 / 加载了没挂上 / slot 名不对"。
+      console.info('[context-governance] client apply', {
+        slots: typeof ctx?.slots?.inject === 'function' && typeof ctx?.slots?.register === 'function',
+        configForms: typeof ctx?.get === 'function' && ctx.get('configForms') !== undefined,
+        locale: typeof ctx?.locale?.language === 'string',
+      });
+      const slots = ctx?.slots;
+      if (slots === undefined || slots === null || typeof slots.inject !== 'function' || typeof slots.register !== 'function') {
+        // 服务迟挂：宿主没给 slots 时只留 warn，不静默、也不抛（设置页仍可由宿主后续重试挂载）。
+        console.warn('[context-governance] client apply: slots service unavailable; composer chip / overlay / settings section not registered');
+        return;
+      }
       for (const entry of registrationPlan(state)) {
         try {
-          ctx.slots?.register?.({
-            name: entry.slot,
-            id: entry.id,
-            order: entry.order,
-            label: () => labels.sectionLabel,
-            inject: () => inject,
-          }, components[entry.component]);
-        } catch {
-          /* C15：单个 slot 缺失不影响其余入口（chip 退化为「压 —」，设置页仍可用）。 */
+          // 关键：slot 是按界面声明、可能"先无后有"；先 inject 等声明，再 register。
+          // 声明后 register 仍可能抛（宿主契约不符）——必须 warn 带 slot 名，不许无痕吞。
+          const dispose = slots.inject(entry.slot, () => {
+            try {
+              return slots.register({
+                name: entry.slot,
+                id: entry.id,
+                order: entry.order,
+                label: () => labels.sectionLabel,
+                inject: () => inject,
+              }, components[entry.component]);
+            } catch (error) {
+              console.warn('[context-governance] slot register failed', entry.slot, String(error?.message ?? error));
+              return undefined;
+            }
+          });
+          if (typeof dispose === 'function' && typeof ctx.effect === 'function') {
+            ctx.effect(() => () => { try { dispose(); } catch { /* ignore */ } }, `context-governance: slot ${entry.slot}`);
+          }
+          console.info('[context-governance] slot watched', entry.slot);
+        } catch (error) {
+          // C17：不许无痕吞错——带 slot 名与原因。
+          console.warn('[context-governance] slot inject failed', entry.slot, String(error?.message ?? error));
         }
       }
     };
