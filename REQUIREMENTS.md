@@ -1064,6 +1064,7 @@ C 的初步证据：启动后本项目根 `audit.jsonl` 只有 `capability@ready
 - **上界 `<0.3.0-0`**：挡住 0.3.0 线；注意 `0.3.0-0 < 0.3.0-rc.1`，所以 `<0.3.0-0` 连 `0.3.0-rc.x` 一并挡住。
 - **同仓一致性**：`packages/cg-stub/package.json` 的 `engines.dsh` 是单段 `<0.3.0-0`，与本包不一致；**≤1 行改动就同批统一**，超过则登记不阻塞。
 - **`satisfiesRange` 不支持 `||`**（据 `:80-101`：按空格切分、逐 token 全真才真）→ 引擎串里的 `||` **不得**喂给它；区间判定只走矩阵数组。若出错，按"矩阵掉一项"处理，不得改成放宽 `satisfiesRange`。
+- **版本号**：`package.json:3` `"version"` → **`1.1.0`**；若有测试/常量断言插件版本（`readPackageVersion()` 派生），同批核对；`README`/`docs/兼容矩阵-1.0.md`/新建 `docs/1.1.0-发布说明-草稿.md` 同批更新，**不回收 1.0.x 历史文档**。
 
 #### ② #4 生成侧标题收口（P1；口径已签，见 `:1006-1011`）
 
@@ -1095,11 +1096,11 @@ C 的初步证据：启动后本项目根 `audit.jsonl` 只有 `capability@ready
 | **C1** | 区间单一真源 | A | 单测：读 `package.json` 与 `DEFAULT_MATRIX` | `engines.dsh === DEFAULT_MATRIX.host.join(' || ')`（含顺序） |
 | **C2** | 区间语义 | A | `satisfiesRange` 参数化用例 | `0.2.1-rc.2/rc.3/rc.4/0.2.1` **in**；`0.2.2-rc.3/rc.4/0.2.2` **in**；`0.2.2-rc.1/rc.2`、`0.1.9`、`0.3.0-rc.1`、`0.3.0` **out** |
 | **C3** | 自检不误伤 | A | `selectMode`/`selfCheck`（`selection.js:47` 同类断言） | 宿主 `0.2.2-rc.3`：`matrix.host='in'`、无 `host-version-out-of-matrix`、`mode ≠ observe-only`；宿主 `0.2.2-rc.1`：出该 error |
-| **C4** | 宿主版本探测 | A | `detectHostVersion` fixtures | 从 0.2.2-rc.3 形态的 asar/包读回 `0.2.2-rc.3`，失败落 `unknown`（不抛错） |
+| **C4** | 宿主版本探测 | A | `detectHostVersion` fixtures + **版本源一致性** | 从 0.2.2-rc.3 形态的 asar/包读回 `0.2.2-rc.3`，失败落 `unknown`（不抛错）；**探测源必须与门禁源一致**（门禁用 app-boot 的 version，见探针 #6）：本机两者同为 `0.2.1-rc.3`，真机窗口须记录两值；若 0.2.2 线上两者不同，**以 app-boot（门禁源）为准**并补用例 |
 | **C5** | #4 三项 | A | 单测 + 生成侧快照 | 兜底文案 `回滚点（见 source）`；`statePath`/`ratios` 都空不发、单有其一照发；用户消息标题 ≤87 字且 `detail` 含全文 |
 | **C6** | 全量回归 | A | `node --test "test/*.test.mjs"` | 通过（基线 535 + 本单新增；数字以复跑为准） |
 | **C7** | flake 取证 | A | 30 轮全量循环 + 留档 | 复现则修；30 轮全绿则关观察项（附取证目录） |
-| **R1** | 真机加载 | C | 0.2.2-rc.3 装 1.1.0 + 重启（00 执行、用户在场） | `/cg status` 的 host 行 = `0.2.2-rc.3`、矩阵 `in`、**非 `observe-only`** |
+| **R1** | 真机加载 | C | 重启后**第一步先验插件是否加载**（`/cg` 命令是否存在），再跑 0.2.2-rc.3 装 1.1.0（00 执行、用户在场） | `/cg` 命令存在且 `/cg status` 的 host 行 = `0.2.2-rc.3`、矩阵 `in`、**非 `observe-only`**；**命令不存在 = 插件被静默跳过 → 直接判不过**（GUI 下跳过无声，见探针 #6） |
 | **R2** | 真机 #5 | C | 两次真实压缩 | 5a/5b/5c 全过（沿用 `:974-994` 口径），必须给「前后条目数 + 新增 `title`/`detailLen` 清单」 |
 | **R3** | 文案落地 | C/A | 真机窗口新增条目 | 无「（指针见正文）」、无「有批次标记」；用户消息标题 ≈≤87 字、`detail` 有全文 |
 | **R4** | 记忆可读回 | C | 压缩后读盘/`/cg status` | 条目数正常增加、无 0 条/截断；旧条目仍可解析 |
@@ -1132,5 +1133,14 @@ C 的初步证据：启动后本项目根 `audit.jsonl` 只有 `capability@ready
 3. 现有用例影响面清单：`compress-adapters.test.mjs:78-82`（区间断言）、`compress-selection.test.mjs:47/110`、`p3-early-window` 等是否被波及，逐条列"必须改/不改"；
 4. 文档同步清单（只改当前生效的）：`packages/dsh-context-governance/README.md:8`、`docs/兼容矩阵-1.0.md:11`、发布说明（新建 `1.1.0` 版，不回收 1.0.x 历史文档）；
 5. 真机窗口前置：0.2.2-rc.3 宿主包路径与安装方式由 00 准备；本单不自行升级宿主。
-6. **"引擎门禁"要有证据，不能只推断**：开发判断"宿主按 `engines` fail-closed 拒载"，但**尚未给出错误出处**。开工前需给：升到 `0.2.2-rc.3` 时宿主拒绝加载的**日志行/异常文本/文件:行**（若实际是别的门禁——如 bundle 注册表、插件管理器——则放宽 `engines` 不解决问题，须先定位）。**这条拿不到，本单 P0 不开工。**
+6. **"引擎门禁"要有证据，不能只推断** —— **已裁定：接受现有证据，P0 开工（2026-11-14 需求裁 A）**。证据由开发给出并满足下列三类，缺一类不许开工：
+   - **代码路径**：`app.asar/dsh/node_modules/@deepseek-ai/dsh-app-boot/lib/index.js` `:271-278 getDshRuntimeVersion()`（取 app-boot 自身 version）、`:311-316 evaluatePluginCompatibility()`（未满足→返回 `engines.dsh` requirements）、`:1015-1051 loadProfileDirectory()`（不兼容 bundle 被 `throw`→`skippedBundles`，其 patch 层不加载）、`:537-538` 跳过行格式、`:333-335` 异常模板；安装路径另有 `dsh-plugin-manager/lib/index.js:1759/2076/2288` 抛 `incompatible-version`；
+   - **真 semver 判定**：宿主用 `semver.satisfies(v, range, {includePrerelease:true})`（app-boot `:15`）；实测旧区间对 `0.2.2-rc.3/rc.4/0.2.2` 全 false，新签版区间全 true，`0.2.2-rc.1/rc.2`/`0.1.9`/`0.3.0-rc.1`/`0.3.0` 全 false（semver 7.8.5，本机 profile 的 node_modules）；
+   - **当前宿主在跑同一路径**：本机 governance 就在 `~/.dsh/profiles/desktop/package.json` 的 `dsh.profile.bundles` 里、manifest 带 `dsh.bundle`，即走上面的跳过路径。
+   - **风险记死**：桌面 GUI 下跳过**基本无声**（stderr 行由 CLI 打印）→ 这是"必须放宽"的理由，也是 **R1 要先验 `/cg` 命令是否存在**的理由。
+   - **仍缺的真日志**（0.2.2-rc.3 宿主上的实际跳过行）**不阻塞 P0**，但**必须在 R1 补齐**：窗口日志里要能找到该跳过行（升级前）或确认无跳过（升级后）；补不到则 R1 不算过。
 7. **#4 三项的改动面确认**：开发称只动 `protection-memory.js` + 一条测试；需逐条对应到 `文件:行`（`:162` / `:43`+`:166` / `:135-153` / `:92-97` / `test/memory-1.0.3.test.mjs:271`），并声明全量 `535` 不变（新增用例另计）。
+
+> **开发回执（2026-11-14，探针 1-7 已交，事实与上述一致）**：三处硬点 = `package.json:38`、`adapters.js:26-27/31`（`matrixStatus :103-114`）；`selection.js` 无版本字面量不用改；`satisfiesRange` 确认不支持 `||`（token `||` → `compareSemver` null → false）；用例影响面"必须改 `compress-adapters.test.mjs:76-94`，`compress-selection.test.mjs:43-48` 等不改"；`cg-stub` 共 3 行（`package.json:36` + `README:22/137`）→ **登记不阻塞**（非产品包、不随 1.1.0 发布，下个版本统一）；#4 改动面逐条确认（`:162`、`:43`+`:166`、`:134-153`、`:92-97`、测试 `:271`），当刻全量 **535/535**。
+>
+> **窗口证据（R1 配套，写死）**：`/cg` 命令存在 + `/cg status` 原文 + **`dsh plugin list`（或 GUI 插件清单）原文/截图**三方留档——GUI 下插件被跳过是**无声**的，没有清单证据就不算"加载过"。
