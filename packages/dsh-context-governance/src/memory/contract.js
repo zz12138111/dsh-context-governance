@@ -215,6 +215,22 @@ export function checkMachineEntryReadable({ title, detail } = {}) {
 }
 
 /**
+ * 保护链路准入（1.0.3 返修，对齐已批 5a）：标题可读 + `source`/`evidence` 可解析，**`detail` 允许为空**。
+ * 与工具层 `checkMachineEntryReadable` 分开：`mem_write create`（条款 1）仍要求正文非空；
+ * 保护条目（T4：标题 + 指针）允许空正文，但不能连指针都解析不了。
+ */
+export function checkProtectionEntryReadable({ title, source, evidence } = {}) {
+  const cut = detectTitleTruncation(title);
+  if (cut !== null) return { ok: false, reason: cut };
+  const pointer = String(source ?? '').trim();
+  if (!/^[A-Za-z][\w-]*:\S+$/.test(pointer)) return { ok: false, reason: 'source-unparsable' };
+  if (evidence !== undefined && evidence !== null && String(evidence).trim() === '') {
+    return { ok: false, reason: 'evidence-empty' };
+  }
+  return { ok: true, reason: null };
+}
+
+/**
  * 校验并规范化一次"新建/取代"的输入。
  *
  * @param {object} input 模型或用户给的原始字段。
