@@ -155,9 +155,11 @@ window.__ModuleLoader__.load({
         const refresh = () => { fetchSnapshot(ctx?.fetch ?? globalThis.fetch).then((snapshot) => { if (alive && snapshot) store.set({ snapshot }); }); };
         refresh();
         // C19③：窗口重新聚焦时重取（首帧 race / 路由晚就绪后可自愈）。
-        if (typeof globalThis.addEventListener === 'function') {
-          globalThis.addEventListener('focus', refresh);
-          return () => { alive = false; globalThis.removeEventListener('focus', refresh); };
+        // 浏览器里事件目标应为 window（`globalThis.window`）；Node/无 window 环境回退 globalThis。
+        const focusTarget = globalThis.window ?? globalThis;
+        if (typeof focusTarget?.addEventListener === 'function') {
+          focusTarget.addEventListener('focus', refresh);
+          return () => { alive = false; focusTarget.removeEventListener?.('focus', refresh); };
         }
         return () => { alive = false; };
       }, [ctx, store]);

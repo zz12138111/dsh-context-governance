@@ -508,3 +508,4 @@ test('C20 静态守卫：client.js 不得出现 subscribe(...)() 立即退订；
   assert.match(source, /addEventListener\('focus'/, '窗口重新聚焦重取');
   assert.match(source, /slice\(0, 80\)|slice\(0,80\)|toRatio/, '百分比换算仍在');
 });
+
