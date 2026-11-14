@@ -1,6 +1,6 @@
 {
   "name": "dsh-context-governance",
-  "version": "1.0.3",
+  "version": "1.1.0",
   "private": true,
   "license": "MIT",
   "repository": {
@@ -35,6 +35,6 @@
   },
   "engines": {
     "node": ">=22.19.0",
-    "dsh": ">=0.2.1-rc.2 <0.2.2-0"
+    "dsh": ">=0.2.1-rc.2 <0.2.2-0 || >=0.2.2-rc.3 <0.3.0-0"
   }
 }

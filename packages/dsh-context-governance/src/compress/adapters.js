@@ -24,11 +24,13 @@ export const PROTECTION_ROLES = Object.freeze(['enforcer', 'validator', 'observe
 /**
  * E1 实测过的组合。宿主按“同 rc 线区间”匹配，避免每次小版本升级就降级：
  *   `>=0.2.1-rc.2 <0.2.2-0` → 接受 0.2.1-rc.2 及更高 rc、0.2.1 稳定版；
- *   拒绝 0.2.2-rc.1、0.1.9。
+ *   `>=0.2.2-rc.3 <0.3.0-0` → 接受 0.2.2-rc.3 及更高 rc、0.2.2 稳定版；0.3.0 线挡住。
+ *   （两项必须与 `package.json` `engines.dsh` 的 `join(' || ')` 字面一致；`satisfiesRange` 不支持 `||`，
+ *   引擎串不得喂给它，区间判定只走本数组逐项 any-match。）
  * context-zip 仍按已知版本枚举；`unknown` 只告警、不降级（引擎标记已能识别）。
  */
 export const DEFAULT_MATRIX = Object.freeze({
-  host: Object.freeze(['>=0.2.1-rc.2 <0.2.2-0']),
+  host: Object.freeze(['>=0.2.1-rc.2 <0.2.2-0', '>=0.2.2-rc.3 <0.3.0-0']),
   contextZip: Object.freeze(['0.1.10']),
 });
 

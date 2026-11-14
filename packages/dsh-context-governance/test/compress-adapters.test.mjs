@@ -18,6 +18,7 @@ import {
   validateAdapter,
 } from '../src/compress/adapters.js';
 import { FIVE_SECTION_SUMMARY, FREE_FORM_SUMMARY } from './compress-helpers.mjs';
+import { detectConflicts } from '../src/compress/selection.js';
 
 class BasicCompactionEngine {
   compactNow() {}
@@ -73,17 +74,15 @@ test('校验器拒绝缺字段/非法枚举', () => {
   assert.doesNotThrow(() => validateAdapter(good));
 });
 
-test('宿主矩阵按同 rc 线区间：rc.3/rc.4 通过，0.2.2-rc.1/0.1.9 拒绝', () => {
-  // 直接验证 semver 子集
-  assert.equal(satisfiesRange('0.2.1-rc.3', '>=0.2.1-rc.2 <0.2.2-0'), true);
-  assert.equal(satisfiesRange('0.2.1-rc.4', '>=0.2.1-rc.2 <0.2.2-0'), true);
-  assert.equal(satisfiesRange('0.2.1', '>=0.2.1-rc.2 <0.2.2-0'), true);
-  assert.equal(satisfiesRange('0.2.2-rc.1', '>=0.2.1-rc.2 <0.2.2-0'), false);
-  assert.equal(satisfiesRange('0.1.9', '>=0.2.1-rc.2 <0.2.2-0'), false);
+test('宿主矩阵按双区间：0.2.1 线与 0.2.2-rc.3 线通过；0.2.2-rc.1/rc.2、0.1.9、0.3.0 线拒绝', () => {
+  // 单区间按 npm 语义判不了 0.2.2-rc.3（prerelease 同 [major,minor,patch] 才参与），故矩阵必须两段。
+  assert.equal(satisfiesRange('0.2.2-rc.3', '>=0.2.1-rc.2 <0.2.2-0'), false);
+  assert.equal(compareSemver('0.2.2-rc.3', '0.2.2-0'), 1);
   assert.equal(compareSemver('0.2.1-rc.3', '0.2.1-rc.2'), 1);
   assert.equal(compareSemver('0.2.1', '0.2.1-rc.4'), 1);
 
-  for (const hostVersion of ['0.2.1-rc.2', '0.2.1-rc.3', '0.2.1-rc.4', '0.2.1']) {
+  const hostIn = ['0.2.1-rc.2', '0.2.1-rc.3', '0.2.1-rc.4', '0.2.1', '0.2.2-rc.3', '0.2.2-rc.4', '0.2.2'];
+  for (const hostVersion of hostIn) {
     const adapter = runSelfCheck({
       adapter: detectAdapter({ compaction: new ContextZipEngine(), hostVersion, backendVersion: '0.1.10' }),
       eventApi: true,
@@ -91,8 +90,14 @@ test('宿主矩阵按同 rc 线区间：rc.3/rc.4 通过，0.2.2-rc.1/0.1.9 拒�
     });
     assert.equal(adapter.matrix.host, 'in', hostVersion);
     assert.equal(adapter.selfCheck.state, 'pass', hostVersion);
+    assert.ok(
+      !detectConflicts({ adapter }).some((conflict) => conflict.code === 'host-version-out-of-matrix'),
+      `${hostVersion} 不得出 host-version-out-of-matrix`,
+    );
   }
-  for (const hostVersion of ['0.2.2-rc.1', '0.1.9']) {
+
+  const hostOut = ['0.2.2-rc.1', '0.2.2-rc.2', '0.1.9', '0.3.0-rc.1', '0.3.0'];
+  for (const hostVersion of hostOut) {
     const adapter = runSelfCheck({
       adapter: detectAdapter({ compaction: new ContextZipEngine(), hostVersion, backendVersion: '0.1.10' }),
       eventApi: true,
@@ -100,7 +105,22 @@ test('宿主矩阵按同 rc 线区间：rc.3/rc.4 通过，0.2.2-rc.1/0.1.9 拒�
     });
     assert.equal(adapter.matrix.host, 'out', hostVersion);
     assert.equal(adapter.selfCheck.state, 'fail', hostVersion);
+    assert.ok(
+      detectConflicts({ adapter }).some((conflict) => conflict.code === 'host-version-out-of-matrix' && conflict.severity === 'error'),
+      `${hostVersion} 应出 host-version-out-of-matrix`,
+    );
   }
+});
+
+test('C1 区间单一真源：engines.dsh === DEFAULT_MATRIX.host.join(" || ")（字面相等，不喂 satisfiesRange）', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.equal(manifest.engines.dsh, DEFAULT_MATRIX.host.join(' || '));
+  assert.equal(DEFAULT_MATRIX.host.length, 2);
+  // 引擎串含 `||`，不得喂给 satisfiesRange（其不支持 `||`，会恒 false）。
+  assert.equal(satisfiesRange('0.2.2-rc.3', manifest.engines.dsh), false);
+  assert.equal(satisfiesRange('0.2.2-rc.3', DEFAULT_MATRIX.host[1]), true);
+  assert.equal(manifest.version, '1.1.0');
 });
 
 test('context-zip backend=unknown：只告警，不把自检判死', () => {
@@ -195,6 +215,16 @@ test('宿主版本探测：asar → app → 包解析 → unknown', () => {
     readFile: () => { throw new Error('ENOENT'); },
     resolvePackage: () => { throw new Error('not found'); },
   }), 'unknown');
+
+  // C4：0.2.2-rc.3 形态可读回（版本源 = app.asar/dsh/package.json，与引擎门禁同源核对见单 §四 C4）
+  assert.equal(detectHostVersion({
+    resourcesPath: 'C:/app/resources',
+    readFile: (file) => {
+      if (file.endsWith('/app.asar/dsh/package.json')) return JSON.stringify({ version: '0.2.2-rc.3' });
+      throw new Error('ENOENT');
+    },
+    resolvePackage: () => { throw new Error('unused'); },
+  }), '0.2.2-rc.3');
 
   // 非法 JSON 不抛错，继续下一个候选。
   assert.equal(detectHostVersion({
