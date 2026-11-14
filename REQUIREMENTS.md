@@ -1087,13 +1087,15 @@ C 的初步证据：启动后本项目根 `audit.jsonl` 只有 `capability@ready
 
 **目标（一句话）**：用户不记命令、不查参数，**在输入框附近直接填一个百分比数字**就能改"窗口用掉多少就压缩"。
 
-> **入口形态待用户选（2026-11-14 用户否决"只在设置页"）**：原话「为啥是设置页，不能直接在下面就像电脑操作或者什么地方一样搞个小框输入吗……我需要更好的用户友好型设计」。调查见 `analysis/req-20261114-02/D2-入口形态调查-20261114.md`（证据 `d2-evidence2/`）。
-> - **A（需求推荐）**：`conversation.composer.dock`（**输入框下方统计行**，现有 `activity`/`usage` 两条即是）注册「压 65%」小条目，点击弹 `conversation.input.overlay` 气泡=百分比输入 + 生效值/来源层/时点 + "打开设置页"；**只改 `lib/client.js`（+~120 行）**，宿主/包面不变；先例 `dsh-cost-meter`（dock+overlay）。
-> - **B**：`sidebar.right.pane.tab` 右栏面板 tab（dsh-context 先例），2 步打开，空间大但慢。
-> - **C**：保留已实现的 `settings.section`（`20bf20d`）+ 输入框下加"去设置"快捷链接（最小改动，但多一跳）。
-> - **D**：`sidebar.footer.action` 侧栏底部图标+角标（入口隐蔽，不推荐）。
+> **入口形态定稿 = A（2026-11-14 00 定；用户唯一约束「要友好、别藏在设置页」）**：调查见 `analysis/req-20261114-02/D2-入口形态调查-20261114.md`（证据 `d2-evidence2/`）。
+> - **主入口**：`conversation.composer.dock`（**输入框下方统计行**，现有 `activity`/`usage` 两条即是）注册一个条目，显示 **`压 65%`** 形态的当前有效百分比。
+> - **展开**：点击 → `conversation.input.overlay` 气泡（以输入框为锚），内容 = ①百分比数字输入（预填当前值）②当前生效值 ③来源层 ④生效时点 ⑤"打开设置页"兜底链接。
+> - **写入**：`configForms.get('dsh-context-governance').set('policy.at', ratio)`（plugin 层，配置 reload 后生效）；**拒绝理由必须与 `/cg set` 同源**（下限 20%、`<30%` 需 `lowThresholdAck`、项目层 45%、`native−0.02` 上限）；保存成功后气泡与 chip 同步刷新。
+> - **兜底**：`20bf20d` 的 `settings.section` **保留不废**（同一份数据、同一写入口）。
+> - **禁止**：不改 host 侧、不加新路由、不引打包器/依赖、不动 `package.json.files` 语义（除 A 已有内容）；**只改 `lib/client.js` + 测试/文档**。
+> - **降级鲁棒**：快照取不到或 slot 不存在时，chip 显示 `压 —`、控制台不抛错、设置页仍可用。
 > - **与 `/cg` 双向保留**：UI 写 **plugin 层**（profile patch，`config-reload` 后生效）；`/cg set` 写 **session 层**（即时、重启失效）；气泡/设置页都显示 `source` 层，两条路并存。
-> - **`20bf20d` 的 settings 实现先留着不废**（A/C 都要用它兜底）；**用户选形前不装、不改代码**。
+> - **选形已结束，按此实现；实现后我验 C8-C15，再报 00"可装"。**
 
 > **形态裁定（2026-11-14，调查结论：`analysis/req-20261114-02/D2-UI能力调查-20261114.md`）**：
 > - **可行路径 = 自建 client 半侧**：`package.json` 加 `dsh.client={platform:'web'}` + `exports["./client"]`，**手写** `lib/client.js`（`window.__ModuleLoader__.load({id,factory})` 格式，**不引入打包器**），注册进设置页槽位 **`settings.section`**；宿主半侧加 Schemastery `Config` 的 **`.volatile()`** 字段（**只有 volatile 字段可被设置表单编辑**）。
@@ -1140,7 +1142,11 @@ C 的初步证据：启动后本项目根 `audit.jsonl` 只有 `capability@ready
 | **C9** | D2 百分比换算与边界 | A | 单测（UI 层换算函数 + 校验） | `55 → 0.55`、`20 → 0.20` 通过；`19` 被拒；`<30` 且无 `lowThresholdAck` 被拒；项目层写 `<45` 被拒；`> native−0.02` 被拒；拒绝文案与 `/cg set` 一致 |
 | **C10** | D2 不绕过安全边界 | A | 单测 + 写入口审查 | UI 写入必须经现有 `validateLayer` 同一路径；`compact.estimateSafety`/`compact.lowThresholdAck`/`armed` **在 UI 中不可写**；不存在"UI 特批"分支 |
 | **C11** | D2 层与生效提示 | A | 文案断言 | 界面写明"改的是哪一层"与"立即生效/需重启"；缺任一句判不过 |
-| **R7** | D2 真机走查 | C | 用户在场，设置页改一次百分比（例：60 → 55） | 界面显示改后生效值；`/cg status`/审计显示 `compact.at=0.55 (source=…)`（若该层需重启则重启后复核）；**留截图/原文** |
+| **C12** | A 主入口（输入框下条目） | A | 注册形状单测 + 渲染文本 | `conversation.composer.dock` 注册项形状正确（唯一 id、order、返回 React 节点）；渲染文本为 `压 NN%`，**数值与快照 `at` 一致**；快照失败时渲染 `压 —` 且不抛错 |
+| **C13** | A 气泡三行信息 | A | 渲染文本断言 | 气泡含「当前生效 / 来源层 / 生效时点」三行，值取自快照 `{at, source, effectiveAt}`，与 `/cg status` 口径一致；含"打开设置页"兜底链接 |
+| **C14** | A 保存路径与拒绝 | A | 纯函数 + 单测 | 保存调 `configForms.get('dsh-context-governance').set('policy.at', ratio)`；`55→0.55`；越界（<20、<30 未 ack、项目层 <45、>native−0.02）**拒绝理由与 `/cg set` 同源**；成功后 chip/气泡刷新 |
+| **C15** | A 降级鲁棒 | A | 单测 | slot 缺失/快照 4xx/`configForms` 不可用时：不抛错、chip 退化、设置页仍可用（不得整卡崩） |
+| **R7** | D2 真机走查 | C | 用户在场，**在输入框下点 chip 改一次百分比**（例：60 → 55），并可再去设置页复核 | chip 与气泡显示改后生效值+来源层；`/cg status`/审计显示 `compact.at=0.55 (source=…)`；**留截图/原文**；若 chip 没出现→判不过（不是"环境问题"） |
 | **R8** | D2 不伤压缩链路 | C | 改阈值后触发一次真实压缩 | 压缩正常执行、保护/回注不退化（审计无异常）、`/cg status` 无 `observe-only` |
 
 > **窗口基线（开发实测，2026-11-14 提供）**：本机 desktop `desktopVersion=0.2.1-rc.3`（`~/.dsh/dsh-runtimes/dsh-primary-runtime/runtime.json`，node `24.21.0`）；已装 `dsh-context@0.84.1` + 治理 `1.0.3`；治理源码与 `44d0059` **SHA256 逐字节一致**（真机跑的就是返修版）；治理审计最新 `2026-11-14T14:21:32Z memory-store-open G根 count=2`；工具名无碰撞（治理 `mem_write`/`mem_query`）。**R5/R6 的"升级前后基线"就用这份。**
