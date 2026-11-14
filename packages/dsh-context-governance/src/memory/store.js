@@ -28,7 +28,7 @@ import {
   ENTRY_TYPES,
   MemoryContractError,
   assertStatusTransition,
-  checkProtectionEntryReadable,
+  checkMachineEntryReadable,
   formatPointer,
   localDateId,
   normalizeDraft,
@@ -503,18 +503,18 @@ export class MemoryStore {
 
   /**
    * 1.0.3 准入（保护链路唯一写入口，A 口径）：**所有**保护条目的 `#entries` 写入都从这里过。
-   * 判据对齐真机 #5 与已批 5a：标题可读（非截断/未闭合反引号）、`source` 可解析、`evidence` 若给须非空；
-   * **`detail` 允许为空**（保护条目 = 标题 + 指针，与工具层 `checkMachineEntryReadable` 分开）。
+   * 判据对齐真机 #5：标题可读（非截断/未闭合反引号）、正文 trim 后非空、`source` 可解析。
    * **不抛错**：返回 `{ok, reason}`，调用方"跳过 + warning"，绝不因一条坏数据中断压缩。
    * `store.create()` 低层 API 不在此列（by design，见 docs/记忆契约-v1.md §12）。
    */
   #admitEntry(entry, { commit = false } = {}) {
-    const verdict = checkProtectionEntryReadable({
-      title: entry?.title,
-      source: entry?.source,
-      evidence: entry?.evidence,
-    });
-    if (verdict.ok !== true) return verdict;
+    const verdict = checkMachineEntryReadable({ title: entry?.title, detail: entry?.detail });
+    if (verdict.ok !== true) return { ok: false, reason: verdict.reason };
+    const source = typeof entry?.source === 'string' ? entry.source.trim() : '';
+    if (!/^[A-Za-z][\w-]*:\S+$/.test(source)) return { ok: false, reason: 'source-unparsable' };
+    if (entry?.evidence !== undefined && entry?.evidence !== null && String(entry.evidence).trim() === '') {
+      return { ok: false, reason: 'evidence-empty' };
+    }
     if (commit) this.#entries.set(entry.id, entry);
     return { ok: true, reason: null };
   }
