@@ -9,7 +9,7 @@ import { pathToFileURL } from 'node:url';
 
 import { RootGuardPool } from '../src/compress/root-guards.js';
 import {
-  EFFECTIVE_AT_TEXT,
+  PERSISTENT_LIFECYCLE_TEXT,
   createSnapshotHandler,
   mergeSettingsAt,
   percentToRatio,
@@ -56,7 +56,7 @@ test('C9 快照视图：at/source/sessionOverride/effectiveAt/native 五键，�
   assert.equal(view.source, 'plugin');
   assert.equal(view.sessionOverride, null);
   assert.equal(view.native, 0.6785);
-  assert.equal(view.effectiveAt, EFFECTIVE_AT_TEXT);
+  assert.equal(view.effectiveAt, PERSISTENT_LIFECYCLE_TEXT);
 
   const session = policySnapshot({ values: { 'compact.at': 0.5 }, sources: { 'compact.at': 'session' } });
   assert.equal(session.source, 'session');
@@ -194,7 +194,7 @@ test('C13/C8/C11 气泡四行：当前生效 / 来源层 / 生命周期（随 so
   assert.equal(lines.length, 4, 'C13 三行信息 + C11 写入层 = 四行');
   assert.match(lines[0], /55%/);
   assert.match(lines[1], /plugin/);
-  assert.equal(lines[2], `生效时点: ${EFFECTIVE_AT_TEXT}`, '持久层：保存后生效、重启仍有效');
+  assert.equal(lines[2], `生效时点: ${PERSISTENT_LIFECYCLE_TEXT}`, '持久层：保存后生效、重启仍有效');
   assert.equal(lines[3], '本次修改写入：plugin 层（profile patch）', 'C11：静态写入层文案');
 
   const sessionText = client.renderBubbleText({ at: 0.5, source: 'session' });
@@ -263,5 +263,6 @@ test('C15 降级鲁棒：slot 缺失/注册抛错不崩，三处入口各自独�
   assert.equal(client.inject.includes('configForms'), true, '卡片的写入口仍是 configForms');
   assert.equal(client.inject.includes('estimateSafety'), false, '安全参数不在客户端注入面');
 });
+
 
 

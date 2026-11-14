@@ -20,9 +20,6 @@ export function lifecycleText(source) {
   return source === 'session' ? SESSION_LIFECYCLE_TEXT : PERSISTENT_LIFECYCLE_TEXT;
 }
 
-/** @deprecated 兼容旧断言：持久层生命周期文案（等价 `PERSISTENT_LIFECYCLE_TEXT`）。 */
-export const EFFECTIVE_AT_TEXT = PERSISTENT_LIFECYCLE_TEXT;
-
 /** 写入层静态文案（C11）：UI 只有一个写入口（profile Cordis patch → plugin 配置层）。 */
 export const WRITE_LAYER_TEXT = '本次修改写入：plugin 层（profile patch）';
 
@@ -101,3 +98,4 @@ export function createSnapshotHandler({ getPolicy, getNative }) {
     }
   };
 }
+
