@@ -50,10 +50,11 @@ test('C8/C9 设置值合入 plugin 层：只读 volatile 引用、缺省不改�
   assert.deepEqual(mergeSettingsAt(base), base, '无 policy.at 时原样返回');
 });
 
-test('C9 快照视图：at/source/sessionOverride/effectiveAt/native 五键，来源层原样透出', () => {
+test('C9 快照视图：at/source/sessionOverride/effectiveAt/native/defaultAt 六键，来源层原样透出', () => {
   const policy = { values: { 'compact.at': 0.55 }, sources: { 'compact.at': 'plugin' } };
   const view = policySnapshot(policy, { native: 0.6785 });
-  assert.deepEqual(Object.keys(view).sort(), ['at', 'effectiveAt', 'native', 'sessionOverride', 'source']);
+  assert.deepEqual(Object.keys(view).sort(), ['at', 'defaultAt', 'effectiveAt', 'native', 'sessionOverride', 'source']);
+  assert.equal(view.defaultAt, 0.6, 'U6：默认值来自 POLICY_DEFAULTS（单一来源）');
   assert.equal(view.at, 0.55);
   assert.equal(view.source, 'plugin');
   assert.equal(view.sessionOverride, null);
@@ -206,27 +207,35 @@ test('C13/C8/C11 气泡四行：当前生效 / 来源层 / 生命周期（随 so
   assert.match(client.renderBubbleText({}, {}), /unknown/);
 });
 
-test('C14 保存调用注入面：走 configForms.set / mutate，不可用返回 false（不抛）', async () => {
+test('C22 保存尝试：非法不发请求；合法 set/mutate；失败保留输入；不可用返回非成功', async () => {
   const client = await loadClient();
   const calls = [];
-  const setContext = {
-    configForms: { get: (id) => ({ set: (field, value) => { calls.push([id, field, value]); return Promise.resolve(); } }) },
-  };
-  assert.equal(await client.saveRatio(setContext, 0.55), true);
-  assert.deepEqual(calls, [['dsh-context-governance', 'policy.at', 0.55]]);
+  const ok = await client.saveAttempt({ raw: '55', snapshot: { at: 0.6, source: 'plugin' }, configForms: { get: () => ({ set: (field, value) => { calls.push([field, value]); return Promise.resolve(); } }) } });
+  assert.equal(ok.ok, true);
+  assert.equal(ok.requestSent, true);
+  assert.deepEqual(calls, [['policy.at', 0.55]]);
 
   const mutateCalls = [];
-  const mutateContext = {
-    configForms: { get: () => ({ revision: 7, mutate: (ops, revision) => { mutateCalls.push([ops, revision]); return Promise.resolve(); } }) },
-  };
-  assert.equal(await client.saveRatio(mutateContext, 0.6), true);
+  const mutate = await client.saveAttempt({ raw: '60', snapshot: {}, configForms: { get: () => ({ revision: 7, mutate: (ops, revision) => { mutateCalls.push([ops, revision]); return Promise.resolve(); } }) } });
+  assert.equal(mutate.requestSent, true);
   assert.deepEqual(mutateCalls, [[[{ path: 'policy.at', value: 0.6 }], 7]]);
 
-  assert.equal(await client.saveRatio({}, 0.5), false, '无 configForms → false');
-  const throwing = { configForms: { get: () => ({ set: () => { throw new Error('rejected'); } }) } };
-  assert.equal(await client.saveRatio(throwing, 0.5), false, '写入抛错 → false（不崩）');
-});
+  const invalidCalls = [];
+  const invalid = await client.saveAttempt({ raw: '15', snapshot: {}, configForms: { get: () => ({ set: () => { invalidCalls.push('sent'); } }) } });
+  assert.equal(invalid.ok, false);
+  assert.equal(invalid.requestSent, false, '非法值不得发请求');
+  assert.equal(invalidCalls.length, 0);
+  assert.match(invalid.error, /下限 0\.2/);
 
+  const rejected = await client.saveAttempt({ raw: '55', snapshot: {}, configForms: { get: () => ({ set: () => { throw new Error('rejected by host'); } }) } });
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.requestSent, true);
+  assert.match(rejected.error, /rejected by host/, '失败保留原因（输入由组件保留）');
+
+  const unavailable = await client.saveAttempt({ raw: '55', snapshot: {}, configForms: {} });
+  assert.equal(unavailable.ok, false);
+  assert.equal(unavailable.requestSent, false);
+});
 test('C14 保存前计算：校验与 /cg set 同源（<20% / <30% ack / 项目层 <45% / native 上限）', async () => {
   const client = await loadClient();
   assert.deepEqual(client.computeSave('55', { at: 0.6, source: 'plugin' }), { ok: true, ratio: 0.55 });
@@ -508,4 +517,67 @@ test('C20 静态守卫：client.js 不得出现 subscribe(...)() 立即退订；
   assert.match(source, /addEventListener\('focus'/, '窗口重新聚焦重取');
   assert.match(source, /slice\(0, 80\)|slice\(0,80\)|toRatio/, '百分比换算仍在');
 });
+
+
+test('C21 交互守卫：组件必须拿到插件 ctx（不能只靠 props.ctx）+ 打开时预填当前值', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const source = await readFile(path.join(process.cwd(), 'lib/client.js'), 'utf8');
+  assert.match(source, /const components = \{ chip: createChip\(state, store, ctx\)/, '组件必须由 apply 注入插件 ctx');
+  assert.match(source, /const ctx = pluginCtx \?\? props\?\.ctx \?\? props;/, 'ctx 优先取闭包注入，props.ctx 仅兜底');
+  assert.equal(/const ctx = props\?\.ctx \?\? props;/.test(source), false, '不得再只依赖 props.ctx（真实宿主 slot props 不含 ctx）');
+  assert.match(source, /String\(Math\.round\(view\.at \* 100\)\)/, '打开气泡时预填当前百分比');
+});
+
+
+test('C21 结构/关闭/无障碍/默认值来源：U2/U6/U7/U8/U10', async () => {
+  const client = await loadClient();
+  const warns = [];
+  const missing = client.bubbleView(null);
+  assert.equal(missing.canSave, false, 'U8：无快照时保存禁用');
+  assert.equal(missing.percentText, '—');
+  assert.equal(missing.fields.length, 3, '来源层/生命周期/写入层三行');
+  assert.equal(missing.defaultPercent, 60);
+
+  const view = client.bubbleView({ at: 0.45, source: 'project', defaultAt: 0.45 });
+  assert.equal(view.canSave, true);
+  assert.equal(view.percentText, '45%', 'U2：大号当前值');
+  assert.equal(view.fields[0], '来源层：project');
+  assert.match(view.fields[1], /保存后生效、重启仍有效/);
+  assert.equal(view.fields[2], '本次修改写入：plugin 层（profile patch）');
+  assert.equal(view.defaultPercent, 45, 'U6：默认值用 snapshot.defaultAt（非写死 60）');
+
+  const fallback = client.defaultRatioFor({}, (line) => warns.push(line));
+  assert.equal(fallback, 0.6);
+  assert.equal(warns.some((line) => /missing defaultAt/.test(line)), true, '缺字段必须 warn');
+  // 反复开合 5 次（模拟多次渲染/读取）：只允许 1 条 warn。
+  for (let round = 0; round < 5; round += 1) client.defaultRatioFor({}, (line) => warns.push(line));
+  assert.equal(warns.filter((line) => /missing defaultAt/.test(line)).length, 1, '多次渲染只 warn 1 次（模块级 flag）');
+
+  for (const reason of ['escape', 'outside', 'chip', 'saved']) assert.equal(client.closeDecision(reason), true);
+  assert.equal(client.closeDecision('typing'), false);
+
+  const { readFile } = await import('node:fs/promises');
+  const source = await readFile(path.join(process.cwd(), 'lib/client.js'), 'utf8');
+  assert.equal(/alert\s*\(|prompt\s*\(|confirm\s*\(/.test(source), false, 'U10：不得用 alert/prompt/confirm');
+  assert.equal(/type:\s*'range'|input\([^)]*range/.test(source), false, 'U10：不得用滑块');
+  assert.match(source, /role: 'dialog'/);
+  assert.match(source, /'aria-invalid'/);
+  assert.match(source, /role: 'alert'/);
+  assert.match(source, /aria-live/);
+  assert.match(source, /var\(--[\w-]+, /, 'U10：CSS 变量必须带 fallback');
+  assert.match(source, /restoreDefault = \(\) => \{ setDraft/, 'U6：恢复默认只填值不保存');
+});
+
+test('C22 输入清洗：全角/百分号/空格归一；非法不落到 set', async () => {
+  const client = await loadClient();
+  assert.equal(client.normalizePercentInput('５５％'), '55');
+  assert.equal(client.normalizePercentInput(' 60 % '), '60');
+  assert.equal(client.normalizePercentInput('abc'), '');
+  assert.equal(client.normalizePercentInput('12.345'), '12.34');
+  assert.equal(client.normalizePercentInput('60.5'), '60.5');
+  assert.equal(client.toRatio(' 60 % '), 0.6);
+  assert.equal(client.toRatio('abc'), null);
+});
+
+
 

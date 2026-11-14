@@ -1,3 +1,5 @@
+import { POLICY_DEFAULTS } from './policy.js';
+
 /**
  * 1.1.0 D2：设置页 → 策略的纯函数层（可单测，无副作用、不引宿主依赖）。
  *
@@ -61,6 +63,7 @@ export function policySnapshot(policy, { native = null } = {}) {
     sessionOverride: source === 'session' && at !== null ? at : null,
     effectiveAt: lifecycleText(source),
     native: Number.isFinite(native) ? Number(native) : null,
+    defaultAt: POLICY_DEFAULTS['compact.at'],
   };
 }
 
@@ -123,4 +126,3 @@ export function createSnapshotHandler({ getPolicy, getNative, onError = null }) 
     }
   };
 }
-
