@@ -28,11 +28,13 @@ import {
   ENTRY_TYPES,
   MemoryContractError,
   assertStatusTransition,
+  checkMachineEntryReadable,
   formatPointer,
   localDateId,
   normalizeDraft,
   normalizePatch,
   normalizeTitleKey,
+  titleKeyMatches,
   nextEntryId,
 } from './contract.js';
 import {
@@ -362,6 +364,7 @@ export class MemoryStore {
     const used = new Set([...this.#entries.keys(), ...this.#protectionEntries.keys()]);
     let counter = PROTECTION_ID_FLOOR;
     const entries = [];
+    let skipped = 0;
     for (const item of items) {
       const detail = String(item?.detail ?? '').trim();
       const draft = normalizeDraft({
@@ -386,7 +389,16 @@ export class MemoryStore {
         counter += 1;
       } while (used.has(id));
       used.add(id);
-      entries.push({ ...draft, id, createdAt, updatedAt: createdAt });
+      // 1.0.3 准入（A 口径）：protectSync 是保护链路起点，坏条目在这里就挡住，
+      // 绝不写进 journal（否则真机又只能靠"条目数变多"倒推）。
+      const entry = { ...draft, id, createdAt, updatedAt: createdAt };
+      const admitted = this.#admitEntry(entry);
+      if (admitted.ok !== true) {
+        skipped += 1;
+        this.#warnings.push(`protectSync cycle ${key}: skipped unreadable item ${id} (${admitted.reason})`);
+        continue;
+      }
+      entries.push(entry);
     }
 
     const journal = {
@@ -428,6 +440,22 @@ export class MemoryStore {
     return path.join(this.#rootDir, PROTECTION_DIR_NAME, `${safe}-${hashText(cycleKey).slice(0, 8)}.json`);
   }
 
+  /**
+   * 1.0.3-B：journal 里的条目**全部**已超 proposed TTL 时，视为过期 journal。
+   * 过期 journal 不再物化（"先脏后清"没意义），由 `materializeProtection` 直接归档。
+   */
+  #isJournalExpired(entries) {
+    const ttlDays = this.#proposedTtlDays;
+    if (ttlDays <= 0) return false;
+    if (!Array.isArray(entries) || entries.length === 0) return false;
+    const nowMs = this.#now().getTime();
+    const ttlMs = ttlDays * 24 * 60 * 60 * 1000;
+    return entries.every((entry) => {
+      const created = Date.parse(entry?.createdAt);
+      return Number.isFinite(created) && nowMs - created > ttlMs;
+    });
+  }
+
   async #loadProtectionJournals() {
     this.#protectionEntries.clear();
     this.#journalEntries.clear();
@@ -449,6 +477,14 @@ export class MemoryStore {
           this.#warnings.push(`ignored malformed protection journal ${name}`);
           continue;
         }
+        // 1.0.3 准入（A 口径）：journal 读入也过 `#admitEntry`；坏条目整册跳过并留一行原因+计数。
+        const rejected = entries.map((entry) => this.#admitEntry(entry)).filter((verdict) => verdict.ok !== true);
+        if (rejected.length > 0) {
+          this.#warnings.push(
+            `ignored unreadable protection journal ${name}: ${rejected.length}/${entries.length} entries (${rejected[0].reason})`,
+          );
+          continue;
+        }
         this.#journalEntries.set(journal.cycleKey, entries);
         for (const entry of entries) this.#protectionEntries.set(entry.id, entry);
       } catch (error) {
@@ -466,6 +502,24 @@ export class MemoryStore {
   }
 
   /**
+   * 1.0.3 准入（保护链路唯一写入口，A 口径）：**所有**保护条目的 `#entries` 写入都从这里过。
+   * 判据对齐真机 #5：标题可读（非截断/未闭合反引号）、正文 trim 后非空、`source` 可解析。
+   * **不抛错**：返回 `{ok, reason}`，调用方"跳过 + warning"，绝不因一条坏数据中断压缩。
+   * `store.create()` 低层 API 不在此列（by design，见 docs/记忆契约-v1.md §12）。
+   */
+  #admitEntry(entry, { commit = false } = {}) {
+    const verdict = checkMachineEntryReadable({ title: entry?.title, detail: entry?.detail });
+    if (verdict.ok !== true) return { ok: false, reason: verdict.reason };
+    const source = typeof entry?.source === 'string' ? entry.source.trim() : '';
+    if (!/^[A-Za-z][\w-]*:\S+$/.test(source)) return { ok: false, reason: 'source-unparsable' };
+    if (entry?.evidence !== undefined && entry?.evidence !== null && String(entry.evidence).trim() === '') {
+      return { ok: false, reason: 'evidence-empty' };
+    }
+    if (commit) this.#entries.set(entry.id, entry);
+    return { ok: true, reason: null };
+  }
+
+  /**
    * 把保护 journal 并入主题文件（异步，走单写者队列）。
    * 若在 checkpoint 后尚未完成，`query`/`get` 仍可从 `#protectionEntries` 读到。
    */
@@ -474,9 +528,18 @@ export class MemoryStore {
     const key = String(cycleKey);
     const entries = this.#journalEntries.get(key);
     if (entries === undefined) return { moved: 0, ids: [] };
+    // 1.0.3-B：过期 journal 不物化，直接归档到 protection/orphaned/（内容留给审计）。
+    if (this.#isJournalExpired(entries)) {
+      const archived = await this.archiveProtection(key, { reason: 'ttl-expired' });
+      if (archived.ok !== true) {
+        this.#warnings.push(`expired protection journal ${key} could not be archived: ${archived.reason ?? 'unknown'}`);
+      }
+      return { moved: 0, ids: [], archived: archived.ok === true, expired: true };
+    }
     const result = await this.#transact(() => {
       const dirty = new Set();
       const ids = [];
+      let skipped = 0;
       for (const entry of entries) {
         ids.push(entry.id);
         this.#protectionEntries.delete(entry.id);
@@ -484,10 +547,19 @@ export class MemoryStore {
         // 1.0.3 条款 3：同标题（归一化）在窗口内只保留 1 条——物化时跳过重复；
         // 本周期回注已用 journal 里的指针，不受影响（否则会丢回注）。
         if (this.#findRecentByTitle(entry.title) !== null) continue;
-        this.#entries.set(entry.id, entry);
+        // 1.0.3 准入（A 口径）：物化前过 `#admitEntry`，它同时是保护链路**唯一**写 `#entries` 的地方。
+        const admitted = this.#admitEntry(entry, { commit: true });
+        if (admitted.ok !== true) {
+          skipped += 1;
+          this.#warnings.push(`skipped unreadable protection entry ${entry.id}: ${admitted.reason}`);
+          continue;
+        }
         dirty.add(entry.type);
       }
-      return { dirty, value: { moved: ids.length, ids } };
+      if (skipped > 0) {
+        this.#warnings.push(`protection cycle ${key}: skipped ${skipped}/${entries.length} unreadable entries`);
+      }
+      return { dirty, value: { moved: ids.length, ids, skipped } };
     });
     try {
       await fs.rm(this.#journalPath(key), { force: true });
@@ -677,7 +749,8 @@ export class MemoryStore {
       if (entry.status === 'expired') continue;
       // 1.0.3：正文为空的旧条目（1.0.2 遗留）不参与去重，避免把"读不出"的旧条目当成同内容而拒绝新条目。
       if (String(entry.detail ?? '').trim() === '') continue;
-      if (normalizeTitleKey(entry.title) !== key) continue;
+      // 1.0.3-B(5b)：同一指针被续写（前缀近似）也算同一条；只做全等会漏。
+      if (!titleKeyMatches(key, normalizeTitleKey(entry.title))) continue;
       const created = Date.parse(entry.createdAt);
       if (Number.isFinite(created) && nowMs - created <= windowMs) return entry;
     }

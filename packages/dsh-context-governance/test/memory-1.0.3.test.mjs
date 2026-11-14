@@ -10,6 +10,8 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { MemoryStore } from '../src/memory/store.js';
+import { detectTitleTruncation } from '../src/memory/contract.js';
+import { buildProtectionItems } from '../src/compress/protection-memory.js';
 import { MEM_WRITE_NAME, createMemoryTools } from '../src/tools/mem-tools.js';
 import { resolveConfig } from '../src/index.js';
 import { tempDir } from './helpers.mjs';
@@ -222,4 +224,98 @@ test('1.0.3 守卫：生产代码里 `.create(` 直调只允许 mem-tools.js 一
   }
   assert.equal(hits.length, 1, `直调点应为 1 处，实际：${JSON.stringify(hits)}`);
   assert.equal(hits[0].rel, 'src/tools/mem-tools.js');
+});
+
+test('1.0.3-B 回归（红）：过期 journal 不物化，直接归档', async () => {
+  const rootDir = await tempDir();
+  const s1 = await MemoryStore.open({ rootDir, project: 'test-project' });
+  s1.protectSync({ cycleKey: 'old-cycle', items: [{ type: 'fact', title: '旧条目', detail: '正文', source: 'session:s#1' }] });
+  await s1.close();
+  const dir = path.join(rootDir, 'protection');
+  const name = (await fs.readdir(dir)).find((n) => n.endsWith('.json'));
+  const file = path.join(dir, name);
+  const journal = JSON.parse(await fs.readFile(file, 'utf8'));
+  journal.entries[0].createdAt = '2026-01-01T00:00:00.000Z';
+  journal.entries[0].updatedAt = journal.entries[0].createdAt;
+  await fs.writeFile(file, JSON.stringify(journal), 'utf8');
+  const s2 = await MemoryStore.open({ rootDir, project: 'test-project' });
+  try {
+    assert.equal(s2.allEntries().length, 0, '过期 journal 不得物化');
+    const archived = await fs.readdir(path.join(dir, 'orphaned')).catch(() => []);
+    assert.ok(archived.length >= 1, '应归档到 orphaned/');
+  } finally { await s2.close(); await fs.rm(rootDir, { recursive: true, force: true }); }
+});
+
+test('1.0.3-5b 回归（红）：前缀近似的回滚点标题只留 1 条', async () => {
+  const rootDir = await tempDir();
+  const store = await MemoryStore.open({ rootDir, project: 'test-project' });
+  try {
+    store.protectSync({ cycleKey: 'c1', items: [{ type: 'anchor', title: '回滚点：G:\\DS-HARNESS', detail: '正文', source: 'session:s#1' }] });
+    store.protectSync({ cycleKey: 'c2', items: [{ type: 'anchor', title: '回滚点：G:\\DS-HARNESS（见记忆）', detail: '正文', source: 'session:s#2' }] });
+    await store.materializeProtection('c1');
+    await store.materializeProtection('c2');
+    const anchors = store.allEntries().filter((e) => e.title.startsWith('回滚点'));
+    assert.equal(anchors.length, 1, '前缀近似应合并为 1 条');
+  } finally { await store.close(); await fs.rm(rootDir, { recursive: true, force: true }); }
+});
+test('1.0.3-5c 回归：生成侧 anchor 标题不留残句（安全切分/退回指针）', () => {
+  const base = { latestUser: null, rules: [], batch: null, unpairedCalls: [] };
+  // 真机 #5 的残尾：未闭合反引号 + 半句「（见记忆」。
+  const bad = buildProtectionItems(
+    { ...base, rollback: { paths: [], keyword: 'G:\\DS-HARNESS`（见记忆', seq: 7 } },
+    { sessionId: 'session-1f3', cycleKey: 'c5c' },
+  );
+  const anchor = bad.items.find((item) => item.type === 'anchor');
+  assert.ok(anchor, '应生成 anchor 保护项');
+  assert.equal(detectTitleTruncation(anchor.title), null, `标题不得截断：${anchor.title}`);
+  assert.equal(anchor.title, '回滚点');
+
+  // 超长标题仍只在安全边界切，切完不得被判截断。
+  const long = buildProtectionItems(
+    { ...base, rollback: { paths: [], keyword: `回滚点 ${'x'.repeat(300)}`, seq: 8 } },
+    { sessionId: 'session-1f3', cycleKey: 'c5c-2' },
+  );
+  for (const item of long.items) {
+    assert.equal(detectTitleTruncation(item.title), null, `标题不得截断：${item.title}`);
+  }
+});
+
+test('1.0.3 准入守卫：journal 坏条目读入即跳过（不物化 + warning 一行带原因与计数）', async () => {
+  const rootDir = await tempDir();
+  const s1 = await MemoryStore.open({ rootDir, project: 'test-project' });
+  s1.protectSync({ cycleKey: 'bad-cycle', items: [{ type: 'anchor', title: '回滚点：G:\\DS-HARNESS', detail: '正文', source: 'session:s#1' }] });
+  await s1.close();
+  const dir = path.join(rootDir, 'protection');
+  const name = (await fs.readdir(dir)).find((n) => n.endsWith('.json'));
+  const file = path.join(dir, name);
+  const journal = JSON.parse(await fs.readFile(file, 'utf8'));
+  journal.entries[0].title = '回滚点：'; // 截断标题：保护链路必须挡住
+  await fs.writeFile(file, JSON.stringify(journal), 'utf8');
+  const s2 = await MemoryStore.open({ rootDir, project: 'test-project' });
+  try {
+    assert.equal(s2.allEntries().length, 0, '坏条目不得物化');
+    const hit = s2.warnings.find((line) => /ignored unreadable protection journal/.test(line));
+    assert.ok(hit, `应有跳过 warning，实际：${JSON.stringify(s2.warnings)}`);
+    assert.match(hit, /1\/1 entries \(title-cut-separator\)/);
+  } finally { await s2.close(); await fs.rm(rootDir, { recursive: true, force: true }); }
+});
+
+test('1.0.3 守卫扩散：`#entries.set(` 只允许经 `#admitEntry`（低层装载/更新除外），保护链路禁直写', async () => {
+  const src = await fs.readFile(path.join(process.cwd(), 'src/memory/store.js'), 'utf8');
+  const methodStart = /^  (?:async\s+)?(#[A-Za-z_$][\w$]*|[A-Za-z_$][\w$]*)\s*\(/;
+  let method = null;
+  const hits = [];
+  src.split(/\r?\n/).forEach((line, index) => {
+    const found = methodStart.exec(line);
+    if (found !== null) method = found[1];
+    if (line.includes('#entries.set(')) hits.push({ method, line: index + 1 });
+  });
+  assert.ok(hits.length > 0, '应能扫到写入点');
+  const allowed = new Set(['#loadAll', '#recoverCorruptTopic', '#admitEntry', 'create', 'update', 'confirm', 'expire', 'supersede']);
+  for (const hit of hits) {
+    assert.ok(allowed.has(hit.method), `第 ${hit.line} 行在 ${hit.method} 内直写 #entries.set(；保护链路只能经 #admitEntry`);
+  }
+  assert.ok(hits.some((hit) => hit.method === '#admitEntry'), '`#admitEntry` 必须存在且是写入口');
+  assert.ok(!hits.some((hit) => hit.method === 'materializeProtection'), 'materializeProtection 不得直写 #entries.set(');
+  assert.ok(!hits.some((hit) => hit.method === '#loadProtectionJournals'), '#loadProtectionJournals 不得直写 #entries.set(');
 });

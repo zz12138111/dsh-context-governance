@@ -168,6 +168,24 @@ export function normalizeTitleKey(title) {
     .replace(/[^0-9a-z\u3400-\u9fff]/g, '');
 }
 
+/** 1.0.3：前缀近似合并的最短公共前缀（太短的同名前缀不算同一条）。 */
+const TITLE_PREFIX_MIN = 8;
+
+/**
+ * 标题键"前缀近似"判定（1.0.3 去重口径，5b）。
+ * 实测同一指针被续写会变成两个键：`回滚点：G:\DS-HARNESS`` 与 `回滚点：G:\DS-HARNESS`（见记忆`。
+ * 键完全相同，或较长键以较短键开头且较短键长度 ≥ `TITLE_PREFIX_MIN`，视为同一条内容。
+ */
+export function titleKeyMatches(a, b) {
+  const left = String(a ?? '');
+  const right = String(b ?? '');
+  if (left === right) return left !== '';
+  if (left === '' || right === '') return false;
+  const [short, long] = left.length <= right.length ? [left, right] : [right, left];
+  if (short.length < TITLE_PREFIX_MIN) return false;
+  return long.startsWith(short);
+}
+
 const TITLE_CUT_TAIL = /[：:，,、;；/\\\-—–（(【\[`]$/;
 
 /**

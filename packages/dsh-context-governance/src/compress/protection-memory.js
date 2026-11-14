@@ -8,7 +8,7 @@
  * - 顺序固定：① 最新用户 ② 规则 ③ 批次 ④ 回滚点 ⑤ 未闭合调用。
  */
 
-import { ENTRY_TYPES, detectSensitive } from '../memory/contract.js';
+import { ENTRY_TYPES, detectSensitive, detectTitleTruncation } from '../memory/contract.js';
 
 const MAX_TITLE = 200;
 
@@ -37,7 +37,11 @@ function sanitizeTitle(value, fallback) {
   let title = String(value ?? '').replace(/\s+/g, ' ').trim();
   if (title === '') title = fallback;
   if (detectSensitive(title) !== null) return fallbackSensitive(title, fallback);
-  return cutTitle(title);
+  const cut = cutTitle(title);
+  // 1.0.3-5c：切分后仍被判"截断"（未闭合反引号 / 残尾分隔符 / 省略号）就退回指针式标题，
+  // 绝不把半句写进库——真机 #5 的 `回滚点：G:\DS-HARNESS`（见记忆` 就是这么来的。
+  if (detectTitleTruncation(cut) !== null) return String(fallback ?? '').trim();
+  return cut;
 }
 
 function fallbackSensitive(_value, fallback) {
