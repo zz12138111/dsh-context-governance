@@ -14,8 +14,10 @@
  *   - rollback-point       含回滚/备份/还原点的消息
  *   - artifact             摘要 + checkpoint 产物存在
  *
- * 快照保留 seq/类型/标记数字与路径；P3 修复另在内存中保留 latest-user/rule 的**重建载荷**
- * （text/source），仅用于压缩后 surface 重建，不写记忆、不写审计、不落盘。
+ * 快照保留 seq/类型/标记数字与路径。压缩后**只重建 latest-user** 的内容副本；
+ * `rule-injection` 不重建（`delegated` 留痕）：当前指令/目录由宿主下个 pre-step
+ * 自愈（dsh-agent-instructions 重读盘、dsh-tool-skill 按 digest 重发），历史修订版
+ * 不重放。重建载荷（text/source）只在内存中保留，不写记忆、不写审计、不落盘。
  */
 
 import { randomUUID } from 'node:crypto';
@@ -357,18 +359,18 @@ function rebuildMessage(source, text, compactionId) {
 }
 
 /**
- * P3 修复：宿主压缩后 latest-user / rule-injection 被 shadow 时，用压缩前保留的
- * 同源内容 append 一个新副本，再让 verifyProtection 按新 seq 核对。
+ * 用户 A：宿主压缩后只重建 `latest-user` 的内容副本（同源 text/source，新 seq 供校验）。
+ * `rule-injection`（指令/目录，含 skill-catalog）**不重建**，只记 `delegated(host-self-heal)`；
+ * 当前指令/目录由宿主下个 pre-step 自愈（read-disk / digest 重发），历史修订版不重放。
  *
- * 只重建被 shadow 且没有更新副本的项；append 失败不抛，保留原 seq，由 loss 审计暴露。
- * 返回实际 append 的 seq，供测试断言“内容级重建”，不是只看 memory 条数。
+ * append 失败不抛，保留原 seq，由 loss 审计暴露；返回 latestUser 的实际 append seq。
  */
 export function rebuildProtectionSurface(session, snapshot, {
   shadowedSeqs = [],
   postSurfaceNodes = null,
   compactionId = null,
 } = {}) {
-  const rebuilt = { latestUser: null, rules: [], failures: [], skipped: [] };
+  const rebuilt = { latestUser: null, rules: [], failures: [], skipped: [], delegated: [] };
   if (snapshot === null || typeof snapshot !== 'object') return rebuilt;
   if (typeof session?.append !== 'function') {
     rebuilt.failures.push('session-append-unavailable');
@@ -404,39 +406,17 @@ export function rebuildProtectionSurface(session, snapshot, {
     rebuilt.failures.push('latest-user-payload-missing');
   }
 
+  // 用户 A（官方自愈口径）：指令/目录（含 skill-catalog）不在插件侧重建立。
+  // 宿主每个 pre-step 会重读盘并重发 baseline（dsh-agent-instructions/src/index.ts:330-356），
+  // 并按 digest 重发目录（dsh-tool-skill/src/index.ts:217-246）；历史修订版不重放。
   for (const rule of [...snapshot.rules]) {
     const isShadowed = shadowed.has(rule.seq) || !after.has(rule.seq);
     if (!isShadowed) continue;
-    const hasNewer = snapshot.rules.some((candidate) => candidate.seq > rule.seq
-      && (candidate.kind ?? candidate.source?.kind) === (rule.kind ?? rule.source?.kind)
-      && candidate.seq !== rule.seq
-      && !shadowed.has(candidate.seq)
-      && after.has(candidate.seq));
-    if (hasNewer) continue;
-    if (typeof rule.text !== 'string' || rule.text === '') {
-      rebuilt.failures.push('rule-payload-missing');
-      continue;
-    }
-    // D-MGMT-021：宿主 system/message 需要 data.turn/step，且恢复期要求等于当前 open
-    // turn/step（relationships.ts 的 STEP_EVENT_TYPES/requireStep）；压缩事务恒在
-    // turn/end 之后，没有 open step，该形态重建会产出编码期/恢复期非法事件。
-    // 故该形态在此处不重建，只记 skipped 留痕（实现行为描述；验收口径见 C34）。
-    if (rule.type === 'system/message') {
-      rebuilt.skipped.push({
-        ruleSeq: rule.seq,
-        kind: rule.kind ?? rule.source?.kind ?? null,
-        reason: 'no-open-step',
-        // 仅内部用于"宿主是否逐字节重发"判定；不写审计（审计不放正文）。
-        text: typeof rule.text === 'string' ? rule.text : null,
-      });
-      continue;
-    }
-    const message = rebuildMessage(rule.source, rule.text, compactionId);
-    const seq = append('user/message', message);
-    if (seq === null) continue;
-    const copy = { ...rule, originalSeq: rule.seq, seq, rebuilt: true };
-    snapshot.rules.push(copy);
-    rebuilt.rules.push({ seq, originalSeq: rule.seq, chars: rule.text.length, kind: rule.kind });
+    rebuilt.delegated.push({
+      ruleSeq: rule.seq,
+      kind: rule.kind ?? rule.source?.kind ?? null,
+      reason: 'host-self-heal',
+    });
   }
   return rebuilt;
 }
@@ -502,6 +482,7 @@ export function verifyProtection({
   postSurfaceNodes = null,
   adapterKind = 'unknown',
   manual = null,
+  delegateRuleInjection = false,
 }) {
   const summaryText = summaryTextOf(summaryEvent);
   const summaryReadable = summaryText.trim().length > 0;
@@ -561,9 +542,18 @@ export function verifyProtection({
     return !hasNewer;
   });
   if (lostRules.length > 0) {
-    checks.push(check('rule-injection', 'fail', `${lostRules.length} rule injection(s) shadowed with no newer copy`, {
-      seqs: lostRules.map((rule) => rule.seq),
-    }));
+    if (delegateRuleInjection) {
+      // 用户 A：指令/目录由宿主每 pre-step 自愈（read-disk / digest 重发），插件不再重建，
+      // 因此不把 rule-injection 计入失败；留 skip 供对账。
+      checks.push(check('rule-injection', 'skip', `${lostRules.length} rule injection(s) delegated to host self-heal`, {
+        seqs: lostRules.map((rule) => rule.seq),
+        reason: 'host-self-heal',
+      }));
+    } else {
+      checks.push(check('rule-injection', 'fail', `${lostRules.length} rule injection(s) shadowed with no newer copy`, {
+        seqs: lostRules.map((rule) => rule.seq),
+      }));
+    }
   } else if (shadowedRules.length > 0) {
     checks.push(check('rule-injection', 'pass', `${shadowedRules.length} superseded rule copy/copies shadowed; newer copies retained`));
   } else {

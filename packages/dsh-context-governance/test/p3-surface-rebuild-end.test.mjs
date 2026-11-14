@@ -88,44 +88,26 @@ test('D-MGMT-021 end-order：latest/user 副本重建，system 形态 skip 并�
     assert.ok(report);
     assert.equal(report.checks.find((item) => item.name === 'latest-user-message').status, 'pass');
     const ruleCheck = report.checks.find((item) => item.name === 'rule-injection');
-    assert.equal(ruleCheck?.status, 'fail', '被 skip 的 system 规则不得计为 pass');
-    assert.deepEqual(ruleCheck.seqs, [0]);
+    assert.equal(ruleCheck?.status, 'skip', '用户 A：指令交宿主自愈，skip 而非 fail');
+    assert.equal(ruleCheck.reason, 'host-self-heal');
+    assert.equal(report.ok, true);
 
-    // 零 system/message append + 两条 user 副本（latest + agent-instructions）。
+    // 只重建 latestUser：零 system/message append，且不再复制指令（AGENTS.md rules）。
     assert.equal(session.appended.filter((item) => item.type === 'system/message').length, 0);
     const latestCopy = session.appended.find((item) => item.type === 'user/message'
       && item.data?.content?.[0]?.text === '最新一条用户消息：继续。');
-    const ruleCopy = session.appended.find((item) => item.type === 'user/message'
-      && item.data?.content?.[0]?.text === 'AGENTS.md rules');
     assert.ok(latestCopy, '必须 append latest-user 内容副本');
-    assert.ok(ruleCopy, 'user 形态规则副本必须保留');
+    assert.equal(session.appended.filter((item) => item.type === 'user/message'
+      && item.data?.content?.[0]?.text === 'AGENTS.md rules').length, 0, '指令不再重建');
     assert.ok(session.surface.nodes.includes(latestCopy.seq));
-    assert.ok(session.surface.nodes.includes(ruleCopy.seq));
 
-    // 审计闭环（v3b pending）：skip 进 pending 第三态，window 内无重发 → stop 时结算 unacceptable。
-    const skipped = audits.filter((item) => item.event === 'surface-rebuild-skipped');
-    assert.equal(skipped.length, 1);
-    assert.equal(skipped[0].details.ruleSeq, 0);
-    assert.equal(skipped[0].details.kind, 'system-prompt');
-    assert.equal(skipped[0].details.reason, 'no-open-step');
-    assert.equal(skipped[0].details.disposition, 'pending', 'pending 期间不得判死');
-    assert.equal(skipped[0].details.lossClass, 'pending');
-    assert.equal(skipped[0].details.compactionId, built.compactionId);
-    // pending 期间不得写 loss / accepted。
+    // 用户 A 后不再产生 pending 三态：无 skip/resolved/loss。
+    assert.equal(audits.filter((item) => item.event === 'surface-rebuild-skipped').length, 0);
+    assert.equal(audits.filter((item) => item.event === 'surface-rebuild-resolved').length, 0);
     assert.equal(audits.filter((item) => item.event === 'compaction-loss').length, 0);
-    assert.equal(audits.filter((item) => item.event === 'compaction-loss-accepted').length, 0);
 
     await guard.flush();
     guard.stop();
-    // stop = session-ended 兜底结算：一条终态 resolved(unacceptable) + 一条 loss。
-    const resolved = audits.filter((item) => item.event === 'surface-rebuild-resolved');
-    assert.equal(resolved.length, 1);
-    assert.equal(resolved[0].details.disposition, 'unacceptable');
-    assert.equal(resolved[0].details.reason, 'session-ended');
-    const loss = audits.filter((item) => item.event === 'compaction-loss');
-    assert.equal(loss.length, 1);
-    assert.equal(loss[0].details.disposition, 'unacceptable');
-    assert.deepEqual(loss[0].details.failures, ['rule-injection']);
   } finally {
     await store.close().catch(() => {});
     await fs.rm(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });

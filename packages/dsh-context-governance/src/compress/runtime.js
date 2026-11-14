@@ -208,7 +208,7 @@ export class CompressionGuard {
   /** 1.0 #1：会话归域判定（由 index 注入 resolveScope；缺省用根边界兜底）。 */
   #scopeResolver = null;
   #captureTitle = true;
-  /** D-MGMT-021 回滚开关：false 时整段 surface 重建跳过（默认 true）。 */
+  /** 用户 A 回滚开关：false 时整段 surface 重建（现只含 latestUser）跳过（默认 true）。 */
   #rebuildEnabled = true;
   #scopeWarned = new Set();
   #lastInjection = new Map();
@@ -2631,12 +2631,12 @@ export class CompressionGuard {
           state.finalized = true;
           this.#pending.delete(id);
           // 宿主在 compaction/end 发布期仍会拒绝同步 session.append（与回注同因）。
-          // 因此把 surface 重建 + 校验整体推迟到 end 发布后的首个 microtask；
+          // 因此把 latestUser surface 重建 + 校验整体推迟到 end 发布后的首个 microtask；
           // 这样 rebuild 的 append 与既有回注 append 走同一安全窗口。
           queueMicrotask(() => {
             try {
           const postSurfaceBeforeRebuild = Array.isArray(session?.surface?.nodes) ? [...session.surface.nodes] : null;
-          // D-MGMT-021：`protection.rebuild.enabled=false` 是回滚开关，整段重建跳过（含 user）。
+          // 用户 A：`protection.rebuild.enabled=false` 是回滚开关，latestUser 重建也跳过。
           let rebuilt = { latestUser: null, rules: [], failures: [], skipped: [] };
           if (this.#rebuildEnabled) {
             rebuilt = rebuildProtectionSurface(session, state.snapshot, {
@@ -2663,6 +2663,8 @@ export class CompressionGuard {
             postSurfaceNodes,
             adapterKind: this.#adapter.kind,
             manual: state.manual ?? null,
+            // 用户 A：指令/目录由宿主 pre-step 自愈，插件不重建、不计 rule-injection 失败。
+            delegateRuleInjection: true,
           });
           state.report = this.#record(report, state);
           // 保护校验中有“明确原因”的 skip（如 batch 只有关键字、没有数字比例）要留痕，便于回溯改判。
@@ -2680,6 +2682,8 @@ export class CompressionGuard {
             });
           }
           if (this.#rebuildEnabled) {
+          // C34 遗留（已无对象，保留待 C35 批后单独删）：system 规则不再重建 → skipped 恒空，
+          // 本段不会写 surface-rebuild-* 事件；保留仅为减少本轮改动面。
           // D-MGMT-021 v3b：pending 第三态。system 规则不重建 → 每条登记 pending，
           // 等后续轮次出现"更新的原生同 kind system/message"再转 accepted；窗口无重发/
           // 会话结束/重启 → unacceptable。kind 非空时不看 sha256（宿主重发内容会变），

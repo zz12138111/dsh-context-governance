@@ -85,7 +85,7 @@ test('P3 规则标题：source 为对象时按 kind 归并，标题精确为字�
   assert.equal(criterion.title.includes('[object Object]'), false);
 });
 
-test('D-MGMT-021：system 形态规则不重建（skip 留痕），user 形态规则照常重建', () => {
+test('用户 A：指令/目录不重建（宿主 pre-step 自愈），只重建 latestUser', () => {
   const built = buildCompaction({
     before: healthyMessages(),
     summary: FIVE_SECTION_SUMMARY,
@@ -120,16 +120,16 @@ test('D-MGMT-021：system 形态规则不重建（skip 留痕），user 形态�
     postSurfaceNodes: [...live.surface.nodes],
     compactionId: built.compactionId,
   });
-  assert.notEqual(rebuilt.latestUser, null);
-  // seq0 是 system/message（system-prompt）→ 不重建；seq1 是 user/message（agent-instructions）→ 照常重建。
-  assert.equal(rebuilt.skipped.length, 1);
-  assert.equal(rebuilt.skipped[0].ruleSeq, 0);
-  assert.equal(rebuilt.skipped[0].kind, 'system-prompt');
-  assert.equal(rebuilt.skipped[0].reason, 'no-open-step');
-  assert.equal(typeof rebuilt.skipped[0].text, 'string', 'skipped 内部保留原文用于 a/b 逐字节判定');
-  assert.equal(rebuilt.rules.length, 1);
-  assert.equal(rebuilt.rules[0].originalSeq, 1);
+  assert.notEqual(rebuilt.latestUser, null, 'latestUser 仍重建');
+  // 用户 A：system 与 user 形态的规则都不重建，全部委派宿主自愈。
+  assert.equal(rebuilt.rules.length, 0);
+  assert.equal(rebuilt.skipped.length, 0);
+  assert.equal(rebuilt.delegated.length, 2);
+  assert.deepEqual(rebuilt.delegated.map((item) => item.ruleSeq), [0, 1]);
+  assert.equal(rebuilt.delegated[0].reason, 'host-self-heal');
   assert.equal(appended.filter((item) => item.type === 'system/message').length, 0, 'system/message 不得 append');
+  assert.equal(appended.filter((item) => item.type === 'user/message'
+    && item.data?.content?.[0]?.text === 'AGENTS.md rules').length, 0, '指令副本不得重建');
 
   const report = verifyProtection({
     snapshot,
@@ -138,21 +138,16 @@ test('D-MGMT-021：system 形态规则不重建（skip 留痕），user 形态�
     postSurfaceNodes: [...live.surface.nodes],
     adapterKind: built.source,
     manual: true,
+    delegateRuleInjection: true,
   });
   assert.equal(report.checks.find((check) => check.name === 'latest-user-message').status, 'pass');
   const ruleCheck = report.checks.find((check) => check.name === 'rule-injection');
-  assert.equal(ruleCheck.status, 'fail', '被 skip 的 system 规则不得计为已保护');
-  assert.deepEqual(ruleCheck.seqs, [0]);
+  assert.equal(ruleCheck.status, 'skip', '规则交宿主自愈：skip 而非 fail');
+  assert.equal(ruleCheck.reason, 'host-self-heal');
+  assert.equal(report.ok, true);
 
   const latest = bySeq.get(rebuilt.latestUser.seq);
   assert.equal(latest.data.content[0].text, '最新一条用户消息：继续。');
-  const ruleTexts = appended
-    .filter((item) => item.type === 'system/message')
-    .map((item) => item.data.message.content[0].text);
-  assert.deepEqual(ruleTexts, []);
-  const ruleCopy = appended.find((item) => item.type === 'user/message'
-    && item.data?.content?.[0]?.text === 'AGENTS.md rules');
-  assert.ok(ruleCopy, 'user 形态规则副本必须保留');
 });
 
 
