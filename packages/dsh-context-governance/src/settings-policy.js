@@ -77,6 +77,29 @@ export function ratioToPercentText(at) {
 }
 
 /**
+ * C18②：快照取数工厂（生产与单测共用同一实现，禁止测试专用路径）。
+ * 优先最近一次真实会话解析（保留 /cg set 的 session 层）；无会话历史退回全局 resolve(null)。
+ * @param {{policyState?: object, readLatestSessionPolicy?: (() => object|null) | object|null}} deps
+ * @returns {() => {values: object, sources: object}}
+ */
+export function createSnapshotPolicyResolver({ policyState = null, readLatestSessionPolicy = null } = {}) {
+  const readLatest = () => (typeof readLatestSessionPolicy === 'function' ? readLatestSessionPolicy() : readLatestSessionPolicy);
+  return () => {
+    try {
+      const latest = readLatest();
+      if (latest !== null && latest !== undefined && typeof latest.resolvable?.resolve === 'function') {
+        return latest.resolvable.resolve(latest.sessionId ?? null);
+      }
+    } catch { /* fall through */ }
+    try {
+      if (policyState !== null && policyState !== undefined && typeof policyState.resolve === 'function') {
+        return policyState.resolve(null);
+      }
+    } catch { /* fall through */ }
+    return { values: {}, sources: {} };
+  };
+}
+/**
  * 只读快照 HTTP handler（C10 单测直接调用；index 只负责注册）。
  * 仅 GET；非 GET → 405。只写阈值/来源 JSON，无记忆内容、无本机路径。
  * @param {{getPolicy: () => object, getNative: () => number|null, onError?: (error: object) => void}} deps
@@ -93,10 +116,10 @@ export function createSnapshotHandler({ getPolicy, getNative, onError = null }) 
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
       res.end(JSON.stringify(view));
     } catch (error) {
-      // C18：500 必须能定位——把 error.message 交给调用方 logger，不许空 500。
+      // C18：500 必须能定位——把 error.message 交给调用方 logger，且响应带 JSON body（不再空 500）。
       try { onError?.(error); } catch { /* logger 自身抛错不得影响响应 */ }
-      res.writeHead(500);
-      res.end();
+      res.writeHead(500, { 'content-type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ error: 'internal' }));
     }
   };
 }

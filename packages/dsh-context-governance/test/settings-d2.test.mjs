@@ -12,6 +12,7 @@ import { RootGuardPool } from '../src/compress/root-guards.js';
 import {
   PERSISTENT_LIFECYCLE_TEXT,
   createSnapshotHandler,
+  createSnapshotPolicyResolver,
   mergeSettingsAt,
   percentToRatio,
   policySnapshot,
@@ -425,4 +426,37 @@ test('C18② 会话感知：存在会话覆盖 → source=session；无会话 �
   assert.equal(global.source, 'plugin');
   assert.equal(global.sessionOverride, null);
   assert.equal(global.effectiveAt, PERSISTENT_LIFECYCLE_TEXT);
+});
+
+
+test('C18② 会话感知可注入接缝：最近会话→session；无会话→全局；双失败→空视图（生产同源工厂）', () => {
+  const globalState = { resolve: (id) => ({ values: { 'compact.at': 0.6 }, sources: { 'compact.at': 'plugin' }, via: `global:${id}` }) };
+  const sessionPolicy = { resolve: (id) => ({ values: { 'compact.at': 0.5 }, sources: { 'compact.at': 'session' }, via: `session:${id}` }) };
+
+  const withSession = createSnapshotPolicyResolver({ policyState: globalState, readLatestSessionPolicy: () => ({ resolvable: sessionPolicy, sessionId: 's-1' }) })();
+  assert.equal(withSession.sources['compact.at'], 'session');
+  assert.equal(withSession.values['compact.at'], 0.5);
+  assert.equal(withSession.via, 'session:s-1', '必须用缓存的 sessionId 解析');
+
+  const noSession = createSnapshotPolicyResolver({ policyState: globalState, readLatestSessionPolicy: () => null })();
+  assert.equal(noSession.sources['compact.at'], 'plugin');
+  assert.equal(noSession.via, 'global:null');
+
+  const latestThrows = createSnapshotPolicyResolver({ policyState: globalState, readLatestSessionPolicy: () => ({ resolvable: { resolve: () => { throw new Error('session boom'); } }, sessionId: 's' }) })();
+  assert.equal(latestThrows.via, 'global:null', '会话解析抛错退回全局');
+
+  assert.deepEqual(createSnapshotPolicyResolver({})(), { values: {}, sources: {} });
+
+  // 生产路径：mountSnapshotRoute 的 getPolicy 复用同一工厂（功能级：handler 输出 source=session）
+  const routes = [];
+  mountSnapshotRoute({ inject: (deps, callback) => callback({ webServer: { register: (route) => { routes.push(route); return () => {}; } }, effect: (factory) => factory() }) }, {
+    getPolicy: createSnapshotPolicyResolver({ policyState: globalState, readLatestSessionPolicy: () => ({ resolvable: sessionPolicy, sessionId: 's-9' }) }),
+    getNative: () => 0.6785,
+  });
+  const res = { body: '', writeHead() {}, end(body) { this.body = body ?? ''; } };
+  routes[0].handler({ method: 'GET' }, res);
+  const view = JSON.parse(res.body);
+  assert.equal(view.source, 'session');
+  assert.equal(view.at, 0.5);
+  assert.equal(view.effectiveAt, '本会话有效，重启后失效');
 });

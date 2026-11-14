@@ -30,7 +30,7 @@ import { DEFAULT_MEMORY_DIR, MemoryStore, MemoryStoreError } from './memory/stor
 import { registerMemoryHeader } from './memory/header.js';
 import { SCOPE_SKIP, resolveScope } from './scope.js';
 import { MEM_QUERY_NAME, MEM_WRITE_NAME, registerMemoryTools } from './tools/mem-tools.js';
-import { createSnapshotHandler, mergeSettingsAt, policySnapshot, readVolatileAt } from './settings-policy.js';
+import { createSnapshotHandler, createSnapshotPolicyResolver, mergeSettingsAt, policySnapshot, readVolatileAt } from './settings-policy.js';
 
 export const name = 'dsh-context-governance';
 
@@ -969,14 +969,11 @@ export async function apply(ctx, rawConfig = {}) {
         windowTokens: config.policy.windowTokens,
         reservedTokens: config.policy.reservedTokens,
       });
-      // C18②：会话感知——优先最近一次真实会话解析（含 /cg set 的 session 层），无会话历史才退回全局。
-      const resolveSnapshotPolicy = () => {
-        if (lastSessionPolicy !== null) {
-          try { return lastSessionPolicy.resolvable.resolve(lastSessionPolicy.sessionId); } catch { /* fall through */ }
-        }
-        try { return policyState.resolve(null); } catch { /* fall through */ }
-        return { values: {}, sources: {} };
-      };
+      // C18②：会话感知——生产与单测共用同一工厂（优先最近会话解析，无历史退回全局）。
+      const resolveSnapshotPolicy = createSnapshotPolicyResolver({
+        policyState,
+        readLatestSessionPolicy: () => lastSessionPolicy,
+      });
       mountSnapshotRoute(ctx, {
         getPolicy: resolveSnapshotPolicy,
         getNative: snapshotNative,
@@ -1555,5 +1552,6 @@ export {
   MemoryStore,
   MemoryStoreError,
 };
+
 
 
