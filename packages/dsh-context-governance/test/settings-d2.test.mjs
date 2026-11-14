@@ -460,3 +460,51 @@ test('C18② 会话感知可注入接缝：最近会话→session；无会话→
   assert.equal(view.at, 0.5);
   assert.equal(view.effectiveAt, '本会话有效，重启后失效');
 });
+
+test('C19 快照取数：首拉 500 后重试成功；全失败 warn 带次数且不抛', async () => {
+  const client = await loadClient();
+  const warns = [];
+  const sequence = [
+    { ok: false, status: 500, json: async () => ({}) },
+    { ok: true, status: 200, json: async () => ({ at: 0.45, source: 'project' }) },
+  ];
+  let calls = 0;
+  const recovered = await client.fetchSnapshotWithRetry(async () => sequence[calls++], { attempts: 3, delays: [1, 1], warn: (line) => warns.push(line) });
+  assert.deepEqual(recovered, { at: 0.45, source: 'project' });
+  assert.equal(calls, 2, '第一次 500 后必须重试');
+  assert.equal(warns.some((line) => /snapshot fetch failed: HTTP 500/.test(line)), true, '失败必须 warn 带状态码');
+
+  const alwaysFails = [
+    { ok: false, status: 503, json: async () => ({}) },
+    { ok: false, status: 502, json: async () => ({}) },
+    { ok: false, status: 500, json: async () => ({}) },
+  ];
+  let index = 0;
+  const never = await client.fetchSnapshotWithRetry(async () => alwaysFails[index++], { attempts: 3, delays: [1, 1], warn: (line) => warns.push(line) });
+  assert.equal(never, null);
+  assert.equal(index, 3);
+  assert.equal(warns.some((line) => /snapshot fetch failed after 3 attempts: HTTP 500/.test(line)), true, '全失败 warn 带次数与最后原因');
+
+  const missing = await client.fetchSnapshotWithRetry(null, { warn: (line) => warns.push(line) });
+  assert.equal(missing, null);
+  assert.equal(warns.some((line) => /fetch missing/.test(line)), true);
+
+  const broken = await client.fetchSnapshotWithRetry(async () => { throw new Error('network down'); }, { attempts: 2, delays: [1], warn: (line) => warns.push(line) });
+  assert.equal(broken, null);
+  assert.equal(warns.some((line) => /network down/.test(line)), true, '异常必须 warn 带原因');
+});
+
+
+test('C20 静态守卫：client.js 不得出现 subscribe(...)() 立即退订；关键路径存在', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const source = await readFile(path.join(process.cwd(), 'lib/client.js'), 'utf8');
+  assert.equal(/subscribe\s*\([^)]*\)\s*\(\)/.test(source), false, '不得出现 subscribe(...)() 立即调用（当场退订）');
+  for (const line of source.split(/\r?\n/)) {
+    if (!line.includes('subscribe(')) continue;
+    assert.equal(/\)\s*\(\)\s*;?\s*$/.test(line.trim()), false, `订阅行不得以 ()(...) 结尾：${line.trim()}`);
+  }
+  assert.match(source, /const fetchSnapshotWithRetry = async/);
+  assert.match(source, /attempts = 3/, '退避重试默认 3 次');
+  assert.match(source, /addEventListener\('focus'/, '窗口重新聚焦重取');
+  assert.match(source, /slice\(0, 80\)|slice\(0,80\)|toRatio/, '百分比换算仍在');
+});

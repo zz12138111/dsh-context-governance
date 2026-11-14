@@ -90,17 +90,34 @@ window.__ModuleLoader__.load({
       return reason === null ? { ok: true, ratio } : { ok: false, reason };
     };
 
-    /** 拉取同源快照（只读 GET）；失败返回 null（不抛错）。 */
-    const fetchSnapshot = async (fetchImpl = globalThis.fetch) => {
-      if (typeof fetchImpl !== 'function') return null;
-      try {
-        const response = await fetchImpl(SNAPSHOT_PATH, { method: 'GET', headers: { accept: 'application/json' } });
-        if (!response || response.ok !== true) return null;
-        return await response.json();
-      } catch {
+    /**
+     * 拉取同源快照（只读 GET）。C19：失败必须 warn、首拉失败退避重试（默认 3 次，300ms/1000ms），
+     * 全失败才放弃；返回 snapshot 或 null（不抛）。导出供单测用假 fetch 序列。
+     */
+    const fetchSnapshotWithRetry = async (fetchImpl = globalThis.fetch, { attempts = 3, delays = [300, 1000], warn = console.warn } = {}) => {
+      if (typeof fetchImpl !== 'function') {
+        warn('[context-governance] snapshot fetch unavailable: fetch missing');
         return null;
       }
+      let reason = 'unknown';
+      for (let index = 0; index < attempts; index += 1) {
+        try {
+          const response = await fetchImpl(SNAPSHOT_PATH, { method: 'GET', headers: { accept: 'application/json' } });
+          if (response && response.ok === true) return await response.json();
+          reason = response ? `HTTP ${response.status}` : 'no response';
+          warn(`[context-governance] snapshot fetch failed: ${reason} (attempt ${index + 1}/${attempts})`);
+        } catch (error) {
+          reason = String(error?.message ?? error);
+          warn(`[context-governance] snapshot fetch failed: ${reason} (attempt ${index + 1}/${attempts})`);
+        }
+        if (index < attempts - 1) await new Promise((resolve) => setTimeout(resolve, delays[Math.min(index, delays.length - 1)]));
+      }
+      warn(`[context-governance] snapshot fetch failed after ${attempts} attempts: ${reason}`);
+      return null;
     };
+
+    /** 生产入口：默认 3 次退避重试。 */
+    const fetchSnapshot = (fetchImpl = globalThis.fetch) => fetchSnapshotWithRetry(fetchImpl);
 
     const h = react.createElement;
 
@@ -130,17 +147,25 @@ window.__ModuleLoader__.load({
       const ctx = props?.ctx ?? props;
       const labels = pickLabels(ctx);
       const [view, setView] = react.useState(state.snapshot);
-      react.useEffect(() => store.subscribe((next) => setView(next.snapshot))(), [store]);
+      const [open, setOpen] = react.useState(state.open);
+      // C19：订阅 snapshot 与 open 两个状态（只订阅 snapshot 时 open 变化不重渲染）。
+      react.useEffect(() => store.subscribe((next) => { setView(next.snapshot); setOpen(next.open); }), [store]);
       react.useEffect(() => {
         let alive = true;
-        fetchSnapshot(ctx?.fetch ?? globalThis.fetch).then((snapshot) => { if (alive && snapshot) store.set({ snapshot }); });
+        const refresh = () => { fetchSnapshot(ctx?.fetch ?? globalThis.fetch).then((snapshot) => { if (alive && snapshot) store.set({ snapshot }); }); };
+        refresh();
+        // C19③：窗口重新聚焦时重取（首帧 race / 路由晚就绪后可自愈）。
+        if (typeof globalThis.addEventListener === 'function') {
+          globalThis.addEventListener('focus', refresh);
+          return () => { alive = false; globalThis.removeEventListener('focus', refresh); };
+        }
         return () => { alive = false; };
       }, [ctx, store]);
       return h('button', {
         type: 'button',
         className: 'cg-at-chip',
         'aria-haspopup': 'dialog',
-        'aria-expanded': state.open ? 'true' : 'false',
+        'aria-expanded': open ? 'true' : 'false',
         'aria-label': labels.percent,
         onClick: () => store.set({ open: !state.open }),
         onKeyDown: (event) => {
@@ -155,10 +180,18 @@ window.__ModuleLoader__.load({
       const ctx = props?.ctx ?? props;
       const labels = pickLabels(ctx);
       const [view, setView] = react.useState(state.snapshot);
+      const [open, setOpen] = react.useState(state.open);
       const [draft, setDraft] = react.useState('');
       const [error, setError] = react.useState('');
-      react.useEffect(() => store.subscribe((next) => setView(next.snapshot))(), [store]);
-      if (!state.open) return null;
+      react.useEffect(() => store.subscribe((next) => { setView(next.snapshot); setOpen(next.open); }), [store]);
+      // C19③：气泡打开时重取一次（用户点开即可拿到最新值）。
+      react.useEffect(() => {
+        if (!open) return undefined;
+        let alive = true;
+        fetchSnapshot(ctx?.fetch ?? globalThis.fetch).then((snapshot) => { if (alive && snapshot) store.set({ snapshot }); });
+        return () => { alive = false; };
+      }, [open, ctx, store]);
+      if (!open) return null;
       const save = async () => {
         const result = computeSave(draft, view ?? {});
         if (result.ok !== true) { setError(result.reason); return; }
@@ -182,7 +215,6 @@ window.__ModuleLoader__.load({
         h('button', { type: 'button', className: 'cg-at-settings-link', onClick: () => { try { ctx?.openSettings?.(); } catch { /* ignore */ } } }, labels.openSettings),
       );
     };
-
     /** 设置页卡片（保留 `20bf20d` 的 settings.section；同一份数据/写入口）。 */
     const createSettingsCard = (state, store) => (props) => {
       const ctx = props?.ctx ?? props;
@@ -190,10 +222,10 @@ window.__ModuleLoader__.load({
       const [view, setView] = react.useState(state.snapshot);
       const [draft, setDraft] = react.useState('');
       const [error, setError] = react.useState('');
-      react.useEffect(() => store.subscribe((next) => setView(next.snapshot))(), [store]);
+      react.useEffect(() => store.subscribe((next) => setView(next.snapshot)), [store]);
       react.useEffect(() => {
         let alive = true;
-        fetchSnapshot(ctx?.fetch ?? globalThis.fetch).then((snapshot) => { if (alive && snapshot) store.set({ snapshot }); });
+        fetchSnapshot(ctx?.fetch ?? globalThis.fetch).then((snapshot) => { if (alive && snapshot) store.set({ snapshot }); else if (alive) console.warn('[context-governance] snapshot unavailable (chip falls back to 压 —)'); });
         return () => { alive = false; };
       }, [ctx, store]);
       const save = async () => {
@@ -285,8 +317,12 @@ window.__ModuleLoader__.load({
       toRatio,
       validateRatio,
       fetchSnapshot,
+      fetchSnapshotWithRetry,
     };
   },
 });
+
+
+
 
 
