@@ -1192,7 +1192,7 @@ C 的初步证据：启动后本项目根 `audit.jsonl` 只有 `capability@ready
 >    - **否决 00 的 inject 假设**：宿主 `dsh-client-modules/lib/index.js:62-74 parseDshClient()` **只要求 `platform` 必填**，`inject`/`external`/`immediately` 全可选；`inject` 的语义是 **graph row 加载排序依赖**（`lib/client.js:776-796 arriveGraphRow()`），**不是向插件 ctx 注入服务**。反证：`dsh-cost-meter` 就是 `{platform:'web'}` 且能挂 `settings.section`。→ **`dsh.client` 不改**。
 >    - **真因 1（UI 全不出现）**：我们 `apply` 直调 `ctx.slots.register(...)` 并用 `try/catch` 吞错；宿主 slot 是"先无后有"的，官方约定是 **`ctx.slots.inject(slotName, () => ctx.slots.register({...}, Comp))`**（`dsh-client-ui-settings-shell/lib/client.js:182-189`、`dsh-cost-meter`、`dsh-context`、`skills-manager` 均如此）。直调失败 → 静默丢弃。
 >    - **真因 2（快照 404）**：`src/index.js:927` 外层 `typeof ctx.webServer?.register === 'function'` 在服务未就绪时整块跳过；应照 `computer-use`（`ctx.inject(['webServer'], scoped => scoped.effect(() => scoped.webServer.register(...)))`）与宿主 `dsh-client-modules/lib/index.js:570`。
->    - **修改面（需求已批，2026-11-14；2026-11-15 追加一处）**：`lib/client.js`（`slots.inject` 延迟注册 + 诊断 `console.info/warn`，不再静默）、`src/index.js`（**仅** webServer 注入与注册释放这一块，其余 host 不动）、**`src/settings-policy.js`（仅新增/收拢 `mountSnapshotRoute(scoped, deps)` 这一路由挂载函数，供功能级假 ctx 验证；该文件其余逻辑（policy 快照/lifecycle 文案/合并）零改动，diff 必须能一眼看出只有这一段）**、测试（C16/C17 + 路由 200/405）。**`package.json` 不改。**
+>    - **修改面（需求已批，2026-11-14；2026-11-15 追加一处）**：`lib/client.js`（`slots.inject` 延迟注册 + 诊断 `console.info/warn`，不再静默）、`src/index.js`（**仅** webServer 注入与注册释放这一块，其余 host 不动）、**`mountSnapshotRoute(scoped, deps)` 路由挂载函数放 `src/index.js` 或 `src/settings-policy.js` 之一（不得两处重复实现；另一文件的 diff 只允许"移出该段"）**、测试（C16/C17 + 路由 200/405）。**`package.json` 不改。**
 
 **窗口物料（00 已备，2026-11-14 22:30；**本轮暂不使用**，重开窗口时再用；明细见 `G:\DS-HARNESS\tasks\TASK-20261114-02-本体升级-0.2.2-rc.3.md`）**：
 
