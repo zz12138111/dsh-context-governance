@@ -675,6 +675,8 @@ export class MemoryStore {
       if (seen.has(entry.id)) continue;
       seen.add(entry.id);
       if (entry.status === 'expired') continue;
+      // 1.0.3：正文为空的旧条目（1.0.2 遗留）不参与去重，避免把"读不出"的旧条目当成同内容而拒绝新条目。
+      if (String(entry.detail ?? '').trim() === '') continue;
       if (normalizeTitleKey(entry.title) !== key) continue;
       const created = Date.parse(entry.createdAt);
       if (Number.isFinite(created) && nowMs - created <= windowMs) return entry;

@@ -185,8 +185,9 @@ export function detectTitleTruncation(title) {
 }
 
 /**
- * 机器写入准入（model / rule）：正文为空或标题不可读 → 拒绝入库（1.0.3 条款 1）。
- * 用户直写不在此列（用户可先存标题，后补正文）。
+ * 写入准入（1.0.3 条款 1）：正文为空或标题不可读 → 拒绝入库。
+ * 对**所有 `mem_write create`（含 `writer=user`）**生效——"读得出"是库的硬要求，不按写入者豁免；
+ * `MemoryStore.create()` 直调不在此列（低层 API，由工具/生成侧负责准入）。
  */
 export function checkMachineEntryReadable({ title, detail } = {}) {
   if (String(detail ?? '').trim() === '') return { ok: false, reason: 'empty-detail', field: 'detail' };

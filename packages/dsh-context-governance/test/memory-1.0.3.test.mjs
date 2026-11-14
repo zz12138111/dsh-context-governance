@@ -168,3 +168,30 @@ test('1.0.3 配置键组：memory.proposedTtlDays / dedupWindowDays 夹取与非
   assert.throws(() => resolveConfig({ projectRoot: 'D:/tmp/p', memory: { proposedTtlDays: -1 } }), /memory\.proposedTtlDays/);
   assert.throws(() => resolveConfig({ projectRoot: 'D:/tmp/p', memory: { dedupWindowDays: 400 } }), /memory\.dedupWindowDays/);
 });
+
+test('1.0.3 观察修正：用户直写同样受准入；旧空正文条目不被拿去去重', async () => {
+  const rootDir = await tempDir();
+  const store = await MemoryStore.open({ rootDir, project: 'test-project' });
+  try {
+    const audit = makeAudit();
+    const tools = createMemoryTools(store, { audit });
+    const write = tools[MEM_WRITE_NAME].definition;
+    // 用户直写（writer=user）空正文也拒——"读得出"不按写入者豁免。
+    await assert.rejects(
+      write.execute({ op: 'create', type: 'preference', title: '用中文', writer: 'user' }, exec),
+      /ENTRY_UNREADABLE/,
+    );
+    assert.equal(audit.entries.at(-1).reason, 'empty-detail');
+
+    // 1.0.2 遗留：直调 store.create 造一条正文为空的旧条目；同标题新写入不应被它去重吃掉。
+    const legacy = await store.create({ type: 'preference', title: '用中文', detail: '', writer: 'user' });
+    assert.equal(legacy.detail, '');
+    const fresh = await write.execute({ op: 'create', type: 'preference', title: '用中文', detail: '偏好：中文', writer: 'user' }, exec);
+    assert.notEqual(fresh.id, legacy.id, '空正文旧条目不得参与去重');
+    assert.equal(store.get(fresh.id).detail, '偏好：中文');
+    assert.equal(store.allEntries().length, 2);
+  } finally {
+    await store.close();
+    await fs.rm(rootDir, { recursive: true, force: true });
+  }
+});
