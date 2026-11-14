@@ -32,6 +32,7 @@ import {
   localDateId,
   normalizeDraft,
   normalizePatch,
+  normalizeTitleKey,
   nextEntryId,
 } from './contract.js';
 import {
@@ -49,6 +50,13 @@ export const PROTECTION_DIR_NAME = 'protection';
 export const PROTECTION_ORPHAN_DIR_NAME = 'orphaned';
 /** 保护条目预留的 ID 区间：`MEM-YYYYMMDD-1000+`，避开普通条目。 */
 export const PROTECTION_ID_FLOOR = 1000;
+
+/** 1.0.3：天数配置夹取（0=关闭；上限 365 天；非法回默认）。 */
+function clampDays(value, fallback) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(Math.max(Math.trunc(parsed), 0), 365);
+}
 
 export class MemoryStoreError extends Error {
   constructor(code, message, details) {
@@ -105,12 +113,21 @@ export class MemoryStore {
   #lock = null;
   #lockRelease = null;
   #closed = false;
+  /** 1.0.3：proposed 自动过期窗口（天，0=关闭）与同标题去重窗口（天，0=关闭）。 */
+  #proposedTtlDays = 7;
+  #dedupWindowDays = 7;
 
   constructor(options) {
     this.#rootDir = options.rootDir;
     this.#project = options.project;
     this.#now = options.now ?? (() => new Date());
     this.#indexMaxChars = options.indexMaxChars ?? 64_000;
+    this.#proposedTtlDays = clampDays(options.proposedTtlDays, 7);
+    this.#dedupWindowDays = clampDays(options.dedupWindowDays, 7);
+  }
+
+  get memoryPolicy() {
+    return { proposedTtlDays: this.#proposedTtlDays, dedupWindowDays: this.#dedupWindowDays };
   }
 
   /**
@@ -136,6 +153,8 @@ export class MemoryStore {
       project,
       now: options.now,
       indexMaxChars: options.indexMaxChars,
+      proposedTtlDays: options.proposedTtlDays,
+      dedupWindowDays: options.dedupWindowDays,
     });
     try {
       store.#guardContainment(path.join(rootDir, TOPICS_DIR_NAME));
@@ -187,6 +206,12 @@ export class MemoryStore {
         } catch (error) {
           store.#warnings.push(`protection journal ${cycleKey} could not be materialized: ${error.message}`);
         }
+      }
+      // 1.0.3：proposed 超期自动作废（打开即扫，不依赖人工确认；失败只记 warning）。
+      try {
+        await store.#expireProposedEntries();
+      } catch (error) {
+        store.#warnings.push(`proposed TTL sweep failed: ${error.message}`);
       }
       await store.#writeIndex().catch((error) => {
         store.#warnings.push(`index rebuild failed: ${error.message}`);
@@ -338,14 +363,21 @@ export class MemoryStore {
     let counter = PROTECTION_ID_FLOOR;
     const entries = [];
     for (const item of items) {
+      const detail = String(item?.detail ?? '').trim();
       const draft = normalizeDraft({
         type: item.type,
         title: item.title,
-        detail: '',
+        // 1.0.3：正文不允许为空——保护项未带正文时落到来源/证据指针，保证"读得出"。
+        detail: detail === ''
+          ? `来源：${item.source ?? 'unknown'}${item.evidence ? `；证据：${item.evidence}` : ''}`
+          : detail,
         source: item.source,
         evidence: item.evidence,
         writer: 'rule',
         risk: 'low',
+        // 条款 4：机器产物不得高置信，且必须为 proposed（需人工确认后转 active）。
+        status: 'proposed',
+        confidence: 0.5,
         project: this.#project,
       }, { project: this.#project, now: this.#now });
       let id;
@@ -449,6 +481,9 @@ export class MemoryStore {
         ids.push(entry.id);
         this.#protectionEntries.delete(entry.id);
         if (this.#entries.has(entry.id)) continue;
+        // 1.0.3 条款 3：同标题（归一化）在窗口内只保留 1 条——物化时跳过重复；
+        // 本周期回注已用 journal 里的指针，不受影响（否则会丢回注）。
+        if (this.#findRecentByTitle(entry.title) !== null) continue;
         this.#entries.set(entry.id, entry);
         dirty.add(entry.type);
       }
@@ -627,11 +662,55 @@ export class MemoryStore {
     }
   }
 
+  /** 1.0.3：同标题去重——归一化标题相同且在窗口内（含尚未物化的保护条目），返回既有条目。 */
+  #findRecentByTitle(title) {
+    const windowDays = this.#dedupWindowDays;
+    if (windowDays <= 0) return null;
+    const key = normalizeTitleKey(title);
+    if (key === '') return null;
+    const nowMs = this.#now().getTime();
+    const windowMs = windowDays * 24 * 60 * 60 * 1000;
+    const seen = new Set();
+    for (const entry of [...this.#entries.values(), ...this.#protectionEntries.values()]) {
+      if (seen.has(entry.id)) continue;
+      seen.add(entry.id);
+      if (entry.status === 'expired') continue;
+      if (normalizeTitleKey(entry.title) !== key) continue;
+      const created = Date.parse(entry.createdAt);
+      if (Number.isFinite(created) && nowMs - created <= windowMs) return entry;
+    }
+    return null;
+  }
+
+  /** 1.0.3：proposed 超过 TTL 自动 expired（条款 2）；返回作废条数。 */
+  async #expireProposedEntries() {
+    if (this.#readOnly) return 0;
+    const ttlDays = this.#proposedTtlDays;
+    if (ttlDays <= 0) return 0;
+    const nowMs = this.#now().getTime();
+    const ttlMs = ttlDays * 24 * 60 * 60 * 1000;
+    const dirty = new Set();
+    let expired = 0;
+    for (const entry of this.#entries.values()) {
+      if (entry.status !== 'proposed') continue;
+      const created = Date.parse(entry.createdAt);
+      if (!Number.isFinite(created) || nowMs - created <= ttlMs) continue;
+      entry.status = 'expired';
+      entry.updatedAt = this.#now().toISOString();
+      dirty.add(entry.type);
+      expired += 1;
+    }
+    if (expired > 0) await this.#persist(dirty);
+    return expired;
+  }
+
   #transact(work) {
     this.#assertOpen();
     const run = this.#queue.then(async () => {
       if (this.#readOnly) throw new MemoryReadOnlyError(this.#readOnlyReason ?? 'unknown');
       await this.#assertUnchanged();
+      // 1.0.3：写前顺手扫一次 proposed TTL（长驻进程不必等重启）。
+      await this.#expireProposedEntries();
       const { dirty, value } = await work();
       if (dirty.size > 0) await this.#persist(dirty);
       return value;
@@ -752,6 +831,9 @@ export class MemoryStore {
   async create(input) {
     return this.#transact(() => {
       const draft = normalizeDraft(input, { project: this.#project, now: this.#now });
+      // 1.0.3：同标题（归一化）在去重窗口内只保留 1 条，重复写入返回既有条目。
+      const duplicate = this.#findRecentByTitle(draft.title);
+      if (duplicate !== null) return { dirty: new Set(), value: cloneEntry(duplicate) };
       const id = nextEntryId(this.#entries.keys(), this.#now());
       const entry = { ...draft, id };
       this.#entries.set(id, entry);

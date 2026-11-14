@@ -93,7 +93,7 @@ test('P2 pool 只读：第二 store writer-lock → readOnly；mem_write 拒绝�
     assert.equal(perRootAudit.includes('memory-store-readonly'), false, 'readonly 审计只进 root audit，不进 per-root sink');
     const tools = createMemoryTools(handle.store);
     await assert.rejects(
-      tools[MEM_WRITE_NAME].definition.execute({ op: 'create', type: 'fact', title: 'x', writer: 'rule' }),
+      tools[MEM_WRITE_NAME].definition.execute({ op: 'create', detail: '测试正文（夹具）', type: 'fact', title: 'x', writer: 'rule' }),
       /\[READ_ONLY\] memory is read-only/,
     );
     const query = await tools.mem_query.definition.execute({});

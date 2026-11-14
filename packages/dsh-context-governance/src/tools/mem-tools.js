@@ -14,6 +14,7 @@ import {
   MemoryContractError,
   RISKS,
   WRITERS,
+  checkMachineEntryReadable,
 } from '../memory/contract.js';
 import { MemoryReadOnlyError, MemoryStoreError } from '../memory/store.js';
 
@@ -324,6 +325,20 @@ export function createMemoryTools(store, options = {}) {
               'subagent sessions may read memory but must not write it',
               { reason: 'subagent' },
             );
+          }
+          if (String(args?.op ?? '') === 'create') {
+            // 1.0.3 条款 1：机器写入准入——正文非空、标题不在分隔符/反引号处被切断；
+            // 拒绝时写一条 memory-tool-rejected（code=ENTRY_UNREADABLE），库内条目数不变。
+            const readable = checkMachineEntryReadable({ title: args?.title, detail: args?.detail });
+            if (!readable.ok) {
+              throw rejectWith(
+                MEM_WRITE_NAME,
+                exec,
+                'ENTRY_UNREADABLE',
+                `entry rejected: ${readable.reason}`,
+                { reason: readable.reason },
+              );
+            }
           }
           let resolution = null;
           try {

@@ -88,7 +88,7 @@ test('P1/T14 unmanaged 根拒绝 mem_write（ROOT_UNMANAGED）', async () => {
     audit,
   });
   await assert.rejects(
-    tools[MEM_WRITE_NAME].definition.execute({ op: 'create', type: 'fact', title: 't', writer: 'model', confidence: 0.5 }, execFor('s1')),
+    tools[MEM_WRITE_NAME].definition.execute({ op: 'create', detail: '测试正文（夹具）', type: 'fact', title: 't', writer: 'model', confidence: 0.5 }, execFor('s1')),
     /\[ROOT_UNMANAGED\]/,
   );
   assert.equal(store.calls.length, 0);
@@ -105,7 +105,7 @@ test('P1/T14 子会话：mem_write 拒绝且不调 resolver；mem_query 允许�
   });
   const subagent = execFor('session-sub', { origin: 'subagent', parentSession: 'session-parent' });
   await assert.rejects(
-    tools[MEM_WRITE_NAME].definition.execute({ op: 'create', type: 'fact', title: 't' }, subagent),
+    tools[MEM_WRITE_NAME].definition.execute({ op: 'create', detail: '测试正文（夹具）', type: 'fact', title: 't' }, subagent),
     /\[SUBAGENT_NO_MEMORY_WRITE\]/,
   );
   assert.equal(resolveCalls, 0, '子会话写拒绝应早于根路由');
@@ -124,7 +124,7 @@ test('P1/T14 默认单 store 行为不变（无 resolver 时）', async () => {
   const tools = createMemoryTools(store);
   const result = await tools[MEM_QUERY_NAME].definition.execute({ text: 'x' });
   assert.equal(result.count, 0);
-  const created = await tools[MEM_WRITE_NAME].definition.execute({ op: 'create', type: 'fact', title: 't' });
+  const created = await tools[MEM_WRITE_NAME].definition.execute({ op: 'create', detail: '测试正文（夹具）', type: 'fact', title: 't' });
   assert.equal(created.id, 'MEM-20261026-1001');
   assert.equal(store.calls.length, 2);
 });
@@ -161,7 +161,7 @@ test('P2/T14 apply 接线：A/B 根各自读写、跨根 text 拒绝、project �
     const otherQuery = await query.execute({}, exec({ id: 's-other', cwd: other }));
     assert.equal(otherQuery.count, 0, 'P2：非主根会话可以只读自己的根');
     const otherWrite = await write.execute(
-      { op: 'create', type: 'fact', title: 'other-root', writer: 'rule' },
+      { op: 'create', detail: '测试正文（夹具）', type: 'fact', title: 'other-root', writer: 'rule' },
       exec({ id: 's-other', cwd: other }),
     );
     assert.match(otherWrite.id, /^MEM-/);
@@ -169,7 +169,7 @@ test('P2/T14 apply 接线：A/B 根各自读写、跨根 text 拒绝、project �
     assert.match(otherMemory, /other-root/);
     const bBefore = await snapshotGovernance(other);
     const ownWrite = await write.execute(
-      { op: 'create', type: 'fact', title: 'own-root', writer: 'rule' },
+      { op: 'create', detail: '测试正文（夹具）', type: 'fact', title: 'own-root', writer: 'rule' },
       exec({ id: 's-own', cwd: primary }),
     );
     assert.match(ownWrite.id, /^MEM-/);
@@ -196,13 +196,13 @@ test('P2/T14 apply 接线：A/B 根各自读写、跨根 text 拒绝、project �
     assert.deepEqual(bAfter, bBefore, 'A 根写/查前后，B 根 MEMORY/topics/audit 的 hash 与 mtime 必须不变');
     await assert.rejects(
       write.execute(
-        { op: 'create', type: 'fact', title: 'bad-project', writer: 'rule', project: 'not-this-root' },
+        { op: 'create', detail: '测试正文（夹具）', type: 'fact', title: 'bad-project', writer: 'rule', project: 'not-this-root' },
         exec({ id: 's-own', cwd: primary }),
       ),
       /\[BAD_ARGS\]/,
     );
     await assert.rejects(
-      write.execute({ op: 'create', type: 'fact', title: 't' }, exec({ id: 's-sub', origin: 'subagent', parentSession: 's-own' })),
+      write.execute({ op: 'create', detail: '测试正文（夹具）', type: 'fact', title: 't' }, exec({ id: 's-sub', origin: 'subagent', parentSession: 's-own' })),
       /\[SUBAGENT_NO_MEMORY_WRITE\]/,
     );
   } finally {

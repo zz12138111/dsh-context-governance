@@ -68,6 +68,11 @@ export const DEFAULT_CONFIG = Object.freeze({
     oldAgeDays: 14,
     oldLimit: 30,
   }),
+  /** 1.0.3（REQ-20261114-01）：proposed 自动过期与同标题去重窗口（天；0=关闭）。 */
+  memory: Object.freeze({
+    proposedTtlDays: 7,
+    dedupWindowDays: 7,
+  }),
   /** P2-1：只处理本项目（cwd 匹配 projectRoot）会话的压缩事件。 */
   onlyProject: true,
   /** P2-2：保护条目是否保留“首行摘要”（默认开；关=只存指针与通用标签）。 */
@@ -181,6 +186,16 @@ export function resolveConfig(raw = {}) {
   if (!Number.isInteger(memoryHeader.oldLimit) || memoryHeader.oldLimit < 0 || memoryHeader.oldLimit > 100) {
     throw new MemoryStoreError('CONFIG', 'memoryHeader.oldLimit must be an integer in [0, 100]');
   }
+  // 1.0.3：memory.proposedTtlDays / memory.dedupWindowDays（天；0=关闭窗口）。
+  if (config.memory === null || typeof config.memory !== 'object' || Array.isArray(config.memory)) {
+    throw new MemoryStoreError('CONFIG', 'memory must be an object');
+  }
+  const memory = { ...DEFAULT_CONFIG.memory, ...config.memory };
+  for (const key of ['proposedTtlDays', 'dedupWindowDays']) {
+    if (!Number.isInteger(memory[key]) || memory[key] < 0 || memory[key] > 365) {
+      throw new MemoryStoreError('CONFIG', `memory.${key} must be an integer in [0, 365]`);
+    }
+  }
   if (typeof config.onlyProject !== 'boolean') throw new MemoryStoreError('CONFIG', 'onlyProject must be a boolean');
   if (typeof config.captureTitle !== 'boolean') throw new MemoryStoreError('CONFIG', 'captureTitle must be a boolean');
   if (config.reinjection === null || typeof config.reinjection !== 'object' || Array.isArray(config.reinjection)) {
@@ -217,6 +232,10 @@ export function resolveConfig(raw = {}) {
       oldAgeDays: memoryHeader.oldAgeDays,
       oldLimit: memoryHeader.oldLimit,
     },
+    memory: {
+      proposedTtlDays: memory.proposedTtlDays,
+      dedupWindowDays: memory.dedupWindowDays,
+    },
     onlyProject: config.onlyProject,
     captureTitle: config.captureTitle,
     diagnostics: {
@@ -243,6 +262,8 @@ export async function openStore(config, options = {}) {
     project: config.project,
     readOnly: config.readOnly,
     indexMaxChars: config.indexMaxChars,
+    proposedTtlDays: config.memory?.proposedTtlDays,
+    dedupWindowDays: config.memory?.dedupWindowDays,
     now: options.now,
   });
 }

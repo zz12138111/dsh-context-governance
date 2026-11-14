@@ -24,6 +24,7 @@ test('mem_write 新建后自动带会话来源，模型写入默认 proposed', a
       op: 'create',
       type: 'decision',
       title: 'E2 默认形态用 ID+状态',
+      detail: '默认形态：索引给 ID+状态，详情按 ids 读',
       writer: 'model',
       confidence: 0.8,
     }, exec);
@@ -62,7 +63,7 @@ test('mem_query 默认只返回索引，ids 才带详情', async () => {
     const write = tools[MEM_WRITE_NAME].definition;
     const query = tools[MEM_QUERY_NAME].definition;
     const a = await write.execute({ op: 'create', type: 'todo', title: '接 T3', detail: '压缩适配的细节', writer: 'user' }, exec);
-    await write.execute({ op: 'create', type: 'preference', title: '用中文', writer: 'user' }, exec);
+    await write.execute({ op: 'create', type: 'preference', title: '用中文', detail: '用户偏好用中文回复', writer: 'user' }, exec);
 
     const list = await query.execute({ limit: 10 }, {});
     assert.equal(list.count, 2);

@@ -12,11 +12,32 @@ import { ENTRY_TYPES, detectSensitive } from '../memory/contract.js';
 
 const MAX_TITLE = 200;
 
+/**
+ * 1.0.3：标题截断必须落在安全边界——超长时在空白/顿号/逗号前切，并去掉尾部分隔符与
+ * 未闭合反引号；绝不在"回滚点：回滚"这种残句上收尾（实测噪声）。
+ */
+function cutTitle(text) {
+  if (text.length <= MAX_TITLE) return text;
+  const head = text.slice(0, MAX_TITLE);
+  const boundary = Math.max(
+    head.lastIndexOf(' '),
+    head.lastIndexOf('、'),
+    head.lastIndexOf('，'),
+    head.lastIndexOf('；'),
+    head.lastIndexOf(';'),
+    head.lastIndexOf('/'),
+  );
+  let cut = boundary > MAX_TITLE * 0.6 ? head.slice(0, boundary) : head;
+  cut = cut.replace(/[：:，,、;；/\\\-—–（(【\[`]+$/, '').trim();
+  if ((cut.match(/`/g) ?? []).length % 2 === 1) cut = cut.replace(/`/g, '').trim();
+  return cut === '' ? head.trim() : cut;
+}
+
 function sanitizeTitle(value, fallback) {
   let title = String(value ?? '').replace(/\s+/g, ' ').trim();
   if (title === '') title = fallback;
   if (detectSensitive(title) !== null) return fallbackSensitive(title, fallback);
-  return title.slice(0, MAX_TITLE);
+  return cutTitle(title);
 }
 
 function fallbackSensitive(_value, fallback) {
@@ -48,9 +69,15 @@ export function buildProtectionItems(snapshot, {
     const title = captureTitle
       ? sanitizeTitle(item.title, item.fallback ?? '压缩保护项')
       : sanitizeTitle(item.fallback ?? '压缩保护项', '压缩保护项');
+    // 1.0.3：正文不允许为空——用覆盖率文本（首行/路径/比例）兜底，否则落到来源指针。
+    // 与标题同一脱敏口径：正文命中凭据形态时只用指针，绝不落敏感内容。
+    const detailRaw = String(info?.coverageText ?? '').trim();
+    const detailText = detailRaw !== '' && detectSensitive(detailRaw) === null ? detailRaw : '';
+    const fallbackDetail = `来源：${item.source ?? 'unknown'}${item.evidence ? `；证据：${item.evidence}` : ''}`;
     items.push({
       type: typeOf(item.type),
       title,
+      detail: detailText === '' ? fallbackDetail : detailText.slice(0, 2000),
       source: item.source,
       evidence: item.evidence ?? evidence,
     });
@@ -124,9 +151,11 @@ export function buildProtectionItems(snapshot, {
   // ④ 最近回滚点/映射指针。
   if (snapshot.rollback !== null) {
     const paths = snapshot.rollback.paths ?? [];
+    const keyword = String(snapshot.rollback.keyword ?? '').trim();
+    // 1.0.3：不给"回滚点：回滚"这种残句；无路径又只有泛词时落到指针说明。
     const title = paths.length > 0
       ? `回滚点：${paths[0]}`
-      : `回滚点：${snapshot.rollback.keyword}`;
+      : (keyword !== '' && keyword !== '回滚点' && keyword !== '回滚' ? `回滚点：${keyword}` : '回滚点（指针见正文）');
     push({
       type: 'anchor',
       title,

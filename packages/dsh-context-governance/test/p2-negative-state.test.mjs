@@ -216,8 +216,8 @@ test('P2/删状态（默认空根）：A 重推 inferred-fresh；A 旧记忆可�
     assert.equal(await until(() => fs.stat(stateFile).then(() => true, () => false)
       && ctx1.registered.some((definition) => definition.name === MEM_WRITE_NAME)), true);
     const write = tool(ctx1.registered, MEM_WRITE_NAME);
-    await write.execute({ op: 'create', type: 'fact', title: 'A-entry', writer: 'rule' }, execFor('sA', rootA));
-    await write.execute({ op: 'create', type: 'fact', title: 'B-entry', writer: 'rule' }, execFor('sB', rootB));
+    await write.execute({ op: 'create', detail: '测试正文（夹具）', type: 'fact', title: 'A-entry', writer: 'rule' }, execFor('sA', rootA));
+    await write.execute({ op: 'create', detail: '测试正文（夹具）', type: 'fact', title: 'B-entry', writer: 'rule' }, execFor('sB', rootB));
     const aSnapshot = await snapshot(rootA);
     const bSnapshot = await snapshot(rootB);
     await close(ctx1.cleanups);
@@ -298,9 +298,9 @@ test('P2/并发：同根两会话串行不丢写；不同根并发；第二 stor
     const write = tool(ctx.registered, MEM_WRITE_NAME);
     const query = tool(ctx.registered, MEM_QUERY_NAME);
     await Promise.all([
-      write.execute({ op: 'create', type: 'fact', title: 'A-1', writer: 'rule' }, execFor('sA1', rootA)),
-      write.execute({ op: 'create', type: 'fact', title: 'A-2', writer: 'rule' }, execFor('sA2', rootA)),
-      write.execute({ op: 'create', type: 'fact', title: 'B-1', writer: 'rule' }, execFor('sB', rootB)),
+      write.execute({ op: 'create', detail: '测试正文（夹具）', type: 'fact', title: 'A-1', writer: 'rule' }, execFor('sA1', rootA)),
+      write.execute({ op: 'create', detail: '测试正文（夹具）', type: 'fact', title: 'A-2', writer: 'rule' }, execFor('sA2', rootA)),
+      write.execute({ op: 'create', detail: '测试正文（夹具）', type: 'fact', title: 'B-1', writer: 'rule' }, execFor('sB', rootB)),
     ]);
     const textA = await fs.readFile(path.join(rootA, 'memory', 'governance', 'MEMORY.md'), 'utf8');
     assert.match(textA, /A-1/);
@@ -314,7 +314,7 @@ test('P2/并发：同根两会话串行不丢写；不同根并发；第二 stor
     try {
       assert.match(second.status.readOnlyReason ?? '', /^writer-lock:/);
       await assert.rejects(
-        secondTools[MEM_WRITE_NAME].definition.execute({ op: 'create', type: 'fact', title: 'blocked', writer: 'rule' }),
+        secondTools[MEM_WRITE_NAME].definition.execute({ op: 'create', detail: '测试正文（夹具）', type: 'fact', title: 'blocked', writer: 'rule' }),
         /\[READ_ONLY\]/,
       );
       const readable = await secondTools[MEM_QUERY_NAME].definition.execute({});
@@ -323,7 +323,7 @@ test('P2/并发：同根两会话串行不丢写；不同根并发；第二 stor
       await second.reload();
       secondTools = createMemoryTools(second);
       const written = await secondTools[MEM_WRITE_NAME].definition.execute({
-        op: 'create', type: 'fact', title: 'after-lock-release', writer: 'rule',
+        op: 'create', detail: '测试正文（夹具）', type: 'fact', title: 'after-lock-release', writer: 'rule',
       });
       assert.match(written.id, /^MEM-/);
     } finally {

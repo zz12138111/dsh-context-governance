@@ -267,6 +267,11 @@ function statusText({ store, guard, audit, rootAudit = null, rootsView = null, r
       `active=${counts.active} proposed=${counts.proposed} total=${store.allEntries().length} ` +
       `pendingJournals=${store.protectionPending}`,
     );
+    // 1.0.3：过期/去重窗口可见（键组 memory.proposedTtlDays / memory.dedupWindowDays）。
+    const windowDays = store.memoryPolicy;
+    if (windowDays !== undefined && windowDays !== null) {
+      lines.push(`memory-policy: proposedTtl=${windowDays.proposedTtlDays}d dedupWindow=${windowDays.dedupWindowDays}d`);
+    }
     if (store.status.readOnlyReason !== null) lines.push(`memory-readonly: ${store.status.readOnlyReason}`);
     if (store.status.warnings.length > 0) lines.push(`memory-warnings: ${store.status.warnings.length}`);
   } else {

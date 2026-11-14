@@ -158,6 +158,44 @@ export function nextEntryId(existingIds, now = new Date()) {
 }
 
 /**
+ * 标题归一化键（去重口径）：小写、去空白与标点/反引号，只留字母数字与 CJK。
+ * 只用于"是否同一条内容"的判断，不落盘、不进审计。
+ */
+export function normalizeTitleKey(title) {
+  return String(title ?? '')
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[^0-9a-z\u3400-\u9fff]/g, '');
+}
+
+const TITLE_CUT_TAIL = /[：:，,、;；/\\\-—–（(【\[`]$/;
+
+/**
+ * 标题"可读性"检查（1.0.3 准入）：返回问题码或 null。
+ * 覆盖实测三类噪声：换行/分隔符处被切断、未闭合反引号、省略号截断。
+ */
+export function detectTitleTruncation(title) {
+  const text = String(title ?? '').trim();
+  if (text === '') return 'empty-title';
+  if (/[\r\n]/.test(text)) return 'title-multiline';
+  if ((text.match(/`/g) ?? []).length % 2 === 1) return 'title-unclosed-backtick';
+  if (/…$/.test(text) || /\.\.\.$/.test(text)) return 'title-truncated-ellipsis';
+  if (TITLE_CUT_TAIL.test(text)) return 'title-cut-separator';
+  return null;
+}
+
+/**
+ * 机器写入准入（model / rule）：正文为空或标题不可读 → 拒绝入库（1.0.3 条款 1）。
+ * 用户直写不在此列（用户可先存标题，后补正文）。
+ */
+export function checkMachineEntryReadable({ title, detail } = {}) {
+  if (String(detail ?? '').trim() === '') return { ok: false, reason: 'empty-detail', field: 'detail' };
+  const cut = detectTitleTruncation(title);
+  if (cut !== null) return { ok: false, reason: cut, field: 'title' };
+  return { ok: true, reason: null, field: null };
+}
+
+/**
  * 校验并规范化一次"新建/取代"的输入。
  *
  * @param {object} input 模型或用户给的原始字段。
@@ -239,8 +277,7 @@ export function normalizeDraft(input, { project, now = () => new Date() } = {}) 
 
   checkSensitive({
     title,
-    detail,
-    project: resolvedProject,
+    detail,    project: resolvedProject,
     ...(source === null ? {} : { source }),
     ...(evidence === null ? {} : { evidence }),
   });

@@ -31,12 +31,12 @@ const out = {
 try {
   if (process.env.MEM_MODE === 'write') {
     const written = await tools[toolsMod.MEM_WRITE_NAME].definition.execute({
-      op: 'create', type: 'fact', title: process.env.MEM_TITLE, writer: 'rule',
+      op: 'create', detail: '测试正文（夹具）', type: 'fact', title: process.env.MEM_TITLE, writer: 'rule',
     });
     out.id = written.id;
   } else {
     await tools[toolsMod.MEM_WRITE_NAME].definition.execute({
-      op: 'create', type: 'fact', title: 'must-fail', writer: 'rule',
+      op: 'create', detail: '测试正文（夹具）', type: 'fact', title: 'must-fail', writer: 'rule',
     });
   }
 } catch (error) {
