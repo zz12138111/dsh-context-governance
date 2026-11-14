@@ -25,7 +25,7 @@
 - **目标（可验收）**：
   1. 单插件、对宿主零硬依赖；**经官方跨 isolate 访问器（`agentPresets.serviceFor(agent,'compaction')`）取用宿主当前 active 压缩引擎并主动触发压缩**（provider 级）：宿主原装 `compaction-basic` 与 context-zip redirect **两种后端形态下同一条取用路径均成立**——运行时只有一个 active engine，不是双引擎（见验收 ⑤）。
   2. 压缩、换会话、唤醒后，任务态（目标、待办、最近决定、关键约束）能自动恢复。
-  3. 压缩保护按 S4=B：压缩前先把受保护内容写进记忆（标题+指针）；压缩结束（`compaction/end` 发布后首个 microtask、下一次模型调用前）从记忆回注；自动压缩下 5 类受保护内容 0 丢失；手动压缩允许原文丢失，但必须有记忆指针、audit 显式告警、回注后能看出最后一句。
+  3. 压缩保护按 S4=B：压缩前先把受保护内容写进记忆（标题+指针）；压缩结束（`compaction/end` 发布后首个 microtask、下一次模型调用前）从记忆回注；自动压缩下 **5 类记忆指针 0 丢失**；其中规则注入的 **surface 重建取消**——当前版本由宿主下个 pre-step 自愈、历史修订版不重放，surface 重建只剩 `latestUser`（仍 0 丢失）；手动压缩允许原文丢失，但必须有记忆指针、audit 显式告警、回注后能看出最后一句。
   4. 回注只放记忆 ID/状态/指针，详情留记忆，不产生第二段摘要。
   5. 失败显式、可回退，不静默降级。
 - **边界（不做什么）**：
@@ -59,7 +59,7 @@
   - S1：长任务中产生决定 + 未完成待办 → 压缩 → 下一轮继续，不重问；
   - S2：批次进度（如 511/958）→ 压缩 → 接着跑；
   - S3：偏好（如命名规则）→ 新会话同项目 → header 带上；
-  - S4：受保护 5 类（最新用户消息/规则注入/工具配对/批次 STATE/回滚点映射）自动压缩 0 丢失；回注时序 = `compaction/end` 发布后首个 microtask（同一 tick、下一次模型调用前）；字面“checkpoint 后、end 前”需替换压缩 provider，M1 不做；手动压缩按 S4=B：预写记忆指针、audit 显式告警、回注能看出最后一句；写不进/注不进必须 audit。
+  - S4：受保护 5 类的**记忆指针**在自动压缩下 0 丢失；其中规则注入的 **surface 重建取消**——当前版本由宿主下个 pre-step 自愈、历史修订版不重放，surface 重建只剩 `latestUser`（仍 0 丢失）；回注时序 = `compaction/end` 发布后首个 microtask（同一 tick、下一次模型调用前）；字面“checkpoint 后、end 前”需替换压缩 provider，M1 不做；手动压缩按 S4=B：预写记忆指针、audit 显式告警、回注能看出最后一句；写不进/注不进必须 audit。
   - S5：摘要不可读 → 只回注 ID+状态；
   - S6：后端不可用 / 配置非法 → 回退或插件不加载，DSH 正常。
 - **依赖/风险**：
@@ -1163,7 +1163,7 @@ C 的初步证据：启动后本项目根 `audit.jsonl` 只有 `capability@ready
 | **C3** | 自检不误伤 | A | `selectMode`/`selfCheck`（`selection.js:47` 同类断言） | 宿主 `0.2.2-rc.3`：`matrix.host='in'`、无 `host-version-out-of-matrix`、`mode ≠ observe-only`；宿主 `0.2.2-rc.1`：出该 error |
 | **C4** | 宿主版本探测 | A | `detectHostVersion` fixtures + **版本源一致性** | 从 0.2.2-rc.3 形态的 asar/包读回 `0.2.2-rc.3`，失败落 `unknown`（不抛错）；**探测源必须与门禁源一致**（门禁用 app-boot 的 version，见探针 #6）：本机两者同为 `0.2.1-rc.3`，真机窗口须记录两值；若 0.2.2 线上两者不同，**以 app-boot（门禁源）为准**并补用例 |
 | **C5** | #4 三项 | A | 单测 + 生成侧快照 | 兜底文案 `回滚点（见 source）`；`statePath`/`ratios` 都空不发、单有其一照发；用户消息标题 ≤87 字且 `detail` 含全文 |
-| **C6** | 全量回归 | A | `node --test "test/*.test.mjs"` | 通过（**基线 `539/539`**（`4eaacc7` 那版，含 engines+#4 新增 4 条）+ D2 新增用例；数字以复跑为准） |
+| **C6** | 全量回归 | A | `node --test "test/*.test.mjs"` | 通过（**基线数以测试独立复跑为准**；方案 A 收敛后开发自测 **565/565**，待测试确认后回填；历史 `539/539` 仅存档作参照） |
 | **C7** | flake 取证（2026-11-15 收紧） | A | 30 轮全量循环 + 留档（**在最终 HEAD 上**） | 复现则修；30 轮全绿则关观察项（附取证目录）。**收紧**：凡**功能断言型**失败（如 `P3 G8` 子会话 journal "子会话不得写持久记忆条目" 断言 `4 !== 0`），**必须定性**——①产品真会把子会话 journal materialize（→ 真缺陷，必修产品）②测试隔离/墙钟竞态（→ 修测试并用 30 轮证明）③外部环境（→ 记录）。**未定性的 flake 不得进发布**；"20 轮里偶发 1 次"不算干净证据。 |
 | **R1** | 真机加载 | C | 重启后**第一步先验插件是否加载**（`/cg` 命令是否存在），再跑 0.2.2-rc.3 装 1.1.0（00 执行、用户在场） | `/cg` 命令存在且 `/cg status` 的 host 行 = `0.2.2-rc.3`、矩阵 `in`、**非 `observe-only`**；**命令不存在 = 插件被静默跳过 → 直接判不过**（GUI 下跳过无声，见探针 #6） |
 | **R2** | 真机 #5 | C | 两次真实压缩 | 5a/5b/5c 全过（沿用 `:974-994` 口径），必须给「前后条目数 + 新增 `title`/`detailLen` 清单」 |
@@ -1185,7 +1185,8 @@ C 的初步证据：启动后本项目根 `audit.jsonl` 只有 `capability@ready
 | **C31** | A2 写入接口安全（2026-11-15 新增，批 A2 设计后补） | A | 单测（假 req）+ 代码审查 | ①**仅 loopback**（127.0.0.1/::1/::ffff:127.0.0.1）；②**仅 POST + JSON**、body ≤ 4KB；③**同源校验必做**：`Origin`（或 `Sec-Fetch-Site: same-origin`）非法/缺失 → **403**，不得当可选；④`sessionId` 白名单 `^[A-Za-z0-9._-]{1,128}$`（防穿越），非法 400；⑤值必须过 `validateLayer`（`armed` 等不可写）；⑥`cache-control: no-store`，**不新增公网监听**、不加 CORS 通配 |
 | **C32** | 层标签的用户可见映射（2026-11-15 新增） | A | 文案断言 | 内部键可以不同，但 UI 文案必须唯一映射：**A1 →「本会话·临时（重启失效）」**、**A2 →「本会话·已保存（重启保留）」**、**全局 →「全局（影响所有会话）」**；同一界面不得出现两种叫法混用（C8/C24 判据按此文案，不按内部 source 键） |
 | **C33** | **插件补写 `system/message` 的 payload 合法性**（2026-11-15 新增；根因 D-MGMT-021 防回归） | A | 单测（四态 payload）+ 代码审查 | 任何由本插件补写 `system/message` 的路径，payload **必须**带宿主合法的 `turn`/`step`（`protection.js:417-421` 现只传 `{message}`，调用点 `runtime.js:2290-2296`）；**推不出合法值时必须跳过并留审计（`protection-write-skipped(reason=…)`），禁止伪造/猜 turn**；**回归必须覆盖四态**：① `{message}`（缺 turn/step）→ 拒 ② `{turn,step,message}` → 通过 ③ `turn:null` → 拒（marker 允许 `number\|null` 不适用于该事件）④ 缺 `step` → 拒；且坏事件**不得被 try/catch 吞成静默重试**（必须可诊断：审计/日志含原因） |
-| **C34** | **`system-prompt` 压缩事务内不兜底重建：pending 延迟判定 + 分型 loss**（2026-11-15 用户批 A，修 `D-MGMT-021` v3b r2；采纳审核 pending 五条） | A | 单测（RT-A/B/C + R6 v2）+ 真机审计 | ①**user 形态规则**（AGENTS.md / skill-catalog）压缩后被 shadow **必须重建**，终态 `unacceptable` 丢失 = 0；②`system-prompt` 被 shadow **允许跳过**（不写 `system/message`），跳过时写 `surface-rebuild-skipped`：`sessionId/cycle/compactionId/ruleSeq/kind/contentSha256(=sha256(text))/windowTurnId/status:"pending"`，**不得伪造 turn**；③**第三态 pending**：待判期间**既不记 accepted 也不记 unacceptable，且不计入“保护通过”**；④**TTL = 1 轮**：起点 = 压缩后第一个 `turn/start`，终点 = 该轮 `turn/end`；该轮结束仍未命中 → `unacceptable(reason:"ttl-expired")`；无后续 turn 时在 dispose/会话结束 → `unacceptable(reason:"session-ended")`；**不设墙钟**（避免空闲/慢用户误判为 b）；**异常轮**：`turn/abort` 或该轮无 `turn/end` → 显式结算为 `unacceptable(reason:"turn-aborted"|"session-ended")`，**不得永久 pending**，必须有异常轮用例；⑤**匹配（审核 v3 修正）**：**`kind` 非空时**，窗口内出现更新的同 kind 原生 `system/message`（`seq > ruleSeq`、`form ≠ surface-rebuild`、`plugin ≠ context-governance`）即 `accepted(match:"kind")`；`contentSha256`/`hashMatch` 仅作观察字段（真机重发内容会变，不要求哈希命中，`hashMatch` 只记录匹配与否）；**`kind` 为空时**按 `sha256(text)` 从严匹配 → `accepted(match:"sha256")`；窗口内无匹配 → `unacceptable`；⑥**不跨重启**：重启后所有 pending 一律转 `unacceptable(reason:"restart")`，不猜；⑦**终态必落审计**：每个 `pending→accepted/unacceptable` 一条 `surface-rebuild-resolved`，对账键 `compactionId+ruleSeq`；**重启扫描遇 audit 轮转/窗口未覆盖**时必须写 `surface-rebuild-recovery-incomplete`，行文明确"**可能存在未结算 pending**"，不得只披露扫描边界；审计白名单必须含 `contentSha256 / windowTurnId / status / match`（漏一个即静默丢字段）；⑧**分型 loss**：`lossClass`（`system-prompt-skip`/`user-rule-loss`/`b-class-loss`）+ 派生 `disposition`（`accepted`/`unacceptable`）+ `dispositionRule=v1`；`compaction-loss` **只含终态 `unacceptable`**（判据只读它），`compaction-loss-accepted` 汇总 count/seqs、**不逐条报警**、可按 `compactionId` 回查；阈值可调（>10% 当日压缩仅提示）；**`accepted` 不得计入“已保护/已保留”**、不参与 `verifyProtection` 覆盖计数；⑨**判据只认终态**：`pending` 期间 `unacceptable` 既不成立也不算通过，终态结算后才计 `unacceptable=0`；⑩**证据范围**：b=0 仅测试 25 条样本（a=21 / b=0 / 判不出=0 / 空正文 4 不计）成立，**不构成永久保证**，新形态按 b 从严；⑪升级：`unacceptable` 命中、pending 超 TTL 未结算、accepted 与 skip 不成对、accepted 突增超阈值 → 升级（C 形态/宿主写入窗），不得常态 |
+| **C34** | ~~`system-prompt` 压缩事务内不兜底重建：pending 延迟判定 + 分型 loss~~（**2026-11-15 已作废**；用户批方案 A：rules 重建删除，system 规则不再产生 skip/pending） | — | — | 作废依据：用户批 A（删 rules 重建、只留 `latestUser`）；原 v3b 判据历史留档于 `analysis/dsh-021-turn-cursor/保护面重建-真伪判定-20261115.md` §8、口径对比稿 |
+| **C35** | **压缩后指令/目录一致性（宿主自愈验收，取代 C34）**（2026-11-15 用户批） | A | 新用例：压缩时零 rules 副本 + 下个 pre-step 证据；**真实压缩判定待重启后复验** | ①压缩后**不得**写 rules 副本（无 `source.form=surface-rebuild` 的 rules；仅 `latestUser` 一条可重建），不写 `baseline:true/baselineIdentity`；②`rule-injection` 审计为 `skip(reason=host-self-heal)`，压缩时**不得**计 fail/写 `compaction-loss(rule-injection)`；③**下个 pre-step** 出现当前 digest 的 `agent-instructions`/`skill-catalog` 节点（非插件写、`form≠surface-rebuild`）、历史修订版未重放 ⇒ 判恢复 pass；否则 fail + `compaction-loss`（unacceptable），不得静默；digest 无现成字段，需按 text/entries 重算，事件级证据为主档；④本轮不重启，真实压缩判定标“待重启后复验”；⑤证据字段：`seq/kind/digest/form/plugin` |
 | **C11** | D2 层与生效提示（2026-11-15 修订） | A | 文案断言 | 界面必须同时写明：①**写的是哪一层**——主入口 = **A2 持久会话层（本会话，重启保留）**；设置页 = **plugin 全局层（影响所有会话）**；②**生效时点**（A1 运行时=重启失效；A2/plugin=重启保留）。**缺①或缺②即判不过** |
 | **C12** | A 主入口（输入框下条目） | A | 注册形状单测 + 渲染文本 | `conversation.composer.dock` 注册项形状正确（唯一 id、order、返回 React 节点）；渲染文本为 `压 NN%`，**数值与快照 `at` 一致**；快照失败时渲染 `压 —` 且不抛错 |
 | **C13** | A 气泡三行信息 | A | 渲染文本断言 | 气泡含「当前生效 / 来源层 / 生效时点」三行，值取自快照 `{at, source, effectiveAt}`，与 `/cg status` 口径一致；含"打开设置页"兜底链接 |
@@ -1274,6 +1275,10 @@ C 的初步证据：启动后本项目根 `audit.jsonl` 只有 `capability@ready
 > 22. **范围变更：修 `D-MGMT-021`（v3b）+ 新增 C34（2026-11-15 用户批 A）**：1.1.0 范围追加"`system-prompt` 压缩后不兜底重建"的修复——A 形态只停 system 分支、user 规则重建保持，配 `surface-rebuild-skipped` 审计与分型 loss（`accepted`/`unacceptable`），判据见 **C34**（`REQUIREMENTS.md:1188`）。
 >    - **v3a 已作废、不再试**：把被 shadow 的 `system/message` 降级为 `user` 形态回注——编码层可写（`user/message` 不在 `STEP_EVENT_TYPES`），但①`hasNewer`（`protection.js:545-551`）只看同 kind + 更大 seq + post surface、**不看 form**，user 副本会被判"已保留"、掩盖真实缺失；②`MESSAGE_ROLE_BY_TYPE`（`dsh-session/src/index.ts:328-334`）硬映射，系统指令降级成用户输入；③装配侧（`dsh-agent-loop/src/runtime-context.ts:78-113`）每轮把非 head 的 system 节点 replace 成空，改 user 后残留错位。理由与锚点：`analysis/dsh-021-turn-cursor/保护面重建-真伪判定-20261115.md` §8"被否方案"、§10.4；审核机制（`hasNewer` 排除 `form='surface-rebuild'` 副本、另记 `content-preserved`）留档为"v3a 前置、本次不用"。
 >    - **证据范围**：b=0 仅测试 **25 条样本**（a=21 / b=0 / 判不出=0 / 空正文 4 不计）成立，**不构成永久保证**；出现新形态一律按 b 从严。
+> 23. **范围变更：用户批方案 A（删 rules 重建、只留 `latestUser`）+ 判据增删（C34→C35，2026-11-15 用户批事项二=A）**：压缩后**不再由插件重建 rules**（含 skill-catalog）；指令/目录由宿主下个 pre-step 自愈到当前版本，历史修订版不重放；surface 重建只剩 `latestUser`（仍 0 丢失）。承诺同步收窄为「**5 类记忆指针仍落盘 0 丢失；规则注入 surface 重建取消；latestUser 仍 0 丢失**」。
+>    - **判据**：C34 作废（历史留档 `analysis/dsh-021-turn-cursor/保护面重建-真伪判定-20261115.md` §8）；新增 **C35**（宿主自愈验收）；C33 保留（当前无 `system/message` 写点，作未来闸）；C6 基线待测试新数回填。
+>    - **待同步表述**：`README.md:110-111`（公网）、`docs/T4-压缩前固化与回注.md:102/109`、`docs/P3-实现说明.md:127-134`（仅加"已被方案 A 取代"注、不删历史）、代码头注释；与实现同批提交，tag 前按"文档承诺=实现行为"复核。
+>    - **重启暂缓**：C35 真实压缩判定标"待重启后复验"；本变更不以"已重启验证"为前提；范围仍为 1.1.0 剩余。
 
 **窗口物料（00 已备，2026-11-14 22:30；**本轮暂不使用**，重开窗口时再用；明细见 `G:\DS-HARNESS\tasks\TASK-20261114-02-本体升级-0.2.2-rc.3.md`）**：
 

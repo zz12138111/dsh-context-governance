@@ -107,8 +107,9 @@ packages/dsh-context-governance/
 
 - 订阅 `session/event`：`compaction/start` 快照 → `summary` 校准 → checkpoint → `end` 核对；**只读**，不改宿主。
 - 识别宿主默认 / context-zip（运行时标记），自检失败或 provider 未知 → `observe-only`；摘要不可读 → `degraded-summary-unreadable`。
-- 保护检查：最新用户消息、规则注入（旧快照可由新 baseline 取代）、工具配对切口、批次清单、回滚点、产物/摘要。
-- **压缩前固化（S4=B）**：`compaction/start` 内同步写 5 类保护项（最新用户首行、规则在场、批次 STATE、回滚点、未闭合 callId）到 `protection/` journal 与记忆；随后异步物化。
+- 保护检查：最新用户消息、规则注入（**仅审计：当前版本由宿主下个 pre-step 自愈，历史修订版不重放；插件不重建 rules**）、工具配对切口、批次清单、回滚点、产物/摘要。
+- **压缩前固化（S4=B）**：`compaction/start` 内同步写 5 类**记忆指针**（最新用户首行、规则在场、批次 STATE、回滚点、未闭合 callId）到 `protection/` journal 与记忆；随后异步物化。
+- **压缩后 surface 重建**：**只重建 `latestUser`**（`source.form='surface-rebuild'`）；rules 不重建，指令/目录由宿主下个 pre-step 自愈。
 - **回注**：`compaction/end` 后首个 microtask 注入一次 `ID+状态+（未覆盖时）标题`；详情永不回注；同 cycle 去重。
 - 失败：写失败 → audit + `degraded-protection`；注失败 → audit + `observe-only`；均不抛宿主。
 - 发现（真实 16 次压缩）：宿主**手动压缩不保护**最新用户消息/批次/回滚点；T4 采用“记忆指针 + 显式告警 + 回注标题”补偿（S4=B 已拍板）。
