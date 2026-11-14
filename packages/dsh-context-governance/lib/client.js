@@ -20,6 +20,7 @@
 window.__ModuleLoader__.load({
   id: 'dsh-context-governance',
   factory: (require) => {
+    console.info('[context-governance] client module materialized');
     const react = require('react');
 
     const ENTRY_ID = 'dsh-context-governance';
@@ -245,13 +246,15 @@ window.__ModuleLoader__.load({
           // 声明后 register 仍可能抛（宿主契约不符）——必须 warn 带 slot 名，不许无痕吞。
           const dispose = slots.inject(entry.slot, () => {
             try {
-              return slots.register({
+              const registered = slots.register({
                 name: entry.slot,
                 id: entry.id,
                 order: entry.order,
                 label: () => labels.sectionLabel,
                 inject: () => inject,
               }, components[entry.component]);
+              console.info('[context-governance] slot registered', entry.slot);
+              return registered;
             } catch (error) {
               console.warn('[context-governance] slot register failed', entry.slot, String(error?.message ?? error));
               return undefined;
@@ -285,4 +288,5 @@ window.__ModuleLoader__.load({
     };
   },
 });
+
 

@@ -30,7 +30,7 @@ import { DEFAULT_MEMORY_DIR, MemoryStore, MemoryStoreError } from './memory/stor
 import { registerMemoryHeader } from './memory/header.js';
 import { SCOPE_SKIP, resolveScope } from './scope.js';
 import { MEM_QUERY_NAME, MEM_WRITE_NAME, registerMemoryTools } from './tools/mem-tools.js';
-import { mergeSettingsAt, mountSnapshotRoute, policySnapshot, readVolatileAt } from './settings-policy.js';
+import { createSnapshotHandler, mergeSettingsAt, policySnapshot, readVolatileAt } from './settings-policy.js';
 
 export const name = 'dsh-context-governance';
 
@@ -575,6 +575,33 @@ export function buildPolicyState(config, deps = {}) {
     },
     resolve: resolveWithWindow,
   };
+}
+
+/**
+ * 1.1.0 D2：注册只读快照路由（C17：`webServer` 是后挂服务，必须经
+ * `ctx.inject(['webServer'], scoped => scoped.effect(() => scoped.webServer.register(...)))`
+ * ——与 `@local/dsh-computer-use` 同写法）。无 `inject` 的 ctx（部分单测）回退直挂。
+ * @returns {boolean} 已挂载或已排队等待 webServer
+ */
+export function mountSnapshotRoute(ctx, { getPolicy, getNative, path = '/context-governance/policy-snapshot' } = {}) {
+  const handler = createSnapshotHandler({ getPolicy, getNative });
+  const mount = (host) => {
+    if (host === null || host === undefined || typeof host.webServer?.register !== 'function') return false;
+    try {
+      const dispose = host.webServer.register({ kind: 'exact', path, handler });
+      if (typeof dispose === 'function' && typeof host.effect === 'function') {
+        host.effect(() => () => { try { dispose(); } catch { /* ignore */ } }, 'context-governance: policy-snapshot route');
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  if (typeof ctx?.inject === 'function') {
+    ctx.inject(['webServer'], (scoped) => { mount(scoped); });
+    return true;
+  }
+  return mount(ctx);
 }
 
 export async function apply(ctx, rawConfig = {}) {
@@ -1507,3 +1534,4 @@ export {
   MemoryStore,
   MemoryStoreError,
 };
+

@@ -7,12 +7,12 @@ import path from 'node:path';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 
+import { mountSnapshotRoute } from '../src/index.js';
 import { RootGuardPool } from '../src/compress/root-guards.js';
 import {
   PERSISTENT_LIFECYCLE_TEXT,
   createSnapshotHandler,
   mergeSettingsAt,
-  mountSnapshotRoute,
   percentToRatio,
   policySnapshot,
   ratioToPercentText,
