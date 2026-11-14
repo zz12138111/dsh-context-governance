@@ -47,11 +47,12 @@ const checkpointOf = (built) => built.events.find(
   (item) => item.type === 'user/message' && item.data.source?.kind === 'compact-checkpoint',
 );
 
-test('P3 end-order：end 内先 append latest/rule 内容副本，再校验通过', async () => {
+test('D-MGMT-021 end-order：latest/user 副本重建，system 形态 skip 并留痕', async () => {
   const base = await tempDir('cg-p3-rebuild-end-');
   const store = await MemoryStore.open({ rootDir: path.join(base, 'memory'), project: 'test-project' });
   try {
     const ctx = makeCtx();
+    const audits = [];
     const guard = new CompressionGuard({
       resolveScope: () => ({
         mode: 'single-root', root: 'D:/work/p3-rebuild', cwd: '', governed: true,
@@ -61,6 +62,7 @@ test('P3 end-order：end 内先 append latest/rule 内容副本，再校验通�
       hostVersion: '0.2.1-rc.3',
       store,
       rootAudit: { append() {} },
+      audit: { append(event, details) { audits.push({ event, details }); return true; } },
       rootId: 'root-p3-rebuild',
       projectRoot: 'D:/work/p3-rebuild',
       logger: ctx.logger,
@@ -84,23 +86,37 @@ test('P3 end-order：end 内先 append latest/rule 内容副本，再校验通�
 
     const report = guard.status.lastReport;
     assert.ok(report);
-    for (const name of ['latest-user-message', 'rule-injection']) {
-      const check = report.checks.find((item) => item.name === name);
-      assert.equal(check?.status, 'pass', `${name}: ${JSON.stringify(check)}`);
-    }
-    assert.deepEqual(
-      report.failures.filter((failure) => ['latest-user-message', 'rule-injection'].includes(failure.name)),
-      [],
-    );
+    assert.equal(report.checks.find((item) => item.name === 'latest-user-message').status, 'pass');
+    const ruleCheck = report.checks.find((item) => item.name === 'rule-injection');
+    assert.equal(ruleCheck?.status, 'fail', '被 skip 的 system 规则不得计为 pass');
+    assert.deepEqual(ruleCheck.seqs, [0]);
 
+    // 零 system/message append + 两条 user 副本（latest + agent-instructions）。
+    assert.equal(session.appended.filter((item) => item.type === 'system/message').length, 0);
     const latestCopy = session.appended.find((item) => item.type === 'user/message'
       && item.data?.content?.[0]?.text === '最新一条用户消息：继续。');
-    const ruleCopy = session.appended.find((item) => item.type === 'system/message'
-      && item.data?.message?.content?.[0]?.text === 'SYSTEM PROMPT');
+    const ruleCopy = session.appended.find((item) => item.type === 'user/message'
+      && item.data?.content?.[0]?.text === 'AGENTS.md rules');
     assert.ok(latestCopy, '必须 append latest-user 内容副本');
-    assert.ok(ruleCopy, '必须 append rule-injection 内容副本');
+    assert.ok(ruleCopy, 'user 形态规则副本必须保留');
     assert.ok(session.surface.nodes.includes(latestCopy.seq));
     assert.ok(session.surface.nodes.includes(ruleCopy.seq));
+
+    // 审计闭环：恰一条 skip（带 lossClass），loss 只含 unacceptable。
+    const skipped = audits.filter((item) => item.event === 'surface-rebuild-skipped');
+    assert.equal(skipped.length, 1);
+    assert.equal(skipped[0].details.ruleSeq, 0);
+    assert.equal(skipped[0].details.kind, 'system-prompt');
+    assert.equal(skipped[0].details.reason, 'no-open-step');
+    assert.equal(skipped[0].details.lossClass, 'b-class-loss', '宿主未重发 → 不得判 accepted');
+    assert.equal(skipped[0].details.compactionId, built.compactionId);
+    const loss = audits.filter((item) => item.event === 'compaction-loss');
+    assert.equal(loss.length, 1);
+    assert.equal(loss[0].details.disposition, 'unacceptable');
+    assert.equal(loss[0].details.lossClass, 'b-class-loss');
+    assert.deepEqual(loss[0].details.failures, ['rule-injection']);
+    const accepted = audits.filter((item) => item.event === 'compaction-loss-accepted');
+    assert.equal(accepted.length, 0, '无宿主重发时不得产生 accepted');
 
     await guard.flush();
     guard.stop();

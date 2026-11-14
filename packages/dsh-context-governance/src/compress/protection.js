@@ -368,7 +368,7 @@ export function rebuildProtectionSurface(session, snapshot, {
   postSurfaceNodes = null,
   compactionId = null,
 } = {}) {
-  const rebuilt = { latestUser: null, rules: [], failures: [] };
+  const rebuilt = { latestUser: null, rules: [], failures: [], skipped: [] };
   if (snapshot === null || typeof snapshot !== 'object') return rebuilt;
   if (typeof session?.append !== 'function') {
     rebuilt.failures.push('session-append-unavailable');
@@ -417,11 +417,20 @@ export function rebuildProtectionSurface(session, snapshot, {
       rebuilt.failures.push('rule-payload-missing');
       continue;
     }
-    const type = rule.type === 'system/message' ? 'system/message' : 'user/message';
+    // D-MGMT-021：宿主 system/message 需要 data.turn/step，且恢复期要求等于当前 open
+    // turn/step（relationships.ts 的 STEP_EVENT_TYPES/requireStep）；压缩事务恒在
+    // turn/end 之后，没有 open step，该形态重建会产出编码期/恢复期非法事件。
+    // 故该形态在此处不重建，只记 skipped 留痕（实现行为描述；验收口径见 C34）。
+    if (rule.type === 'system/message') {
+      rebuilt.skipped.push({
+        ruleSeq: rule.seq,
+        kind: rule.kind ?? rule.source?.kind ?? null,
+        reason: 'no-open-step',
+      });
+      continue;
+    }
     const message = rebuildMessage(rule.source, rule.text, compactionId);
-    const seq = type === 'system/message'
-      ? append(type, { message })
-      : append(type, message);
+    const seq = append('user/message', message);
     if (seq === null) continue;
     const copy = { ...rule, originalSeq: rule.seq, seq, rebuilt: true };
     snapshot.rules.push(copy);

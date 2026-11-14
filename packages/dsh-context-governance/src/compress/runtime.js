@@ -196,6 +196,8 @@ export class CompressionGuard {
   /** 1.0 #1：会话归域判定（由 index 注入 resolveScope；缺省用根边界兜底）。 */
   #scopeResolver = null;
   #captureTitle = true;
+  /** D-MGMT-021 回滚开关：false 时整段 surface 重建跳过（默认 true）。 */
+  #rebuildEnabled = true;
   #scopeWarned = new Set();
   #lastInjection = new Map();
   #stats = {
@@ -249,6 +251,7 @@ export class CompressionGuard {
     this.#onlyProject = options.onlyProject !== false && this.#projectRoot !== '';
     this.#scopeResolver = typeof options.resolveScope === 'function' ? options.resolveScope : null;
     this.#captureTitle = options.captureTitle !== false;
+    this.#rebuildEnabled = options.rebuildEnabled !== false;
     this.#readOnly = this.#store?.status?.readOnlyReason !== null && this.#store?.status?.readOnlyReason !== undefined;
     this.#readOnlyReason = this.#readOnly ? this.#store.status.readOnlyReason : null;
     this.#reinjection = {
@@ -2287,11 +2290,22 @@ export class CompressionGuard {
           queueMicrotask(() => {
             try {
           const postSurfaceBeforeRebuild = Array.isArray(session?.surface?.nodes) ? [...session.surface.nodes] : null;
-          const rebuilt = rebuildProtectionSurface(session, state.snapshot, {
-            shadowedSeqs: shadowedSeqsOf(state.summaryEvent, state.snapshot),
-            postSurfaceNodes: postSurfaceBeforeRebuild,
-            compactionId: id,
-          });
+          // D-MGMT-021：`protection.rebuild.enabled=false` 是回滚开关，整段重建跳过（含 user）。
+          let rebuilt = { latestUser: null, rules: [], failures: [], skipped: [] };
+          if (this.#rebuildEnabled) {
+            rebuilt = rebuildProtectionSurface(session, state.snapshot, {
+              shadowedSeqs: shadowedSeqsOf(state.summaryEvent, state.snapshot),
+              postSurfaceNodes: postSurfaceBeforeRebuild,
+              compactionId: id,
+            });
+          } else {
+            this.#auditEvent('surface-rebuild-disabled', {
+              sessionId: state.sessionId,
+              cycle: state.protectionCycleKey ?? null,
+              compactionId: id,
+              reason: 'protection.rebuild.enabled=false',
+            });
+          }
           if (rebuilt.failures.length > 0) {
             this.#logger?.warn?.(`[context-governance] surface rebuild incomplete: ${rebuilt.failures.join('; ')}`);
           }
@@ -2319,12 +2333,66 @@ export class CompressionGuard {
               names: explainedSkips.map((item) => item.name),
             });
           }
-          const protectedFailures = report.failures
-            .map((failure) => failure.name)
-            .filter((name) => ['latest-user-message', 'batch-list', 'rollback-point', 'rule-injection'].includes(name));
-          if (protectedFailures.length > 0) {
+          // D-MGMT-021 分型（v1）：a 类 = 压缩后宿主逐字节重发同 kind 的 system/message（accepted，
+          // 只记录、不证明保护、不参与覆盖计数）；否则 b 类（unacceptable，仍落 compaction-loss）。
+          const hostReposted = (rule) => {
+            if (!Array.isArray(postSurfaceNodes)) return false;
+            for (const seq of postSurfaceNodes) {
+              if (seq <= rule.ruleSeq) continue;
+              const candidate = session.eventAt?.(seq);
+              if (candidate?.type !== 'system/message') continue;
+              if ((candidate.data?.message?.source?.kind ?? null) === rule.kind) return true;
+            }
+            return false;
+          };
+          const acceptedSeqs = [];
+          const skippedUnacceptable = [];
+          for (const skipped of rebuilt.skipped) {
+            const reposted = hostReposted(skipped);
+            this.#auditEvent('surface-rebuild-skipped', {
+              sessionId: state.sessionId,
+              cycle: state.protectionCycleKey ?? null,
+              compactionId: id,
+              ruleSeq: skipped.ruleSeq,
+              kind: skipped.kind,
+              reason: skipped.reason,
+              lossClass: reposted ? 'system-prompt-skip' : 'b-class-loss',
+            });
+            if (reposted) acceptedSeqs.push(skipped.ruleSeq);
+            else skippedUnacceptable.push(skipped.ruleSeq);
+          }
+          const accepted = [];
+          const unacceptable = [];
+          for (const failure of report.failures) {
+            if (!['latest-user-message', 'batch-list', 'rollback-point', 'rule-injection'].includes(failure.name)) continue;
+            if (failure.name === 'rule-injection' && Array.isArray(failure.seqs)) {
+              const acc = failure.seqs.filter((seq) => acceptedSeqs.includes(seq));
+              const rest = failure.seqs.filter((seq) => !acceptedSeqs.includes(seq));
+              if (acc.length > 0) accepted.push({ seqs: acc, lossClass: 'system-prompt-skip' });
+              // 被 skip 且宿主未重发的 system 规则属于 b 类；其余 rule 丢失才是 user 规则丢失。
+              const bSeqs = rest.filter((seq) => skippedUnacceptable.includes(seq));
+              const uSeqs = rest.filter((seq) => !skippedUnacceptable.includes(seq));
+              if (bSeqs.length > 0) unacceptable.push({ name: 'rule-injection', seqs: bSeqs, lossClass: 'b-class-loss' });
+              if (uSeqs.length > 0) unacceptable.push({ name: 'rule-injection', seqs: uSeqs, lossClass: 'user-rule-loss' });
+            } else if (failure.name === 'rule-injection') {
+              // 无 seqs 的 rule-injection fail 无法归因到 skip → 保守 unacceptable。
+              unacceptable.push({ name: failure.name, lossClass: 'user-rule-loss' });
+            } else {
+              unacceptable.push({ name: failure.name, lossClass: 'b-class-loss' });
+            }
+          }
+          if (skippedUnacceptable.length > 0
+            && !unacceptable.some((item) => item.name === 'rule-injection')) {
+            // 已跳过的 system 规则若宿主未重发 → 真丢失（b 类），必须进 unacceptable。
+            unacceptable.push({ name: 'rule-injection', seqs: skippedUnacceptable, lossClass: 'b-class-loss' });
+          }
+          if (unacceptable.length > 0) {
             // 1.0 #10：auto/manual 的保护失败都落统一 compaction-loss（旧名只读、不双写）。
+            // D-MGMT-021：lossClass/disposition/dispositionRule 标注分型（判据只读本事件）。
             const manual = state.manual === true;
+            const lossClass = unacceptable.some((item) => item.lossClass === 'b-class-loss')
+              ? 'b-class-loss'
+              : (unacceptable.some((item) => item.lossClass === 'user-rule-loss') ? 'user-rule-loss' : 'system-prompt-skip');
             this.#auditEvent('compaction-loss', {
               sessionId: state.sessionId,
               compactionId: id,
@@ -2332,8 +2400,29 @@ export class CompressionGuard {
               manual,
               trigger: manual ? 'manual' : 'auto',
               ...(state.manual === null ? { reason: 'late-mount' } : {}),
-              failures: protectedFailures,
+              failures: [...new Set(unacceptable.map((item) => item.name))],
               entries: state.entries?.length ?? 0,
+              lossClass,
+              disposition: 'unacceptable',
+              dispositionRule: 'v1',
+              auditVersion: 'loss-v1.0',
+            });
+          }
+          const allAcceptedSeqs = [...new Set([...acceptedSeqs, ...accepted.flatMap((item) => item.seqs)])];
+          if (allAcceptedSeqs.length > 0) {
+            // accepted：允许丢（宿主可逐字节重发），只汇总、不逐条报警、不参与已保护计数。
+            const manual = state.manual === true;
+            this.#auditEvent('compaction-loss-accepted', {
+              sessionId: state.sessionId,
+              cycle: state.protectionCycleKey ?? null,
+              compactionId: id,
+              manual,
+              trigger: manual ? 'manual' : 'auto',
+              acceptedCount: allAcceptedSeqs.length,
+              acceptedSeqs: allAcceptedSeqs,
+              lossClass: 'system-prompt-skip',
+              disposition: 'accepted',
+              dispositionRule: 'v1',
               auditVersion: 'loss-v1.0',
             });
           }

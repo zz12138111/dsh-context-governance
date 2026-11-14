@@ -55,6 +55,12 @@ export const Config = Schema === null ? undefined : Schema.object({
     at: Schema.number().min(0).max(1).step(0.01).volatile()
       .description('压缩触发比例（0–1）。设置页按 0–100 百分比输入，内部 /100；下限 0.20，<0.30 需 lowThresholdAck。'),
   }).description('策略。设置页只开放 compact.at；其余键仍由 profile patch / 项目策略文件配置。'),
+  protection: Schema.object({
+    rebuild: Schema.object({
+      enabled: Schema.boolean().default(true)
+        .description('压缩后保护面重建开关（D-MGMT-021 回滚用）。改后需重启生效；默认 true。'),
+    }).description('保护面重建。'),
+  }).description('保护面重建（非设置页项）。'),
 });
 
 /**
@@ -103,6 +109,12 @@ export const DEFAULT_CONFIG = Object.freeze({
   captureTitle: true,
   diagnostics: Object.freeze({
     logFile: '',
+  }),
+  /** D-MGMT-021 回滚开关：false 时跳过 surface 重建（含 user 分支），默认 true。 */
+  protection: Object.freeze({
+    rebuild: Object.freeze({
+      enabled: true,
+    }),
   }),
   policy: Object.freeze({
     profile: '',
@@ -230,6 +242,18 @@ export function resolveConfig(raw = {}) {
     throw new MemoryStoreError('CONFIG', 'reinjection.maxFailures must be an integer (clamped to [1, 20])');
   }
   reinjection.maxFailures = Math.min(Math.max(reinjection.maxFailures, 1), 20);
+  // D-MGMT-021 回滚开关（非 volatile：改 patch 后重启生效）。
+  if (config.protection === null || typeof config.protection !== 'object' || Array.isArray(config.protection)) {
+    throw new MemoryStoreError('CONFIG', 'protection must be an object');
+  }
+  if (config.protection.rebuild === null || typeof config.protection.rebuild !== 'object'
+    || Array.isArray(config.protection.rebuild)) {
+    throw new MemoryStoreError('CONFIG', 'protection.rebuild must be an object');
+  }
+  const protectionRebuild = { ...DEFAULT_CONFIG.protection.rebuild, ...config.protection.rebuild };
+  if (typeof protectionRebuild.enabled !== 'boolean') {
+    throw new MemoryStoreError('CONFIG', 'protection.rebuild.enabled must be a boolean');
+  }
   return {
     enabled: config.enabled,
     projectRoot,
@@ -248,6 +272,11 @@ export function resolveConfig(raw = {}) {
     },
     reinjection: {
       maxFailures: reinjection.maxFailures,
+    },
+    protection: {
+      rebuild: {
+        enabled: protectionRebuild.enabled,
+      },
     },
     memoryHeader: {
       enabled: memoryHeader.enabled,
@@ -1031,6 +1060,8 @@ export async function apply(ctx, rawConfig = {}) {
         captureTitle: config.captureTitle,
         project: rootProject,
         reinjection: { maxFailures: config.reinjection.maxFailures },
+        // D-MGMT-021 回滚开关：false 时整段 surface 重建跳过（改 patch 后重启生效）。
+        rebuildEnabled: config.protection?.rebuild?.enabled !== false,
         startWaitMs: resources.startWaitMs,
       });
       // P3：订阅由 RootGuardPool 持有；guard 只初始化 tokenMeter/感知状态。

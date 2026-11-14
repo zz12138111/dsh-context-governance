@@ -85,7 +85,7 @@ test('P3 规则标题：source 为对象时按 kind 归并，标题精确为字�
   assert.equal(criterion.title.includes('[object Object]'), false);
 });
 
-test('P3 surface 重建：latest-user/rule-injection 被 shadow 后 append 内容副本并通过校验', () => {
+test('D-MGMT-021：system 形态规则不重建（skip 留痕），user 形态规则照常重建', () => {
   const built = buildCompaction({
     before: healthyMessages(),
     summary: FIVE_SECTION_SUMMARY,
@@ -121,7 +121,12 @@ test('P3 surface 重建：latest-user/rule-injection 被 shadow 后 append 内�
     compactionId: built.compactionId,
   });
   assert.notEqual(rebuilt.latestUser, null);
-  assert.equal(rebuilt.rules.length, 2);
+  // seq0 是 system/message（system-prompt）→ 不重建；seq1 是 user/message（agent-instructions）→ 照常重建。
+  assert.equal(rebuilt.skipped.length, 1);
+  assert.deepEqual(rebuilt.skipped[0], { ruleSeq: 0, kind: 'system-prompt', reason: 'no-open-step' });
+  assert.equal(rebuilt.rules.length, 1);
+  assert.equal(rebuilt.rules[0].originalSeq, 1);
+  assert.equal(appended.filter((item) => item.type === 'system/message').length, 0, 'system/message 不得 append');
 
   const report = verifyProtection({
     snapshot,
@@ -131,17 +136,20 @@ test('P3 surface 重建：latest-user/rule-injection 被 shadow 后 append 内�
     adapterKind: built.source,
     manual: true,
   });
-  assert.equal(report.ok, true, JSON.stringify(report.failures));
   assert.equal(report.checks.find((check) => check.name === 'latest-user-message').status, 'pass');
-  assert.equal(report.checks.find((check) => check.name === 'rule-injection').status, 'pass');
+  const ruleCheck = report.checks.find((check) => check.name === 'rule-injection');
+  assert.equal(ruleCheck.status, 'fail', '被 skip 的 system 规则不得计为已保护');
+  assert.deepEqual(ruleCheck.seqs, [0]);
 
   const latest = bySeq.get(rebuilt.latestUser.seq);
   assert.equal(latest.data.content[0].text, '最新一条用户消息：继续。');
   const ruleTexts = appended
     .filter((item) => item.type === 'system/message')
     .map((item) => item.data.message.content[0].text);
-  assert.deepEqual(ruleTexts, ['SYSTEM PROMPT']);
-  assert.equal(appended.some((item) => item.data?.content?.[0]?.text === 'AGENTS.md rules'), true);
+  assert.deepEqual(ruleTexts, []);
+  const ruleCopy = appended.find((item) => item.type === 'user/message'
+    && item.data?.content?.[0]?.text === 'AGENTS.md rules');
+  assert.ok(ruleCopy, 'user 形态规则副本必须保留');
 });
 
 

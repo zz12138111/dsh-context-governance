@@ -49,6 +49,20 @@ export const AUDIT_FIELD_WHITELIST = Object.freeze({
   compactionShortId: 'id',
   reconcileDelayMs: 'number',
   cycle: 'id',
+  /** D-MGMT-021：surface-rebuild-skipped 与 rule-injection fail 的对账键（session seq）。 */
+  ruleSeq: 'number',
+  /** 被跳过的/丢失的规则形态（system-prompt / agent-instructions / skill-catalog…）。 */
+  kind: 'text',
+  /** D-MGMT-021 分型 loss：system-prompt-skip / user-rule-loss / b-class-loss。 */
+  lossClass: 'text',
+  /** 分型结论：accepted（允许丢，仅记录）/ unacceptable（必须报警）。 */
+  disposition: 'text',
+  /** 分型规则版本（当前 v1），供后续口径变更时区分历史行。 */
+  dispositionRule: 'text',
+  /** accepted 汇总计数（不逐条报警）。 */
+  acceptedCount: 'number',
+  /** accepted 汇总 seq 列表（number-array，上限 30）。 */
+  acceptedSeqs: 'number-array',
   manual: 'boolean',
   count: 'number',
   moved: 'number',
@@ -161,6 +175,12 @@ export const AUDIT_EVENTS = Object.freeze([
   'reinjection-degraded',
   'compaction-cost',
   'compaction-loss',
+  /** D-MGMT-021：accept 类损失汇总（不逐条报警，判据只读 compaction-loss）。 */
+  'compaction-loss-accepted',
+  /** D-MGMT-021：A 形态跳过 system/message 重建（每条规则一条，reason=no-open-step）。 */
+  'surface-rebuild-skipped',
+  /** D-MGMT-021 回滚开关：protection.rebuild.enabled=false 时整段跳过。 */
+  'surface-rebuild-disabled',
   'prune-observed',
   // 历史别名：只读兼容，不再新写。
   'manual-compaction-loss',
@@ -251,6 +271,10 @@ function sanitizeValue(key, value) {
     case 'text-array':
       return Array.isArray(value)
         ? value.filter((item) => typeof item === 'string').slice(0, 30).map(redactText)
+        : undefined;
+    case 'number-array':
+      return Array.isArray(value)
+        ? value.filter((item) => typeof item === 'number' && Number.isFinite(item)).slice(0, 30)
         : undefined;
     default:
       return undefined;
