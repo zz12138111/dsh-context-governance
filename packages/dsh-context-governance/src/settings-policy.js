@@ -6,8 +6,25 @@
  * 所以 D2 新增固定字段 `policy.at`，由 `mergeSettingsAt()` 合入 plugin 层 values。
  */
 
-/** 生效时点文案（C11 钉死位置：R7 若确认热更新未生效，只改这一句）。 */
-export const EFFECTIVE_AT_TEXT = '立即生效（保存后重新加载配置）';
+/**
+ * 生命周期文案（C8，随 source 派生）：
+ * - `session` 层：本会话有效，重启后失效；
+ * - 持久层（plugin/profile/project/builtin）：保存后生效、重启仍有效。
+ * 降级开关：R7 若确认热更新实际未生效，只改 `PERSISTENT_LIFECYCLE_TEXT` 这一串（不动派生逻辑）。
+ */
+export const PERSISTENT_LIFECYCLE_TEXT = '保存后生效、重启仍有效';
+export const SESSION_LIFECYCLE_TEXT = '本会话有效，重启后失效';
+
+/** 按来源层派生生命周期文案。 */
+export function lifecycleText(source) {
+  return source === 'session' ? SESSION_LIFECYCLE_TEXT : PERSISTENT_LIFECYCLE_TEXT;
+}
+
+/** @deprecated 兼容旧断言：持久层生命周期文案（等价 `PERSISTENT_LIFECYCLE_TEXT`）。 */
+export const EFFECTIVE_AT_TEXT = PERSISTENT_LIFECYCLE_TEXT;
+
+/** 写入层静态文案（C11）：UI 只有一个写入口（profile Cordis patch → plugin 配置层）。 */
+export const WRITE_LAYER_TEXT = '本次修改写入：plugin 层（profile patch）';
 
 /** 读 volatile 引用（`.get()`）或普通数字；非法/缺失 → null。 */
 export function readVolatileAt(config) {
@@ -45,7 +62,7 @@ export function policySnapshot(policy, { native = null } = {}) {
     at,
     source,
     sessionOverride: source === 'session' && at !== null ? at : null,
-    effectiveAt: EFFECTIVE_AT_TEXT,
+    effectiveAt: lifecycleText(source),
     native: Number.isFinite(native) ? Number(native) : null,
   };
 }

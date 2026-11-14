@@ -61,6 +61,7 @@ test('C9 快照视图：at/source/sessionOverride/effectiveAt/native 五键，�
   const session = policySnapshot({ values: { 'compact.at': 0.5 }, sources: { 'compact.at': 'session' } });
   assert.equal(session.source, 'session');
   assert.equal(session.sessionOverride, 0.5);
+  assert.equal(session.effectiveAt, '本会话有效，重启后失效', 'C8：session 层必须用会话有效期文案');
 });
 
 test('C10 只读快照路由：GET 200 JSON、非 GET 405、无副作用', () => {
@@ -186,15 +187,42 @@ test('C12 主入口：dock 条目 id/order + chip 文案与快照一致（缺快
   assert.equal(client.chipLabel({ at: 0.65 }, 'en'), 'At 65%');
 });
 
-test('C13 气泡三行：当前生效 / 来源层 / 生效时点', async () => {
+test('C13/C8/C11 气泡四行：当前生效 / 来源层 / 生命周期（随 source 派生）/ 写入层（静态）', async () => {
   const client = await loadClient();
-  const text = client.renderBubbleText({ at: 0.55, source: 'plugin', effectiveAt: EFFECTIVE_AT_TEXT });
+  const text = client.renderBubbleText({ at: 0.55, source: 'plugin' });
   const lines = text.split('\n');
-  assert.equal(lines.length, 3);
+  assert.equal(lines.length, 4, 'C13 三行信息 + C11 写入层 = 四行');
   assert.match(lines[0], /55%/);
   assert.match(lines[1], /plugin/);
-  assert.match(lines[2], new RegExp(EFFECTIVE_AT_TEXT.replace(/[()]/g, '\\$&')));
+  assert.equal(lines[2], `生效时点: ${EFFECTIVE_AT_TEXT}`, '持久层：保存后生效、重启仍有效');
+  assert.equal(lines[3], '本次修改写入：plugin 层（profile patch）', 'C11：静态写入层文案');
+
+  const sessionText = client.renderBubbleText({ at: 0.5, source: 'session' });
+  assert.match(sessionText, /本会话有效，重启后失效/, 'C8：session 必须用会话生命周期文案');
+  assert.equal(client.effectiveTextFor('session'), '本会话有效，重启后失效');
+  assert.equal(client.effectiveTextFor('plugin'), '保存后生效、重启仍有效');
   assert.match(client.renderBubbleText({}, {}), /unknown/);
+});
+
+test('C14 保存调用注入面：走 configForms.set / mutate，不可用返回 false（不抛）', async () => {
+  const client = await loadClient();
+  const calls = [];
+  const setContext = {
+    configForms: { get: (id) => ({ set: (field, value) => { calls.push([id, field, value]); return Promise.resolve(); } }) },
+  };
+  assert.equal(await client.saveRatio(setContext, 0.55), true);
+  assert.deepEqual(calls, [['dsh-context-governance', 'policy.at', 0.55]]);
+
+  const mutateCalls = [];
+  const mutateContext = {
+    configForms: { get: () => ({ revision: 7, mutate: (ops, revision) => { mutateCalls.push([ops, revision]); return Promise.resolve(); } }) },
+  };
+  assert.equal(await client.saveRatio(mutateContext, 0.6), true);
+  assert.deepEqual(mutateCalls, [[[{ path: 'policy.at', value: 0.6 }], 7]]);
+
+  assert.equal(await client.saveRatio({}, 0.5), false, '无 configForms → false');
+  const throwing = { configForms: { get: () => ({ set: () => { throw new Error('rejected'); } }) } };
+  assert.equal(await client.saveRatio(throwing, 0.5), false, '写入抛错 → false（不崩）');
 });
 
 test('C14 保存前计算：校验与 /cg set 同源（<20% / <30% ack / 项目层 <45% / native 上限）', async () => {
@@ -235,4 +263,5 @@ test('C15 降级鲁棒：slot 缺失/注册抛错不崩，三处入口各自独�
   assert.equal(client.inject.includes('configForms'), true, '卡片的写入口仍是 configForms');
   assert.equal(client.inject.includes('estimateSafety'), false, '安全参数不在客户端注入面');
 });
+
 

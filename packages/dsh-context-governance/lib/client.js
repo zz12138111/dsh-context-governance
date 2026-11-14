@@ -14,6 +14,8 @@
  * 注入的客户端服务：`slots`（注册三处入口）、`locale`、`configForms`（读写 profile 条目 `dsh-context-governance`）；
  * 只读数据：同源 `GET /context-governance/policy-snapshot`（宿主侧已实现的只读路由，本文件不新增接口）。
  * 安全边界：只暴露 `compact.at`（百分比 0–100，内部 /100）；estimateSafety/lowThresholdAck/armed 无入口。
+ * C8/C11 文案来源：生命周期文案由 `source` 派生（session → 本会话有效，重启后失效；持久层 → 保存后生效、重启仍有效），
+ *   与 host 侧 `src/settings-policy.js` 的 `lifecycleText()` 同一映射；「本次修改写入：plugin 层（profile patch）」为静态文案。
  */
 window.__ModuleLoader__.load({
   id: 'dsh-context-governance',
@@ -28,12 +30,17 @@ window.__ModuleLoader__.load({
     const USABLE_MARGIN = 0.02;
     const LABELS = {
       zh: {
-        sectionLabel: '上下文治理', title: '压缩触发阈值', percent: '触发百分比（0–100）', save: '保存', effective: '当前生效', source: '来源层', when: '生效时点', invalid: '输入无效', openSettings: '打开设置页', chipUnknown: '压 —', chip: (t) => `压 ${t}`,
+        sectionLabel: '上下文治理', title: '压缩触发阈值', percent: '触发百分比（0–100）', save: '保存', effective: '当前生效', source: '来源层', when: '生效时点', writeLayer: '写入层', invalid: '输入无效', openSettings: '打开设置页', chipUnknown: '压 —', chip: (t) => `压 ${t}`,
       },
       en: {
-        sectionLabel: 'Context governance', title: 'Compaction threshold', percent: 'Trigger percent (0–100)', save: 'Save', effective: 'Effective', source: 'Source layer', when: 'Takes effect', invalid: 'Invalid input', openSettings: 'Open settings', chipUnknown: 'At —', chip: (t) => `At ${t}`,
+        sectionLabel: 'Context governance', title: 'Compaction threshold', percent: 'Trigger percent (0–100)', save: 'Save', effective: 'Effective', source: 'Source layer', when: 'Takes effect', writeLayer: 'Writes to', invalid: 'Invalid input', openSettings: 'Open settings', chipUnknown: 'At —', chip: (t) => `At ${t}`,
       },
     };
+
+    /** 与 host 侧 `lifecycleText()` 保持同一映射（C8）：session 只在本会话有效，持久层重启仍有效。 */
+    const effectiveTextFor = (source) => (source === 'session' ? '本会话有效，重启后失效' : '保存后生效、重启仍有效');
+    /** 写入层静态文案（C11）：UI 唯一写入口 = profile Cordis patch → plugin 配置层。 */
+    const WRITE_LAYER = '本次修改写入：plugin 层（profile patch）';
 
     /** 比例 → 百分比文本；非数字 → '—'。 */
     const toPercentText = (at) => (Number.isFinite(at) ? `${Math.round(Number(at) * 100)}%` : '—');
@@ -62,12 +69,14 @@ window.__ModuleLoader__.load({
       return labels.chip(toPercentText(snapshot.at));
     };
 
-    /** 气泡三行文本（C13）：当前生效 / 来源层 / 生效时点。 */
+    /** 气泡四行文本（C8/C11/C13）：当前生效 / 来源层 / 生命周期（随 source 派生）/ 写入层（静态）。 */
     const renderBubbleText = (snapshot = {}, labels = LABELS.zh) => {
+      const source = snapshot.source ?? 'unknown';
       const line1 = `${labels.effective}: ${toPercentText(snapshot.at)}`;
-      const line2 = `${labels.source}: ${snapshot.source ?? 'unknown'}`;
-      const line3 = `${labels.when}: ${snapshot.effectiveAt ?? ''}`;
-      return [line1, line2, line3].join('\n');
+      const line2 = `${labels.source}: ${source}`;
+      const line3 = `${labels.when}: ${effectiveTextFor(source)}`;
+      const line4 = WRITE_LAYER;
+      return [line1, line2, line3, line4].join('\n');
     };
 
     /** 保存前计算：返回 {ok, ratio} 或 {ok:false, reason}（C14 拒绝理由同源）。 */
@@ -240,6 +249,9 @@ window.__ModuleLoader__.load({
       chipLabel,
       renderBubbleText,
       computeSave,
+      saveRatio,
+      effectiveTextFor,
+      WRITE_LAYER,
       toPercentText,
       toRatio,
       validateRatio,
@@ -247,3 +259,4 @@ window.__ModuleLoader__.load({
     };
   },
 });
+
