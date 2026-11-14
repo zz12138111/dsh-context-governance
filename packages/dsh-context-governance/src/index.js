@@ -30,7 +30,7 @@ import { DEFAULT_MEMORY_DIR, MemoryStore, MemoryStoreError } from './memory/stor
 import { registerMemoryHeader } from './memory/header.js';
 import { SCOPE_SKIP, resolveScope } from './scope.js';
 import { MEM_QUERY_NAME, MEM_WRITE_NAME, registerMemoryTools } from './tools/mem-tools.js';
-import { mergeSettingsAt, policySnapshot, readVolatileAt } from './settings-policy.js';
+import { createSnapshotHandler, mergeSettingsAt, policySnapshot, readVolatileAt } from './settings-policy.js';
 
 export const name = 'dsh-context-governance';
 
@@ -932,22 +932,10 @@ export async function apply(ctx, rawConfig = {}) {
       const disposeSnapshot = ctx.webServer.register({
         kind: 'exact',
         path: '/context-governance/policy-snapshot',
-        handler: (req, res) => {
-          if (req?.method !== 'GET') {
-            res.writeHead(405, { allow: 'GET' });
-            res.end();
-            return;
-          }
-          try {
-            const view = policySnapshot(policyForSession({}), { native: snapshotNative() });
-            res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
-            res.end(JSON.stringify(view));
-          } catch (error) {
-            ctx.logger?.warn?.(`[context-governance] policy-snapshot failed: ${String(error?.message ?? error)}`);
-            res.writeHead(500);
-            res.end();
-          }
-        },
+        handler: createSnapshotHandler({
+          getPolicy: () => policyForSession({}),
+          getNative: snapshotNative,
+        }),
       });
       if (typeof ctx.effect === 'function' && typeof disposeSnapshot === 'function') {
         ctx.effect(() => () => { try { disposeSnapshot(); } catch { /* ignore */ } }, 'context-governance: policy-snapshot route');

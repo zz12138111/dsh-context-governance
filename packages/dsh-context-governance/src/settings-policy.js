@@ -61,3 +61,26 @@ export function percentToRatio(percent) {
 export function ratioToPercentText(at) {
   return Number.isFinite(at) ? `${Math.round(Number(at) * 100)}%` : '—';
 }
+
+/**
+ * 只读快照 HTTP handler（C10 单测直接调用；index 只负责注册）。
+ * 仅 GET；非 GET → 405。只写阈值/来源 JSON，无记忆内容、无本机路径。
+ * @param {{getPolicy: () => object, getNative: () => number|null}} deps
+ */
+export function createSnapshotHandler({ getPolicy, getNative }) {
+  return (req, res) => {
+    if (req?.method !== 'GET') {
+      res.writeHead(405, { allow: 'GET' });
+      res.end();
+      return;
+    }
+    try {
+      const view = policySnapshot(getPolicy(), { native: typeof getNative === 'function' ? getNative() : null });
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+      res.end(JSON.stringify(view));
+    } catch {
+      res.writeHead(500);
+      res.end();
+    }
+  };
+}
