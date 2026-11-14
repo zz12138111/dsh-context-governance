@@ -63,6 +63,8 @@ export const AUDIT_FIELD_WHITELIST = Object.freeze({
   acceptedCount: 'number',
   /** accepted 汇总 seq 列表（number-array，上限 30）。 */
   acceptedSeqs: 'number-array',
+  /** a/b 判定的内容证据：同 kind 副本文本 sha256 是否与压缩前快照一致（hash 本身不入审计）。 */
+  hashMatch: 'boolean',
   manual: 'boolean',
   count: 'number',
   moved: 'number',

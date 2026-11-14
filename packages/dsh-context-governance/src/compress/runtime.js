@@ -18,7 +18,7 @@
  */
 
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import { AuditLog } from '../audit.js';
 import { appendDiagnosticLine } from '../diagnostics.js';
@@ -2333,22 +2333,42 @@ export class CompressionGuard {
               names: explainedSkips.map((item) => item.name),
             });
           }
-          // D-MGMT-021 分型（v1）：a 类 = 压缩后宿主逐字节重发同 kind 的 system/message（accepted，
-          // 只记录、不证明保护、不参与覆盖计数）；否则 b 类（unacceptable，仍落 compaction-loss）。
-          const hostReposted = (rule) => {
-            if (!Array.isArray(postSurfaceNodes)) return false;
+          if (this.#rebuildEnabled) {
+          // D-MGMT-021 分型（v1）：a 类 = 压缩后宿主逐字节重发同 kind 的 system/message
+          //（accepted，只记录、不证明保护、不参与覆盖计数）；否则 b 类（unacceptable，仍落 compaction-loss）。
+          // 口径与测试 `tests/probe-1.1.0/classify-a-b.mjs` 一致：kind 相同 + 内容逐字节（sha256）相同
+          // 才算"宿主重发"。kind 为 null/缺失一律按 b 从严——null 会与另一条 null 误配，等于
+          // 静默接受一次真实丢失，宁可报警。
+          // 枚举对齐：skip `lossClass=system-prompt-skip` ↔ accepted `disposition=accepted`；
+          //           skip `lossClass=b-class-loss`      ↔ loss     `disposition=unacceptable`。
+          const textHashOf = (text) => createHash('sha256').update(text, 'utf8').digest('hex');
+          const inspectReposted = (rule) => {
+            if (rule.kind === null || typeof rule.text !== 'string' || !Array.isArray(postSurfaceNodes)) {
+              return { reposted: false, hashMatch: false };
+            }
+            const expectedHash = textHashOf(rule.text);
+            let sameKindSeen = false;
             for (const seq of postSurfaceNodes) {
               if (seq <= rule.ruleSeq) continue;
               const candidate = session.eventAt?.(seq);
               if (candidate?.type !== 'system/message') continue;
-              if ((candidate.data?.message?.source?.kind ?? null) === rule.kind) return true;
+              const kind = candidate.data?.message?.source?.kind ?? null;
+              if (kind !== rule.kind) continue;
+              sameKindSeen = true;
+              const content = candidate.data?.message?.content;
+              const text = Array.isArray(content)
+                ? content.filter((block) => block?.type === 'text' && typeof block.text === 'string')
+                  .map((block) => block.text).join('\n')
+                : '';
+              if (textHashOf(text) === expectedHash) return { reposted: true, hashMatch: true };
             }
-            return false;
+            // 同 kind 存在但内容不同 → hashMatch=false（便于事后查"kind 同、内容不同"）。
+            return { reposted: false, hashMatch: sameKindSeen ? false : false };
           };
           const acceptedSeqs = [];
           const skippedUnacceptable = [];
           for (const skipped of rebuilt.skipped) {
-            const reposted = hostReposted(skipped);
+            const { reposted, hashMatch } = inspectReposted(skipped);
             this.#auditEvent('surface-rebuild-skipped', {
               sessionId: state.sessionId,
               cycle: state.protectionCycleKey ?? null,
@@ -2357,6 +2377,9 @@ export class CompressionGuard {
               kind: skipped.kind,
               reason: skipped.reason,
               lossClass: reposted ? 'system-prompt-skip' : 'b-class-loss',
+              disposition: reposted ? 'accepted' : 'unacceptable',
+              dispositionRule: 'v1',
+              hashMatch,
             });
             if (reposted) acceptedSeqs.push(skipped.ruleSeq);
             else skippedUnacceptable.push(skipped.ruleSeq);
@@ -2425,6 +2448,31 @@ export class CompressionGuard {
               dispositionRule: 'v1',
               auditVersion: 'loss-v1.0',
             });
+          }
+          // 审核 §7：`/cg status` 的 protection=failed 分流前带分型信息（accepted 不证明保护）。
+          if (state.report !== undefined && state.report !== null) {
+            state.report.disposition = allAcceptedSeqs.length > 0 ? 'accepted' : 'unacceptable';
+            state.report.acceptedSeqs = allAcceptedSeqs;
+          }
+          } else {
+            // 回滚开关关闭：回到 1.0.3 旧口径（无分型字段，failures 列表不变）。
+            const protectedFailures = report.failures
+              .map((failure) => failure.name)
+              .filter((name) => ['latest-user-message', 'batch-list', 'rollback-point', 'rule-injection'].includes(name));
+            if (protectedFailures.length > 0) {
+              const manual = state.manual === true;
+              this.#auditEvent('compaction-loss', {
+                sessionId: state.sessionId,
+                compactionId: id,
+                ...(state.protectionUnavailable === true ? { protection: 'unavailable' } : {}),
+                manual,
+                trigger: manual ? 'manual' : 'auto',
+                ...(state.manual === null ? { reason: 'late-mount' } : {}),
+                failures: protectedFailures,
+                entries: state.entries?.length ?? 0,
+                auditVersion: 'loss-v1.0',
+              });
+            }
           }
           this.#completedCycles.add(id);
           this.#completedOrder.push(id);

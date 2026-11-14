@@ -123,7 +123,10 @@ test('D-MGMT-021：system 形态规则不重建（skip 留痕），user 形态�
   assert.notEqual(rebuilt.latestUser, null);
   // seq0 是 system/message（system-prompt）→ 不重建；seq1 是 user/message（agent-instructions）→ 照常重建。
   assert.equal(rebuilt.skipped.length, 1);
-  assert.deepEqual(rebuilt.skipped[0], { ruleSeq: 0, kind: 'system-prompt', reason: 'no-open-step' });
+  assert.equal(rebuilt.skipped[0].ruleSeq, 0);
+  assert.equal(rebuilt.skipped[0].kind, 'system-prompt');
+  assert.equal(rebuilt.skipped[0].reason, 'no-open-step');
+  assert.equal(typeof rebuilt.skipped[0].text, 'string', 'skipped 内部保留原文用于 a/b 逐字节判定');
   assert.equal(rebuilt.rules.length, 1);
   assert.equal(rebuilt.rules[0].originalSeq, 1);
   assert.equal(appended.filter((item) => item.type === 'system/message').length, 0, 'system/message 不得 append');

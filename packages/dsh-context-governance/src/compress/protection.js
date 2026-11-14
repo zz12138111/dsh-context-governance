@@ -426,6 +426,8 @@ export function rebuildProtectionSurface(session, snapshot, {
         ruleSeq: rule.seq,
         kind: rule.kind ?? rule.source?.kind ?? null,
         reason: 'no-open-step',
+        // 仅内部用于"宿主是否逐字节重发"判定；不写审计（审计不放正文）。
+        text: typeof rule.text === 'string' ? rule.text : null,
       });
       continue;
     }

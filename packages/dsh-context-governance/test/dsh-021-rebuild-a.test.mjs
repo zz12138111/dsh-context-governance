@@ -51,7 +51,7 @@ const checkpointOf = (built) => built.events.find(
   (item) => item.type === 'user/message' && item.data.source?.kind === 'compact-checkpoint',
 );
 
-async function runGuard({ rebuildEnabled, repostSystem }) {
+async function runGuard({ rebuildEnabled, repostSystem, repostText = 'SYSTEM PROMPT', repostKind = 'system-prompt' }) {
   const base = await tempDir('cg-dsh-021-a-');
   const store = await MemoryStore.open({ rootDir: path.join(base, 'memory'), project: 'test-project' });
   const audits = [];
@@ -89,8 +89,8 @@ async function runGuard({ rebuildEnabled, repostSystem }) {
       message: {
         role: 'system',
         id: 'sys-repost',
-        content: [{ type: 'text', text: 'SYSTEM PROMPT' }],
-        source: { kind: 'system-prompt' },
+        content: [{ type: 'text', text: repostText }],
+        source: { kind: repostKind },
       },
     }, { surfaceOp: 'append' });
   }
@@ -115,6 +115,8 @@ test('accepted：宿主重发同 kind 副本 → skip 标 system-prompt-skip，a
     assert.equal(skipped.length, 1);
     assert.equal(skipped[0].details.kind, 'system-prompt');
     assert.equal(skipped[0].details.lossClass, 'system-prompt-skip');
+    assert.equal(skipped[0].details.disposition, 'accepted');
+    assert.equal(skipped[0].details.hashMatch, true);
     const accepted = audits.filter((item) => item.event === 'compaction-loss-accepted');
     assert.equal(accepted.length, 1);
     assert.equal(accepted[0].details.disposition, 'accepted');
@@ -128,6 +130,29 @@ test('accepted：宿主重发同 kind 副本 → skip 标 system-prompt-skip，a
     assert.equal(ownSystem.length, 0);
   } finally {
     await cleanup();
+  }
+});
+
+test('null kind / 文本不同 → 一律 b 类，不得误判 accepted', async () => {
+  for (const [label, options] of [
+    ['null-kind', { repostSystem: true, repostKind: null }],
+    ['text-differs', { repostSystem: true, repostText: 'DIFFERENT TEXT' }],
+  ]) {
+    const { result, cleanup } = await runGuard(options);
+    try {
+      const { audits } = result;
+      const skipped = audits.filter((item) => item.event === 'surface-rebuild-skipped');
+      assert.equal(skipped.length, 1, label);
+      assert.equal(skipped[0].details.lossClass, 'b-class-loss', label);
+      assert.equal(skipped[0].details.disposition, 'unacceptable', label);
+      assert.equal(skipped[0].details.hashMatch, false, label);
+      assert.equal(audits.filter((item) => item.event === 'compaction-loss-accepted').length, 0, label);
+      const loss = audits.filter((item) => item.event === 'compaction-loss');
+      assert.equal(loss.length, 1, label);
+      assert.equal(loss[0].details.disposition, 'unacceptable', label);
+    } finally {
+      await cleanup();
+    }
   }
 });
 
@@ -146,7 +171,10 @@ test('回滚开关：protection.rebuild.enabled=false → 零重建 + surface-re
     );
     const loss = audits.filter((item) => item.event === 'compaction-loss');
     assert.equal(loss.length, 1);
-    assert.equal(loss[0].details.disposition, 'unacceptable');
+    // 回滚开关 = 旧口径：failures 列表在、分型字段不写。
+    assert.ok(Array.isArray(loss[0].details.failures));
+    assert.equal(loss[0].details.disposition, undefined);
+    assert.equal(loss[0].details.lossClass, undefined);
   } finally {
     await cleanup();
   }
