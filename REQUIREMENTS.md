@@ -1085,7 +1085,15 @@ C 的初步证据：启动后本项目根 `audit.jsonl` 只有 `capability@ready
 
 #### ④ D2 用户面：压缩百分比数字输入（P1，**用户明确要求，必须进本单**）
 
-**目标（一句话）**：用户不记命令、不查参数，在设置里**直接填一个百分比数字**就能改"窗口用掉多少就压缩"。
+**目标（一句话）**：用户不记命令、不查参数，**在输入框附近直接填一个百分比数字**就能改"窗口用掉多少就压缩"。
+
+> **入口形态待用户选（2026-11-14 用户否决"只在设置页"）**：原话「为啥是设置页，不能直接在下面就像电脑操作或者什么地方一样搞个小框输入吗……我需要更好的用户友好型设计」。调查见 `analysis/req-20261114-02/D2-入口形态调查-20261114.md`（证据 `d2-evidence2/`）。
+> - **A（需求推荐）**：`conversation.composer.dock`（**输入框下方统计行**，现有 `activity`/`usage` 两条即是）注册「压 65%」小条目，点击弹 `conversation.input.overlay` 气泡=百分比输入 + 生效值/来源层/时点 + "打开设置页"；**只改 `lib/client.js`（+~120 行）**，宿主/包面不变；先例 `dsh-cost-meter`（dock+overlay）。
+> - **B**：`sidebar.right.pane.tab` 右栏面板 tab（dsh-context 先例），2 步打开，空间大但慢。
+> - **C**：保留已实现的 `settings.section`（`20bf20d`）+ 输入框下加"去设置"快捷链接（最小改动，但多一跳）。
+> - **D**：`sidebar.footer.action` 侧栏底部图标+角标（入口隐蔽，不推荐）。
+> - **与 `/cg` 双向保留**：UI 写 **plugin 层**（profile patch，`config-reload` 后生效）；`/cg set` 写 **session 层**（即时、重启失效）；气泡/设置页都显示 `source` 层，两条路并存。
+> - **`20bf20d` 的 settings 实现先留着不废**（A/C 都要用它兜底）；**用户选形前不装、不改代码**。
 
 > **形态裁定（2026-11-14，调查结论：`analysis/req-20261114-02/D2-UI能力调查-20261114.md`）**：
 > - **可行路径 = 自建 client 半侧**：`package.json` 加 `dsh.client={platform:'web'}` + `exports["./client"]`，**手写** `lib/client.js`（`window.__ModuleLoader__.load({id,factory})` 格式，**不引入打包器**），注册进设置页槽位 **`settings.section`**；宿主半侧加 Schemastery `Config` 的 **`.volatile()`** 字段（**只有 volatile 字段可被设置表单编辑**）。
