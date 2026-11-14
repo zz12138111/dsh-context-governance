@@ -1137,6 +1137,7 @@ C 的初步证据：启动后本项目根 `audit.jsonl` 只有 `capability@ready
 |---|---|---|---|
 | **C21** | 气泡结构与交互 | A | 假 React 运行时：元素与顺序（U2）、打开聚焦全选（U1）、Esc/再点 chip/外部关闭（U7，**含 `pointerdown` 到空白背景且 `relatedTarget=null` 的场景**）、错误 `role=alert`+`aria-invalid`（U4/U8）、按钮禁用与"已保存"态（U5/U9）、恢复默认取 `snapshot.defaultAt` 且只填值（U6）、无 `alert` 调用（U12） |
 | **C22** | 输入体验 | A | 只收数字、% 免输、全角归一、粘贴清洗（U3）；非法值不发请求（U4）；失败保留输入（U5） |
+| **C23** | **渲染期异常隔离**（2026-11-15 新增；第 5 次预验 B2 崩后补） | A | 假 React 注入抛错组件 + 静态断言 | ①**任一入口渲染抛错，其余入口仍挂载可用**（三处入口各自包 ErrorBoundary/防御，不得一崩全消失）；②崩溃时 chip 退化为 `压 —`、Console 有**可读错误**（含入口名 + 原始 message，禁止只丢空白）；③**禁止访问未 inject 的宿主服务**：客户端 `ctx.<服务>` 访问必须 ⊆ 导出 `inject` ∪ 安全全局（`fetch` 必须走 `globalThis.fetch`，不得读 `ctx.fetch`——Cordis 对未注入属性 getter 直接抛 `cannot get property … without inject`）；静态断言扫 `ctx.fetch`/未声明服务属性访问为 0 |
 | **R10** | 真机友好走查（C） | C | 用户在场按 U11 走一遍：3 秒内改值成功、错误可见、保存可感、chip 随动、Esc/外部可关、深浅色可读、气泡不出屏；**任一条不满足即判"友好不通过"**，不接受"能用就行" |
 
 ### 三、不做（边界）
@@ -1244,6 +1245,9 @@ C 的初步证据：启动后本项目根 `audit.jsonl` 只有 `capability@ready
 >    - **登记不阻塞（backlog）**：①硬超时 2s → 5s（极端慢 I/O，测试常数，不影响产品）；②把审计正向断言**移到数量断言之前**（下次若红能直接看到"产品确实没 materialize"，而不是只有 `4!==0`）。两项留到下一个版本或复发时再做，**本轮不再为它们多跑 30 轮**。
 > 18. **友好改造完成（2026-11-15，代码锚 `1e75096`、文档 `359b174`）**：按 U1-U12 重写气泡——打开聚焦+全选、层级（标题→大号值→三行小字→输入行带 `%`→常驻错误行→保存/恢复默认）、输入清洗、失焦/保存才校验且非法不发请求、成功「已保存」1.5s、恢复默认只填值（默认值来自快照 `defaultAt`，`POLICY_DEFAULTS` 单一来源）、`Esc`/外点（`document` 级 `pointerdown` capture，含空白背景，排除 chip）/再点关闭并重置、不可用态可读+重试、主题变量带 fallback、无 alert/滑块；`warn once`（5 次调用仅 1 条）。commit `1e75096` 恰 **5 文件**（发布说明/README/`client.js`/`settings-policy.js`/`settings-d2`），`package.json` 与其余 `src/**` 未动，包树空；需求侧自跑 **560/560**、`settings-d2` **21/21**、`no-control-chars` 1/1、5 轮绑 `1e75096`。`359b174` 为 docs-only（发布说明 §3.5 合并矛盾形态，代码树不变）。**待测试锚定（C16/17 11 + C18 8 + C19 6 + C20 3 + C21/C22 14 + `settings-d2` + 全量 + verify + 范围核）→ 可装（预验）→ 真机 R10（用户实际改值并说像样）**。
 > 19. **包面/文件哈希口径（2026-11-15 定，防误报）**：**比对以 LF 归一化后的 SHA256 为准**（与 git blob 内容一致）；Windows 工作区文件常为 CRLF，直接对磁盘字节求哈希会得到另一个值（同一内容的两种形态），**不得据此判"包面不一致"**。实例：`lib/client.js@1e75096` = LF 形态 SHA256 `71B83C0B60C7F4E6C4EE674B8E112C86BF98E9E3F2479507EA8AFCD675DF68F2`（26340 B）；CRLF 形态 `2ECE5A7C8BF73BF0C9544A97CA413D35EA720B3020CF1D0C92872DA0DE78E01F`（26804 B）——**两者皆指向同一 commit，属等价**。审核出包核对、测试 build 判别、需求复核一律注明用的是哪种形态。
+> 20. **第 5 次预验 B2 崩（2026-11-15，`D-MGMT-020`）→ 新增 C23「渲染期异常隔离」**：B1/B3 通过（build 一致），**B2 不过**——Console 原文 `Error: cannot get property "fetch" without inject   client.js:64` / `at slot entry crashed in "settings section" … client.js:638`。根因：`1e75096` 改为注入真 ctx 后，`fetchSnapshot(ctx?.fetch ?? …)` 读 **未注入的 `ctx.fetch`**，Cordis 对未注入属性 getter 直接抛错 → 渲染期崩 → 三处入口全消失（用户连 `压 —` 都没了）；`cf24cc2` 因 `ctx` 为 undefined 反而绕过。
+>    - **修法（批，仅 `lib/client.js`+测试）**：①**禁止读 `ctx.fetch`**，一律 `globalThis.fetch`（浏览器原生）；其他 `ctx.<服务>` 访问必须 ⊆ 导出 `inject`（`slots`/`locale`/`configForms`），访问前 `try/catch` 防御；②**三处入口各自包 ErrorBoundary**：任一渲染抛错只影响自己，chip 退化 `压 —`，Console 必须打出**含入口名 + 原始 message**的可读错误（不许空白/静默）；③测试补 C23：注入一个会抛错的组件，断言其余入口仍挂载、错误可读、chip 退化。
+>    - **判据**：C23 在 `REQUIREMENTS.md:1140`（静态断言 `ctx.fetch` 为 0 + 抛错隔离 + 可读错误）。
 
 **窗口物料（00 已备，2026-11-14 22:30；**本轮暂不使用**，重开窗口时再用；明细见 `G:\DS-HARNESS\tasks\TASK-20261114-02-本体升级-0.2.2-rc.3.md`）**：
 
