@@ -1200,6 +1200,7 @@ C 的初步证据：启动后本项目根 `audit.jsonl` 只有 `capability@ready
 >    - **否决"直注册回退"（2026-11-15）**：开发曾加"slots 只有 `register` 没 `inject` 时直注册"的回退以迁就测试假 ctx（`verify-d2` 用 `slots:{register}`），**不予批准、要求丢弃**。理由：①宿主 `slots` 契约恒有 `inject`（`dsh-context`/`skills-manager`/`settings-shell` 全依赖它），假 ctx 不仿真属于**探针失真**；②回退会掩盖"忘了 `inject`"这类缺陷，正是本次事故的根因类型；③**测试探针必须仿真真实宿主形状**，不得为跑绿让产品迁就测试。测试须把假 ctx 补上 `inject` 并断言"有 `inject` 时走 inject 路径"。
 >    - **代码锚更新**：`b6e3c41`（= `26664f6` + 还原 `settings-policy.js` 尾部空行 1 行，行为零变化）；累计 `18013d9..HEAD` 只含 `lib/client.js`/`src/index.js`/`test/settings-d2.test.mjs`（`settings-policy.js` 净零）。
 > 11. **范围与节奏（用户 2026-11-15 明确，覆盖此前"最后一次"说法）**：**D2 不延期、1.1.0 不拆**，`engines`+#4 **不抢先发**；1.1.0 范围仍为四件（engines + #4 + flake + D2）。**预验失败 → 继续修、修完再验**；每次预验由 00 按需另签凭证（用户在场即可），**没有"最后一次"**；**不得以拆包绕开 D2**。判据不变（R9 + C18），真机判定归测试。`GRANT-20261114-05` 已由 00 按此改口径。
+> 12. **C18 修复（2026-11-15，锚 `0e022f2`）**：`createSnapshotPolicyResolver({ policyState, readLatestSessionPolicy })` 工厂（**生产同源**：`mountSnapshotRoute` 的 `getPolicy` 调它）；`lastSessionPolicy` 缓存最近一次真实 `policyForSession` 解析；无会话→`policyState.resolve(null)`；500 带 `{"error":"internal"}` body + `onError` 接 `ctx.logger.warn`（`policy-snapshot failed: <message>`）。范围 **3 文件**（`src/index.js`/`src/settings-policy.js`/`test/settings-d2`），`lib/client.js`/`package.json` **未动**，包树干净。需求侧自跑：全量 **555/555**、`settings-d2` **16/16**、`no-control-chars` 1/1，**5 轮绑 `0e022f2`**。**离线通过 → 待测试 C16/C17/C18 复判 → 可装（预验）**。
 
 **窗口物料（00 已备，2026-11-14 22:30；**本轮暂不使用**，重开窗口时再用；明细见 `G:\DS-HARNESS\tasks\TASK-20261114-02-本体升级-0.2.2-rc.3.md`）**：
 
