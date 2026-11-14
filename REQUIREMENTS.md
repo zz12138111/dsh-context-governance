@@ -1210,6 +1210,9 @@ C 的初步证据：启动后本项目根 `audit.jsonl` 只有 `capability@ready
 >    - **教训**：这两个真因（取数静默失败、订阅被立即取消）都属"离线单测不可能抓到"的渲染生命周期缺陷——**C19/C20 把可静态化/可假测的部分补上，剩下的只能靠真机**。开发本轮自查出订阅 bug，比等下一轮预验再抓省一轮。
 > 15. **C19/C20 修复提交（2026-11-15，锚 `cf24cc2`）**：`5c07744`（订阅退订真因 + 快照退避重试/多时机重取 + C20 守卫）→ `cf24cc2`（`focusTarget = globalThis.window ?? globalThis`，浏览器语义优先）。范围**仅** `lib/client.js` + `test/settings-d2.test.mjs`（累计、两提交），`src/**`、`package.json` 未动，包树干净。需求侧自跑：全量 **557/557**、`settings-d2` **18/18**、`no-control-chars` 1/1，**5 轮绑 `cf24cc2`**。**待测试按 C19 6 条 + C20 3 条（含 focus 复测）复判 → 可装（预验）**。
 > 16. **测试复判 PASS（锚 `cf24cc2`，`TEST-2026-11-15-12`）→ 可装（预验）**：C16/C17 11、C18 7、**C19 6/6（focus 复测转绿：focus 前=3 后=4）**、C20 3/3、`settings-d2` 18/18、全量 557/557；范围核通过（探针均指向打包文件）。**但发现 flake**：测试首次全量出现 1 次 `P3 G8` 失败（`pass 556/fail 1`，断言"子会话不得写持久记忆条目" `4 !== 0`），单跑该文件 7/7、随后 20 轮全绿。**按 C7 收紧口径**：该 flake 属**功能断言型**，**必须定性**（产品 materialize / 测试隔离或墙钟 / 外部环境）后才允许发布；"偶发、未复现"不进发布结论。**不阻塞本次预验（UI 面），阻塞出包。**
+> 17. **P3 G8 flake 定性（2026-11-15，开发只读取证 + 需求核证）＝测试时序问题，非产品缺陷**：`allEntries()` 合并尚未物化的 `#protectionEntries`（`store.js:838-844`）；子会话 `#materializeProtection` 首行判 `subagent` 即跳过（`runtime.js:1722-1729`）且 `compaction/end` 走 `discardProtection`（`:2351-2365`，`queueMicrotask`）；用例在 `flush()` 后仅 `await wait(20)` 就断言 `allEntries()===0`，**墙钟不保证微任务已跑** → 读到 4 条 pending；`:134` 先抛，`:135` 的 `protectionPending===0` 根本没执行（看似矛盾的"4 但不 pending"由此解释）。
+>    - **修法（批，仅测试）**：`test/p3-early-window.test.mjs:133` 的 `wait(20)` 改**轮询到 `allEntries().length===0 && protectionPending===0`，硬超时 2s**（与其他用例 `waitFor` 一致）；**不加宽断言、不动产品代码**；**另加强正向证据**：断言审计出现 `protection-materialize-skipped(reason=subagent)` 或 `subagent-not-persisted`，并证明 topics 恒 0（不只靠超时轮询掩盖）。
+>    - **收口条件**：修后在新 HEAD 上 **30 轮全绿**（逐轮留档、绑 HEAD）+ 该用例单跑绿；C7 观察项才可关。
 
 **窗口物料（00 已备，2026-11-14 22:30；**本轮暂不使用**，重开窗口时再用；明细见 `G:\DS-HARNESS\tasks\TASK-20261114-02-本体升级-0.2.2-rc.3.md`）**：
 
