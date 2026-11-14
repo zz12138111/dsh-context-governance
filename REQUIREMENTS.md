@@ -1193,6 +1193,8 @@ C 的初步证据：启动后本项目根 `audit.jsonl` 只有 `capability@ready
 >    - **真因 1（UI 全不出现）**：我们 `apply` 直调 `ctx.slots.register(...)` 并用 `try/catch` 吞错；宿主 slot 是"先无后有"的，官方约定是 **`ctx.slots.inject(slotName, () => ctx.slots.register({...}, Comp))`**（`dsh-client-ui-settings-shell/lib/client.js:182-189`、`dsh-cost-meter`、`dsh-context`、`skills-manager` 均如此）。直调失败 → 静默丢弃。
 >    - **真因 2（快照 404）**：`src/index.js:927` 外层 `typeof ctx.webServer?.register === 'function'` 在服务未就绪时整块跳过；应照 `computer-use`（`ctx.inject(['webServer'], scoped => scoped.effect(() => scoped.webServer.register(...)))`）与宿主 `dsh-client-modules/lib/index.js:570`。
 >    - **修改面（需求已批，2026-11-14；2026-11-15 追加一处）**：`lib/client.js`（`slots.inject` 延迟注册 + 诊断 `console.info/warn`，不再静默）、`src/index.js`（**仅** webServer 注入与注册释放这一块，其余 host 不动）、**`mountSnapshotRoute(scoped, deps)` 路由挂载函数放 `src/index.js` 或 `src/settings-policy.js` 之一（不得两处重复实现；另一文件的 diff 只允许"移出该段"）**、测试（C16/C17 + 路由 200/405）。**`package.json` 不改。**
+>    - **否决"直注册回退"（2026-11-15）**：开发曾加"slots 只有 `register` 没 `inject` 时直注册"的回退以迁就测试假 ctx（`verify-d2` 用 `slots:{register}`），**不予批准、要求丢弃**。理由：①宿主 `slots` 契约恒有 `inject`（`dsh-context`/`skills-manager`/`settings-shell` 全依赖它），假 ctx 不仿真属于**探针失真**；②回退会掩盖"忘了 `inject`"这类缺陷，正是本次事故的根因类型；③**测试探针必须仿真真实宿主形状**，不得为跑绿让产品迁就测试。测试须把假 ctx 补上 `inject` 并断言"有 `inject` 时走 inject 路径"。
+>    - **代码锚更新**：`b6e3c41`（= `26664f6` + 还原 `settings-policy.js` 尾部空行 1 行，行为零变化）；累计 `18013d9..HEAD` 只含 `lib/client.js`/`src/index.js`/`test/settings-d2.test.mjs`（`settings-policy.js` 净零）。
 
 **窗口物料（00 已备，2026-11-14 22:30；**本轮暂不使用**，重开窗口时再用；明细见 `G:\DS-HARNESS\tasks\TASK-20261114-02-本体升级-0.2.2-rc.3.md`）**：
 
