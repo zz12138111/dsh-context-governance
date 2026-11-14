@@ -319,3 +319,67 @@ test('C35③ baseline 无法核对（读盘失败/字段缺失）：self-heal-un
     await g.cleanup();
   }
 });
+
+// 审核复核 a：四条结算路径的 compaction-loss 必须与 missing 同 reason，能对账出原因。
+test('C35③ loss 带 reason：turn/end / stop() / turn/abort / restart 与 missing 一致', async () => {
+  const g = await runGuard();
+  try {
+    g.handler(g.session, { type: 'turn/start', seq: g.maxSurfaceSeq + 10, data: { turn: 2 } });
+    g.handler(g.session, { type: 'turn/end', seq: g.maxSurfaceSeq + 11, data: { turn: 2, reason: { kind: 'completed' } } });
+    const endLoss = g.audits.filter((item) => item.event === 'compaction-loss');
+    assert.equal(endLoss.length, 2);
+    assert.deepEqual(endLoss.map((item) => item.details.reason), ['host-self-heal-missing', 'host-self-heal-missing']);
+  } finally {
+    await g.cleanup();
+  }
+
+  const aborted = await runGuard();
+  try {
+    aborted.handler(aborted.session, { type: 'turn/start', seq: aborted.maxSurfaceSeq + 10, data: { turn: 2 } });
+    aborted.handler(aborted.session, { type: 'turn/abort', seq: aborted.maxSurfaceSeq + 11, data: { turn: 2 } });
+    const lost = aborted.audits.filter((item) => item.event === 'compaction-loss');
+    assert.equal(lost.length, 2);
+    assert.deepEqual(lost.map((item) => item.details.reason), ['turn-aborted', 'turn-aborted']);
+    const missing = aborted.audits.filter((item) => item.event === 'self-heal-missing');
+    assert.deepEqual(missing.map((item) => item.details.reason), ['turn-aborted', 'turn-aborted']);
+  } finally {
+    await aborted.cleanup();
+  }
+
+  const stopped = await runGuard();
+  try {
+    stopped.guard.stop();
+    const lost = stopped.audits.filter((item) => item.event === 'compaction-loss');
+    assert.equal(lost.length, 2);
+    assert.deepEqual(lost.map((item) => item.details.reason), ['session-ended', 'session-ended']);
+  } finally {
+    await stopped.cleanup();
+  }
+
+  const base = await tempDir('cg-c35-restart-reason-');
+  const auditFile = path.join(base, 'audit.jsonl');
+  await fs.writeFile(auditFile, [
+    '{"ts":"2026-11-15T00:00:00.000Z","event":"self-heal-pending","sessionId":"s","compactionId":"cmp-x","kind":"skill-catalog"}',
+  ].join('\n') + '\n', 'utf8');
+  const audits = [];
+  const guard = new CompressionGuard({
+    resolveScope: () => ({ mode: 'single-root', root: 'D:/x', cwd: '', governed: true, skipReason: null, unattributed: false }),
+    ctx: makeCtx(),
+    hostVersion: '0.2.2-rc.3',
+    store: null,
+    rootAudit: { append() {} },
+    audit: { append(eventName, details) { audits.push({ event: eventName, details }); return true; } },
+    projectRoot: 'D:/x',
+    auditFile,
+    logger: { info() {}, warn() {}, error() {} },
+  });
+  try {
+    guard.start();
+    const lost = audits.filter((item) => item.event === 'compaction-loss');
+    assert.equal(lost.length, 1);
+    assert.equal(lost[0].details.reason, 'restart');
+  } finally {
+    guard.stop();
+    await fs.rm(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+  }
+});

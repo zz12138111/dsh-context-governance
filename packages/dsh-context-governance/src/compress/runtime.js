@@ -1184,6 +1184,8 @@ export class CompressionGuard {
         lossClass: 'b-class-loss',
         disposition: 'unacceptable',
         dispositionRule: 'v1',
+        // 审核复核 a：四条结算路径的 loss 也必须带 reason，才能与 missing 对账出原因。
+        reason,
         auditVersion: 'loss-v1.0',
       });
     }
@@ -1428,6 +1430,8 @@ export class CompressionGuard {
           lossClass: 'b-class-loss',
           disposition: 'unacceptable',
           dispositionRule: 'v1',
+          // 审核复核 a：restart 结算的 loss 也带 reason。
+          reason: 'restart',
           auditVersion: 'loss-v1.0',
         });
       }
@@ -2951,6 +2955,10 @@ export class CompressionGuard {
           }
           if (this.#rebuildEnabled) {
           // C35③：被 shadow 的指令/目录类别登记“待宿主自愈”，窗口=下一轮完整 turn。
+          // 审核复核 b：登记在 `protection.rebuild.enabled` 开关之内——kill switch 关闭时 `rebuilt.delegated`
+          // 为空、不登记 pending，于是**规则自愈不可观测**（不会写 self-heal-* / compaction-loss）。
+          // 这是有意的取舍：回滚开关的语义是“整段不介入”，不是“只关重建、仍做分型审计”；见
+          // analysis/dsh-021-turn-cursor/C35③-实现与测试-20261115.md §6。
           for (const item of rebuilt.delegated) {
             if (item.kind !== 'agent-instructions' && item.kind !== 'skill-catalog') continue;
             this.#registerPendingHeal(session, {
