@@ -1117,7 +1117,19 @@ C 的初步证据：启动后本项目根 `audit.jsonl` 只有 `capability@ready
 
 ### 五、交付序
 
-需求单（本段）→ **开发实现 + 自测**（全量 + C1-C7）→ **测试独立复跑**（锚 commit + 宿主版本 + profile）→ **审核复核 + 打包**（包面 = commit 逐文件、SHA256 留档；`tag` 前用户批）→ **真机窗口（00 排：宿主升 0.2.2-rc.3 + 装 1.1.0 + 重启，用户在场）** → 用户验收 → 发布（`tag`/Release 用户批）。
+需求单（本段）→ **开发实现 + 自测**（全量 + C1-C7）→ **测试独立复跑**（锚 commit + 宿主版本 + profile）→ **审核复核 + 打包**（包面 = commit 逐文件、SHA256 留档；`tag` 前用户批）→ **真机窗口（00 排：先装 1.1.0 → 备份 profile → 升本体 0.2.2-rc.3 → 重启，用户在场）** → 用户验收 → 发布（`tag`/Release 用户批）。
+
+**窗口物料（00 已备，2026-11-14 22:30；明细见 `G:\DS-HARNESS\tasks\TASK-20261114-02-本体升级-0.2.2-rc.3.md`）**：
+
+| 项 | 值 |
+|---|---|
+| 0.2.2-rc.3 安装包 | `D:\DS-PROJECT\_shared\installers\deepseek-harness-0.2.2-rc.3-win-x64.exe`（299,595,752 B） |
+| 校验 | SHA512(base64) `GiJf8kx+C7eoiZ0xQSYBcTyh5xmXQl+vh63U6uSm963McK1AkMgB8PydzuekWdUY7hyURvhVMHANM4pn+tCKzQ==`（与 `nightly.yml` 逐字节一致） |
+| 回滚 installer | `%LOCALAPPDATA%\@deepseek-aidsh-desktop-updater\installer.exe`（276 MB，`FileVersion 0.2.1-rc.3`） |
+| 冒烟必看 | `/cg status` 存在；审计 `governance apply version=1.1.0`；`early-decision threshold=0.45` 有行；`plugin list` **无跳过** |
+
+- **顺序不可颠倒**：**先装 1.1.0（在 0.2.1-rc.3 上仍兼容）→ 备份 profile → 再升本体**。反序会让 1.0.3/旧版在本窗被 engines 拒载、压缩与审计停摆、窗口数据断。
+- **失败回滚路径**：`0.2.1-rc.3` installer 覆盖 → 重启 → 复核 `governance apply version=1.0.3` 恢复；回滚后本次窗口数据作废，重开窗。
 
 ### 六、风险与回滚
 
