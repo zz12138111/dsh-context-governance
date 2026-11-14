@@ -12,6 +12,17 @@ import { FIVE_SECTION_SUMMARY, buildCompaction, healthyMessages } from './compre
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** 墙钟等待 → 轮询到条件 + 硬超时（默认 2s）。用于异步审计落盘类断言，避免调度抖动偶发红。 */
+const waitFor = async (probe, { timeoutMs = 2000, intervalMs = 10 } = {}) => {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const value = await probe();
+    if (value !== false && value !== undefined && value !== null) return value;
+    if (Date.now() >= deadline) return value;
+    await wait(intervalMs);
+  }
+};
+
 async function makeRoot(base, name) {
   const root = path.join(base, name);
   await fs.mkdir(root, { recursive: true });
@@ -110,7 +121,13 @@ test('P3 两真实根：唯一 session/event 订阅；A/B 各自 protection/mate
 
     await sendCompaction(sessionA, builtA);
     await sendCompaction(sessionB, builtB);
-    await wait(30);
+    // 固定 wait(30) 在调度抖动时会偶发红（B 缺 protection-materialized）：改为轮询到两根四类审计行齐，硬超时 2s。
+    await waitFor(async () => {
+      const [rowsA, rowsB] = await Promise.all([readAudit(rootA), readAudit(rootB)]);
+      const ready = (rows) => ['protection-write', 'protection-materialized', 'compaction-cost', 'reinjection']
+        .every((event) => rows.some((row) => row.event === event));
+      return ready(rowsA) && ready(rowsB);
+    });
 
     const auditA = await readAudit(rootA);
     const auditB = await readAudit(rootB);
