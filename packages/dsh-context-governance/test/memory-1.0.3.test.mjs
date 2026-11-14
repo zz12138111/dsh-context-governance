@@ -169,8 +169,7 @@ test('1.0.3 配置键组：memory.proposedTtlDays / dedupWindowDays 夹取与非
   assert.throws(() => resolveConfig({ projectRoot: 'D:/tmp/p', memory: { dedupWindowDays: 400 } }), /memory\.dedupWindowDays/);
 });
 
-test('1.0.3 观察修正：用户直写同样受准入；旧空正文条目不被拿去去重', async () => {
-  const rootDir = await tempDir();
+test('1.0.3 观察修正：用户直写同样受准入；旧空正文条目不被拿去去重', async () => {  const rootDir = await tempDir();
   const store = await MemoryStore.open({ rootDir, project: 'test-project' });
   try {
     const audit = makeAudit();
@@ -194,4 +193,33 @@ test('1.0.3 观察修正：用户直写同样受准入；旧空正文条目不�
     await store.close();
     await fs.rm(rootDir, { recursive: true, force: true });
   }
+});
+
+test('1.0.3 守卫：生产代码里 `.create(` 直调只允许 mem-tools.js 一处（见 docs/记忆契约-v1.md §12）', async () => {
+  // 准入在工具层；任何新代码直调 store.create 都会绕过它，且不会有人注意到
+  // （1.0.2 白名单静默丢弃就是这种形态）。这条守卫把"只有一个入口"钉死。
+  const srcDir = path.join(process.cwd(), 'src');
+  const files = [];
+  const walk = async (dir) => {
+    for (const item of await fs.readdir(dir, { withFileTypes: true })) {
+      const full = path.join(dir, item.name);
+      if (item.isDirectory()) await walk(full);
+      else if (item.name.endsWith('.js')) files.push(full);
+    }
+  };
+  await walk(srcDir);
+  const hits = [];
+  for (const file of files) {
+    const rel = path.relative(process.cwd(), file).replace(/\\/g, '/');
+    const lines = (await fs.readFile(file, 'utf8')).split(/\r?\n/);
+    lines.forEach((line, index) => {
+      if (!/\.create\(/.test(line)) return;
+      const trimmed = line.trim();
+      // 注释里提到 `MemoryStore.create()` 不算调用点。
+      if (trimmed.startsWith('*') || trimmed.startsWith('//') || trimmed.startsWith('/*')) return;
+      hits.push({ rel, line: index + 1, text: trimmed });
+    });
+  }
+  assert.equal(hits.length, 1, `直调点应为 1 处，实际：${JSON.stringify(hits)}`);
+  assert.equal(hits[0].rel, 'src/tools/mem-tools.js');
 });
