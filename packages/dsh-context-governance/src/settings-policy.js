@@ -79,9 +79,9 @@ export function ratioToPercentText(at) {
 /**
  * 只读快照 HTTP handler（C10 单测直接调用；index 只负责注册）。
  * 仅 GET；非 GET → 405。只写阈值/来源 JSON，无记忆内容、无本机路径。
- * @param {{getPolicy: () => object, getNative: () => number|null}} deps
+ * @param {{getPolicy: () => object, getNative: () => number|null, onError?: (error: object) => void}} deps
  */
-export function createSnapshotHandler({ getPolicy, getNative }) {
+export function createSnapshotHandler({ getPolicy, getNative, onError = null }) {
   return (req, res) => {
     if (req?.method !== 'GET') {
       res.writeHead(405, { allow: 'GET' });
@@ -92,7 +92,9 @@ export function createSnapshotHandler({ getPolicy, getNative }) {
       const view = policySnapshot(getPolicy(), { native: typeof getNative === 'function' ? getNative() : null });
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
       res.end(JSON.stringify(view));
-    } catch {
+    } catch (error) {
+      // C18：500 必须能定位——把 error.message 交给调用方 logger，不许空 500。
+      try { onError?.(error); } catch { /* logger 自身抛错不得影响响应 */ }
       res.writeHead(500);
       res.end();
     }

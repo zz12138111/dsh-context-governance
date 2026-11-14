@@ -366,3 +366,63 @@ test('C17 迟挂 webServer：注入回调之后才注册；GET→200、非 GET�
   assert.equal(mountSnapshotRoute({}, { getPolicy: () => ({}), getNative: () => null }), false);
 });
 
+
+test('C18 500 可定位：handler 抛错必须 onError 带原错、响应 500 非空日志', () => {
+  const seen = [];
+  const responses = [];
+  const response = () => {
+    const record = { status: 0, body: '' };
+    responses.push(record);
+    return {
+      record,
+      writeHead(code) { record.status = code; },
+      end(body) { record.body = body ?? ''; },
+    };
+  };
+  const handler = createSnapshotHandler({
+    getPolicy: () => { throw new Error('empty session broke policyForSession'); },
+    getNative: () => null,
+    onError: (error) => seen.push(String(error?.message ?? error)),
+  });
+  const broken = response();
+  assert.doesNotThrow(() => handler({ method: 'GET' }, broken));
+  assert.equal(broken.record.status, 500);
+  assert.equal(seen.length, 1);
+  assert.match(seen[0], /empty session broke policyForSession/);
+
+  // logger 自身抛错也不得影响 500 响应
+  const throwingLogger = createSnapshotHandler({
+    getPolicy: () => { throw new Error('boom'); },
+    getNative: () => null,
+    onError: () => { throw new Error('logger failed'); },
+  });
+  const still = response();
+  assert.doesNotThrow(() => throwingLogger({ method: 'GET' }, still));
+  assert.equal(still.record.status, 500);
+
+  // 正常路径不受影响
+  const ok = response();
+  createSnapshotHandler({ getPolicy: () => ({ values: { 'compact.at': 0.55 }, sources: { 'compact.at': 'builtin' } }), getNative: () => 0.6785 })({ method: 'GET' }, ok);
+  assert.equal(ok.record.status, 200);
+  assert.equal(JSON.parse(ok.record.body).at, 0.55);
+});
+
+test('C18② 会话感知：存在会话覆盖 → source=session；无会话 → 全局 builtin', () => {
+  const render = (policy) => {
+    const record = { status: 0, body: '' };
+    const res = { writeHead(code) { record.status = code; }, end(body) { record.body = body ?? ''; } };
+    createSnapshotHandler({ getPolicy: () => policy, getNative: () => 0.6785 })({ method: 'GET' }, res);
+    assert.equal(record.status, 200);
+    return JSON.parse(record.body);
+  };
+  const session = render({ values: { 'compact.at': 0.5 }, sources: { 'compact.at': 'session' } });
+  assert.equal(session.source, 'session');
+  assert.equal(session.at, 0.5);
+  assert.equal(session.sessionOverride, 0.5);
+  assert.equal(session.effectiveAt, '本会话有效，重启后失效');
+
+  const global = render({ values: { 'compact.at': 0.6 }, sources: { 'compact.at': 'plugin' } });
+  assert.equal(global.source, 'plugin');
+  assert.equal(global.sessionOverride, null);
+  assert.equal(global.effectiveAt, PERSISTENT_LIFECYCLE_TEXT);
+});

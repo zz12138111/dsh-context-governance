@@ -583,8 +583,8 @@ export function buildPolicyState(config, deps = {}) {
  * ——与 `@local/dsh-computer-use` 同写法）。无 `inject` 的 ctx（部分单测）回退直挂。
  * @returns {boolean} 已挂载或已排队等待 webServer
  */
-export function mountSnapshotRoute(ctx, { getPolicy, getNative, path = '/context-governance/policy-snapshot' } = {}) {
-  const handler = createSnapshotHandler({ getPolicy, getNative });
+export function mountSnapshotRoute(ctx, { getPolicy, getNative, onError = null, path = '/context-governance/policy-snapshot' } = {}) {
+  const handler = createSnapshotHandler({ getPolicy, getNative, onError });
   const mount = (host) => {
     if (host === null || host === undefined || typeof host.webServer?.register !== 'function') return false;
     try {
@@ -920,14 +920,26 @@ export async function apply(ctx, rawConfig = {}) {
       }
       return state;
     };
+    // C18②：缓存最近一次真实会话的解析结果，供只读快照路由做"会话感知"（chip 是全局视图，
+    // 多根以最近一次为准；无会话历史时退回全局 resolve(null)）。
+    let lastSessionPolicy = null;
+    const rememberSessionPolicy = (resolvable, session) => {
+      if (resolvable !== null && resolvable !== undefined && typeof resolvable.resolve === 'function') {
+        lastSessionPolicy = { resolvable, sessionId: session?.id ?? null };
+      }
+    };
     const policyForSession = (session) => {
       if (guardPool !== null) {
         const policy = guardPool.policyForSession(session);
-        if (policy !== null) return policy;
+        if (policy !== null) { rememberSessionPolicy(policy, session); return policy; }
       }
       if (registry !== null) {
         const resolved = registry.resolveSessionRoot(session);
-        if (resolved?.status === 'managed' && resolved.entry !== null) return policyForEntry(resolved.entry);
+        if (resolved?.status === 'managed' && resolved.entry !== null) {
+          const state = policyForEntry(resolved.entry);
+          rememberSessionPolicy(state, session);
+          return state;
+        }
       }
       return policyState;
     };
@@ -957,9 +969,18 @@ export async function apply(ctx, rawConfig = {}) {
         windowTokens: config.policy.windowTokens,
         reservedTokens: config.policy.reservedTokens,
       });
+      // C18②：会话感知——优先最近一次真实会话解析（含 /cg set 的 session 层），无会话历史才退回全局。
+      const resolveSnapshotPolicy = () => {
+        if (lastSessionPolicy !== null) {
+          try { return lastSessionPolicy.resolvable.resolve(lastSessionPolicy.sessionId); } catch { /* fall through */ }
+        }
+        try { return policyState.resolve(null); } catch { /* fall through */ }
+        return { values: {}, sources: {} };
+      };
       mountSnapshotRoute(ctx, {
-        getPolicy: () => policyForSession({}),
+        getPolicy: resolveSnapshotPolicy,
         getNative: snapshotNative,
+        onError: (error) => ctx.logger?.warn?.(`[context-governance] policy-snapshot failed: ${String(error?.message ?? error)}`),
       });
     }
     // 1.1.0 D2：声明本实例自带设置页（非自动表单），供宿主 settings 服务登记策略。
@@ -1534,4 +1555,5 @@ export {
   MemoryStore,
   MemoryStoreError,
 };
+
 
