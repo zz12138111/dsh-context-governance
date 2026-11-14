@@ -1087,6 +1087,13 @@ C 的初步证据：启动后本项目根 `audit.jsonl` 只有 `capability@ready
 
 **目标（一句话）**：用户不记命令、不查参数，在设置里**直接填一个百分比数字**就能改"窗口用掉多少就压缩"。
 
+> **形态裁定（2026-11-14，调查结论：`analysis/req-20261114-02/D2-UI能力调查-20261114.md`）**：
+> - **可行路径 = 自建 client 半侧**：`package.json` 加 `dsh.client={platform:'web'}` + `exports["./client"]`，**手写** `lib/client.js`（`window.__ModuleLoader__.load({id,factory})` 格式，**不引入打包器**），注册进设置页槽位 **`settings.section`**；宿主半侧加 Schemastery `Config` 的 **`.volatile()`** 字段（**只有 volatile 字段可被设置表单编辑**）。
+> - **"只声明配置、设置页自动出表单"不可行**：宿主有 `autoGenerate`，但 `dsh-settings` README 明说**没有已发布的客户端渲染它**——必须自带页面。
+> - **"生效值/来源层"取数**：用宿主 `ctx.webServer.register` 加一条 **loopback GET**（与 `cost-meter`/`computer-use`/`notify-me` 同模式）；**不加则该判据降级为"显示 plugin 层值 + 提示看 `/cg status`"**，需我书面收窄。
+> - **不需要**：打包器、独立端口、WebView。**必须避免**照抄第三方 `dsh.client.inject` 名单——本机 0.2.1-rc.3 未发布 `dsh-client-ui-slots`/`ui-primitives`，而 `cost-meter` 不写 inject 也能挂 `settings.section`。
+> - **剩余风险**：手写 bundle **离线无法验真实渲染**（只能验语法/纯函数/渲染输出）；必须在窗口 R7 真机验；若要在出包前验，需用户批准"装 dev 包"一次（红线 1，不自行装）。
+
 - **形态**：**数字输入框优先，不做滑块**（宿主将来给 range 控件再升级）；只暴露 **`compact.at`** 一个参数（其它键仍走 `/cg set` / 配置文件，本单不扩面板）。
 - **量纲**：**UI 以百分比呈现（0–100）**——填 `55` = 窗口用掉 **55%** 就触发压缩；内部仍存比例 `0.55`（0–1），**换算只在 UI 层**，写入后各层/日志/审计里仍是 `0.55`。UI 上必须有量纲提示，防止被读成"窗口缩到 55%"。
 - **必须显示**：**当前生效值 + 来源层**（`builtin`/`profile`/`plugin`/`project`/`session`），并标明**「本会话有效」**还是**「重启后失效」**（会话级 `/cg set` 只存进程内存，见 `src/commands/cg-status.js:407` 一带）。
