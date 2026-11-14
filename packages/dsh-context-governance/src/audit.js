@@ -196,11 +196,11 @@ export const AUDIT_EVENTS = Object.freeze([
   'compaction-loss',
   /** D-MGMT-021：accept 类损失汇总（不逐条报警，判据只读 compaction-loss）。 */
   'compaction-loss-accepted',
-  /** D-MMGT-021 v3b：A 形态跳过 system/message 重建（每条规则一条，reason=no-open-step）。 */
+  /** D-MMGT-021 v3b：A 形态跳过 system/message 重建（**历史**：用户 A 后不再新写，仅旧审计可读）。 */
   'surface-rebuild-skipped',
-  /** D-MGMT-021 v3b：pending 终态（accepted/unacceptable），对账键 compactionId+ruleSeq。 */
+  /** D-MGMT-021 v3b：pending 终态（accepted/unacceptable）；现只由启动扫描为旧审计行补写。 */
   'surface-rebuild-resolved',
-  /** D-MGMT-021 v3b：重启恢复扫描盲区（可能存在未结算 pending）。 */
+  /** D-MGMT-021 v3b：重启恢复扫描盲区（可能存在未结算 pending；旧审计行）。 */
   'surface-rebuild-recovery-incomplete',
   /** C35③：宿主下个 pre-step 自愈窗口（pending/verified/unverified/missing 三态+校验）。 */
   'self-heal-pending',
