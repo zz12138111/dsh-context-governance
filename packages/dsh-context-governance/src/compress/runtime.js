@@ -74,6 +74,23 @@ function sameDirectory(left, right) {
   return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
 }
 
+/**
+ * C35③：把宿主 `changes[].path`（形如 `~/.dsh/AGENTS.md` 或相对 cwd）解析成可读绝对路径。
+ * 无法解析（空/`~` 无 home/cwd 缺失）返回 null → 走 unverified（不判 fail）。
+ */
+function resolveInstructionPath(displayPath, cwd) {
+  const raw = String(displayPath ?? '').trim();
+  if (raw === '') return null;
+  if (raw === '~' || raw.startsWith('~/') || raw.startsWith('~\\')) {
+    const home = process.env.USERPROFILE ?? process.env.HOME ?? '';
+    if (home === '') return null;
+    return path.join(home, raw.slice(2));
+  }
+  if (path.isAbsolute(raw)) return raw;
+  if (typeof cwd !== 'string' || cwd === '') return null;
+  return path.join(cwd, raw);
+}
+
 function coveredBySummary(meta, summaryText) {
   if (summaryText.trim() === '') return false;
   const summary = normalized(summaryText);
@@ -154,6 +171,8 @@ export class CompressionGuard {
   #repostTimers = new Map();
   /** 重启恢复扫描用的 per-root audit 文件。 */
   #auditFile = '';
+  /** C35③：压缩后待宿主下个 pre-step 自愈的类别（agent-instructions / skill-catalog）登记。 */
+  #pendingHeals = new Map();
   /** D-MGMT-021 v3b：已结算 pending 的键（compactionId|ruleSeq），保证 resolved 只写一次。 */
   #resolvedPendingKeys = new Set();
   /** accepted 按 compactionId 聚合（一条汇总，不逐规则报警）。 */
@@ -501,6 +520,8 @@ export class CompressionGuard {
     this.#pending.clear();
     // D-MGMT-021 v3b：卸载时未对账的 pending 显式结算为 session-ended，不留悬空。
     this.#settleAllPending('session-ended');
+    // C35③：无下一轮时到 stop 仍未自愈 → session-ended fail+loss，不静默。
+    this.#settleAllPendingHeals('session-ended');
     // P3：early 预写未关联 start 的 journal 只归档，不 discard；异步清理，dispose() 可 await。
     if (this.#earlyStopArchive === null) {
       this.#earlyStopArchive = this.#archiveAllEarly('observer-disposed');
@@ -987,6 +1008,194 @@ export class CompressionGuard {
     return null;
   }
 
+  /**
+   * C35③：登记“待宿主自愈”的类别（agent-instructions / skill-catalog）。
+   * 窗口 = compaction/end 之后的下一个完整 turn（turn/start 绑定 → turn/end 到期）；
+   * 无下一轮到 stop 记 session-ended；重启记 restart；不设墙钟。
+   */
+  #registerPendingHeal(session, entry) {
+    const sessionId = this.#sessionKey(session);
+    if (sessionId === null) return;
+    let list = this.#pendingHeals.get(sessionId);
+    if (list === undefined) {
+      list = [];
+      this.#pendingHeals.set(sessionId, list);
+    }
+    list.push({ ...entry, windowTurnId: null, recordedAt: Date.now() });
+    this.#auditEvent('self-heal-pending', {
+      sessionId,
+      cycle: entry.cycle,
+      compactionId: entry.compactionId,
+      kind: entry.kind,
+      disposition: 'pending',
+      dispositionRule: 'v1',
+      reason: 'awaiting-next-turn',
+    });
+  }
+
+  /** C35③：窗口内出现“该 kind 的非治理新节点”（user 主路径，system 兼容）→ 进 digest 分档。 */
+  #matchPendingHeal(session, event) {
+    const sessionId = this.#sessionKey(session);
+    if (sessionId === null) return;
+    const list = this.#pendingHeals.get(sessionId);
+    if (list === undefined || list.length === 0) return;
+    const data = event?.data ?? {};
+    // user/message 的 message 就是 data；system/message 在 data.message。
+    const message = event?.type === 'system/message' ? (data?.message ?? null) : data;
+    const source = message?.source ?? data?.source ?? null;
+    if (source === null || typeof source !== 'object') return;
+    if (source.plugin === 'context-governance' || source.form === 'surface-rebuild') return;
+    const kind = source.kind ?? null;
+    if (kind === null) return;
+    const seq = event?.seq;
+    for (let index = list.length - 1; index >= 0; index -= 1) {
+      const item = list[index];
+      if (item.kind !== kind) continue;
+      if (!(typeof seq === 'number' && seq > item.seqAtEnd)) continue;
+      list.splice(index, 1);
+      const base = {
+        sessionId,
+        cycle: item.cycle,
+        compactionId: item.compactionId,
+        kind,
+        seq,
+        form: source.form ?? null,
+        plugin: source.plugin ?? null,
+      };
+      if (kind === 'agent-instructions') {
+        // baseline：changes[].path + digest 逐 path 读盘复算；不一致 fail(baseline-stale)，
+        // 读盘失败/字段缺失 → unverified warn + 仍 pass。
+        const check = this.#verifyBaselineDigests(session, source);
+        if (check.state === 'stale') {
+          this.#auditEvent('self-heal-missing', {
+            ...base,
+            path: check.path ?? null,
+            digest: check.expected ?? null,
+            reason: 'baseline-stale',
+            disposition: 'unacceptable',
+            dispositionRule: 'v1',
+          });
+          this.#auditEvent('compaction-loss', {
+            sessionId,
+            compactionId: item.compactionId,
+            manual: item.manual === true,
+            trigger: item.manual === true ? 'manual' : 'auto',
+            failures: ['rule-injection'],
+            entries: 0,
+            lossClass: 'b-class-loss',
+            disposition: 'unacceptable',
+            dispositionRule: 'v1',
+            reason: 'baseline-stale',
+            auditVersion: 'loss-v1.0',
+          });
+          continue;
+        }
+        if (check.state === 'unverified') {
+          this.#auditEvent('self-heal-unverified', {
+            ...base,
+            digest: null,
+            mode: 'event-level',
+            reason: check.reason ?? 'digest-unverified',
+            disposition: 'warn',
+            dispositionRule: 'v1',
+          });
+        }
+        this.#auditEvent('self-heal-verified', {
+          ...base,
+          digest: check.digest ?? null,
+          mode: check.state === 'match' ? 'baseline-digest' : 'event-level',
+          disposition: 'accepted',
+          dispositionRule: 'v1',
+        });
+      } else {
+        // skill-catalog：宿主无 per-entry digest，只走事件级（不引入 skills 依赖）。
+        this.#auditEvent('self-heal-verified', {
+          ...base,
+          digest: null,
+          mode: 'event-level',
+          reason: 'skill-catalog-event-level',
+          disposition: 'accepted',
+          dispositionRule: 'v1',
+        });
+      }
+    }
+    if (list.length === 0) this.#pendingHeals.delete(sessionId);
+  }
+
+  /**
+   * C35③ baseline 自校验：`source.changes[]` 有 path+digest 时逐 path 读盘算
+   * sha1(trim(content)) 比对。返回 match（全一致）/ stale（任一不一致）/ unverified（读盘失败或字段缺失）。
+   */
+  #verifyBaselineDigests(session, source) {
+    const changes = Array.isArray(source.changes) ? source.changes : null;
+    if (changes === null || changes.length === 0) return { state: 'unverified', reason: 'no-changes-field' };
+    const cwd = this.#sessionCwd(session);
+    const matched = [];
+    for (const change of changes) {
+      const displayPath = change?.path;
+      const expected = change?.digest;
+      if (typeof displayPath !== 'string' || displayPath === ''
+        || typeof expected !== 'string' || expected === '') {
+        return { state: 'unverified', reason: 'change-path-or-digest-missing' };
+      }
+      const resolved = resolveInstructionPath(displayPath, cwd);
+      if (resolved === null) return { state: 'unverified', reason: 'path-unresolvable' };
+      let content;
+      try {
+        content = fs.readFileSync(resolved, 'utf8');
+      } catch {
+        return { state: 'unverified', reason: 'read-failed' };
+      }
+      const actual = createHash('sha1').update(content.trim()).digest('hex');
+      if (actual !== expected) {
+        return { state: 'stale', path: displayPath, expected, actual };
+      }
+      matched.push(expected);
+    }
+    return { state: 'match', digest: matched.join(',') };
+  }
+
+  /** C35③：窗口到期/会话结束/重启 → 未自愈类别各自 fail + compaction-loss。 */
+  #settlePendingHeals(sessionId, reason, { onlyBound = false } = {}) {
+    const list = this.#pendingHeals.get(sessionId);
+    if (list === undefined || list.length === 0) {
+      this.#pendingHeals.delete(sessionId);
+      return;
+    }
+    const targets = onlyBound ? list.filter((item) => item.windowTurnId !== null) : [...list];
+    if (targets.length === 0) return;
+    for (const item of targets) {
+      this.#auditEvent('self-heal-missing', {
+        sessionId,
+        cycle: item.cycle,
+        compactionId: item.compactionId,
+        kind: item.kind,
+        reason,
+        disposition: 'unacceptable',
+        dispositionRule: 'v1',
+      });
+      this.#auditEvent('compaction-loss', {
+        sessionId,
+        compactionId: item.compactionId,
+        manual: item.manual === true,
+        trigger: item.manual === true ? 'manual' : 'auto',
+        failures: ['rule-injection'],
+        entries: 0,
+        lossClass: 'b-class-loss',
+        disposition: 'unacceptable',
+        dispositionRule: 'v1',
+        auditVersion: 'loss-v1.0',
+      });
+    }
+    const remaining = list.filter((item) => !targets.includes(item));
+    if (remaining.length === 0) this.#pendingHeals.delete(sessionId);
+    else this.#pendingHeals.set(sessionId, remaining);
+  }
+
+  #settleAllPendingHeals(reason) {
+    for (const sessionId of [...this.#pendingHeals.keys()]) this.#settlePendingHeals(sessionId, reason);
+  }
+
   /** 幂等：同一 compactionId+ruleSeq 的终态只写一次（轮询/事件/stop 竞态保护）。 */
   #claimPendingKey(compactionId, ruleSeq) {
     const key = `${compactionId ?? ''}|${ruleSeq ?? ''}`;
@@ -1168,6 +1377,46 @@ export class CompressionGuard {
           dispositionRule: 'v1',
           status: 'unacceptable',
           lossClass: 'b-class-loss',
+        });
+        this.#auditEvent('compaction-loss', {
+          sessionId: row?.sessionId ?? null,
+          compactionId: row?.compactionId ?? null,
+          manual: false,
+          trigger: 'auto',
+          failures: ['rule-injection'],
+          entries: 0,
+          lossClass: 'b-class-loss',
+          disposition: 'unacceptable',
+          dispositionRule: 'v1',
+          auditVersion: 'loss-v1.0',
+        });
+      }
+      // C35③：重启后仍未结算的 self-heal-pending 一律 fail+loss(restart)，不猜、不静默。
+      const healDoneKeys = new Set();
+      const healPendingRows = [];
+      for (const line of lines) {
+        let row = null;
+        try {
+          row = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        const key = `${row?.compactionId ?? ''}|${row?.kind ?? ''}`;
+        if (row?.event === 'self-heal-verified' || row?.event === 'self-heal-missing') healDoneKeys.add(key);
+        if (row?.event === 'self-heal-pending') healPendingRows.push({ key, row });
+      }
+      const seenHeals = new Set();
+      for (const { key, row } of healPendingRows) {
+        if (healDoneKeys.has(key) || seenHeals.has(key)) continue;
+        seenHeals.add(key);
+        this.#auditEvent('self-heal-missing', {
+          sessionId: row?.sessionId ?? null,
+          cycle: row?.cycle ?? null,
+          compactionId: row?.compactionId ?? null,
+          kind: row?.kind ?? null,
+          reason: 'restart',
+          disposition: 'unacceptable',
+          dispositionRule: 'v1',
         });
         this.#auditEvent('compaction-loss', {
           sessionId: row?.sessionId ?? null,
@@ -2290,30 +2539,46 @@ export class CompressionGuard {
       }
       const id = event?.data?.compactionId ?? null;
       switch (event?.type) {
-        // D-MGMT-021 v3b：pending 对账的事件通道（真实宿主）。
+        // D-MGMT-021 v3b：pending 对账的事件通道（真实宿主）；C35③ 复用它做自愈窗口绑定。
         case 'turn/start': {
           const key = this.#sessionKey(session);
-          const list = key === null ? undefined : this.#pendingReposts.get(key);
+          if (key === null) return;
+          const list = this.#pendingReposts.get(key);
           if (list !== undefined) {
             for (const rule of list) {
               if (rule.windowTurnId === null) rule.windowTurnId = event?.data?.turn ?? null;
+            }
+          }
+          const heals = this.#pendingHeals.get(key);
+          if (heals !== undefined) {
+            for (const item of heals) {
+              if (item.windowTurnId === null) item.windowTurnId = event?.data?.turn ?? null;
             }
           }
           return;
         }
         case 'turn/end': {
           const key = this.#sessionKey(session);
-          if (key !== null) this.#settlePending(key, 'ttl-expired', { onlyBound: true });
+          if (key !== null) {
+            this.#settlePending(key, 'ttl-expired', { onlyBound: true });
+            // C35③：窗口（下一轮完整 turn）到期，未自愈类别 fail + loss。
+            this.#settlePendingHeals(key, 'host-self-heal-missing', { onlyBound: true });
+          }
           return;
         }
         case 'turn/abort': {
           const key = this.#sessionKey(session);
-          if (key !== null) this.#settlePending(key, 'turn-aborted');
+          if (key !== null) {
+            this.#settlePending(key, 'turn-aborted');
+            this.#settlePendingHeals(key, 'turn-aborted');
+          }
           return;
         }
         case 'system/message': {
           const key = this.#sessionKey(session);
           if (key !== null) this.#checkPendingReposts(key, session);
+          // C35③ 兼容：system 形态的自愈节点也认（主路径是 user/message）。
+          this.#matchPendingHeal(session, event);
           return;
         }
         case 'request/context': {
@@ -2570,6 +2835,9 @@ export class CompressionGuard {
           return;
         }
         case 'user/message': {
+          // C35③ 主路径：宿主下个 pre-step 重发 baseline/目录（user/message + kind）。
+          // 与 compact-checkpoint 归属同一事件类型：必须先做自愈匹配，再走 checkpoint 记账，不得提前 return。
+          this.#matchPendingHeal(session, event);
           if (sourceKindOf(event) !== 'compact-checkpoint') return;
           const compactionId = event?.data?.source?.compactionId ?? null;
           const state = compactionId === null ? undefined : this.#pending.get(compactionId);
@@ -2682,6 +2950,19 @@ export class CompressionGuard {
             });
           }
           if (this.#rebuildEnabled) {
+          // C35③：被 shadow 的指令/目录类别登记“待宿主自愈”，窗口=下一轮完整 turn。
+          for (const item of rebuilt.delegated) {
+            if (item.kind !== 'agent-instructions' && item.kind !== 'skill-catalog') continue;
+            this.#registerPendingHeal(session, {
+              compactionId: id,
+              kind: item.kind,
+              cycle: state.protectionCycleKey ?? null,
+              manual: state.manual === true,
+              seqAtEnd: Array.isArray(session?.surface?.nodes)
+                ? session.surface.nodes.reduce((max, seq) => (typeof seq === 'number' && seq > max ? seq : max), -1)
+                : -1,
+            });
+          }
           // C34 遗留（已无对象，保留待 C35 批后单独删）：system 规则不再重建 → skipped 恒空，
           // 本段不会写 surface-rebuild-* 事件；保留仅为减少本轮改动面。
           // D-MGMT-021 v3b：pending 第三态。system 规则不重建 → 每条登记 pending，

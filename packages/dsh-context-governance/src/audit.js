@@ -75,6 +75,13 @@ export const AUDIT_FIELD_WHITELIST = Object.freeze({
   scanTo: 'text',
   lines: 'number',
   rotated: 'boolean',
+  /** C35③：自愈节点观察字段（来源 kind/form/plugin、宿主给或不给的 digest）。 */
+  form: 'text',
+  plugin: 'text',
+  digest: 'text',
+  /** C35③：digest 分档（baseline-digest / event-level）与复算用的展示路径。 */
+  mode: 'text',
+  path: 'text',
   manual: 'boolean',
   count: 'number',
   moved: 'number',
@@ -195,6 +202,11 @@ export const AUDIT_EVENTS = Object.freeze([
   'surface-rebuild-resolved',
   /** D-MGMT-021 v3b：重启恢复扫描盲区（可能存在未结算 pending）。 */
   'surface-rebuild-recovery-incomplete',
+  /** C35③：宿主下个 pre-step 自愈窗口（pending/verified/unverified/missing 三态+校验）。 */
+  'self-heal-pending',
+  'self-heal-verified',
+  'self-heal-unverified',
+  'self-heal-missing',
   /** D-MGMT-021 回滚开关：protection.rebuild.enabled=false 时整段跳过。 */
   'surface-rebuild-disabled',
   'prune-observed',
