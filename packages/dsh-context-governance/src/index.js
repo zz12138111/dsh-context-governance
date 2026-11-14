@@ -5,8 +5,8 @@
  * 压缩适配、回注、状态命令、审计在 T3–T6 接入；本文件的 `apply` 只负责
  * “校验配置 → 打开记忆库 → 注册工具 → 关闭时释放锁”，失败时不改写任何宿主状态。
  *
- * 注意：本文件刻意不 import 任何 `@deepseek-ai/*` 包，纯 ESM + Node 内置模块；
- * 宿主侧包装（defineTool、Schemastery 表单、workspace 根解析）留到 T3。
+ * 注意：本文件除 1.1.0 D2 的 Schemastery `Config` 外不 import 其他 `@deepseek-ai/*` 包，
+ * 纯 ESM + Node 内置模块；宿主侧包装（defineTool、workspace 根解析）沿用既有实现。
  */
 
 import fs from 'node:fs';
@@ -30,8 +30,32 @@ import { DEFAULT_MEMORY_DIR, MemoryStore, MemoryStoreError } from './memory/stor
 import { registerMemoryHeader } from './memory/header.js';
 import { SCOPE_SKIP, resolveScope } from './scope.js';
 import { MEM_QUERY_NAME, MEM_WRITE_NAME, registerMemoryTools } from './tools/mem-tools.js';
+import { mergeSettingsAt, policySnapshot, readVolatileAt } from './settings-policy.js';
 
 export const name = 'dsh-context-governance';
+
+/**
+ * 1.1.0 D2：可选加载 Schemastery（只在宿主运行时把 `@deepseek-ai/*` 解析进来；纯 Node 测试环境没有它）。
+ * 解析失败时 `Config` 为 undefined（等于"无表单 schema"），不影响插件其余行为；宿主运行时才有表单。
+ */
+let Schema = null;
+try {
+  ({ default: Schema } = await import('@deepseek-ai/schemastery'));
+} catch {
+  Schema = null;
+}
+
+/**
+ * 配置表单 schema（宿主 `dsh-settings` 只投影 `.volatile()` 字段）。
+ * `.volatile()` 只允许固定路径 → 新增固定字段 `policy.at`，由 `mergeSettingsAt()` 合入 plugin 层。
+ * Schemastery object 非严格模式保留未知键，不影响既有配置（projectRoot/memoryRoot/...）。
+ */
+export const Config = Schema === null ? undefined : Schema.object({
+  policy: Schema.object({
+    at: Schema.number().min(0).max(1).step(0.01).volatile()
+      .description('压缩触发比例（0–1）。设置页按 0–100 百分比输入，内部 /100；下限 0.20，<0.30 需 lowThresholdAck。'),
+  }).description('策略。设置页只开放 compact.at；其余键仍由 profile patch / 项目策略文件配置。'),
+});
 
 /**
  * 只把 `tools` 作为硬依赖：记忆工具必须有工具面。
@@ -683,7 +707,8 @@ export async function apply(ctx, rawConfig = {}) {
     const attachEntry = registry?.attach ?? null;
     if (config.project === '') config.project = attachEntry?.project ?? path.basename(root);
     // 策略链只在 attach 时算：profile 标签 → 插件配置 → 项目 .cg-policy.json（命令侧只读它）。
-    const policyState = buildPolicyState(config);
+    // 1.1.0 D2：设置页的 volatile 字段 `policy.at` 合入 plugin 层（实时读 `.get()`）。
+    let policyState = buildPolicyState(mergeSettingsAt(config));
     // P1：唯一归域入口 = registry（只主根 managed；其余 unmanaged/no-root 直接跳过）。
     const scopeOf = (session) => {
       if (registry === null) {
@@ -843,8 +868,13 @@ export async function apply(ctx, rawConfig = {}) {
     let guardPool = null;
     let primaryEntry = attachEntry;
     const policyCache = new Map();
+    /** 1.1.0 D2：rootId → 该 root 的配置快照（热更新时逐 root 重算，多根不串）。 */
+    const policyConfigs = new Map();
     // 主根 policy 复用 attach 时算好的链（含 /cg set 会话层与 window provider）。
-    if (attachEntry !== null) policyCache.set(attachEntry.rootId, policyState);
+    if (attachEntry !== null) {
+      policyCache.set(attachEntry.rootId, policyState);
+      policyConfigs.set(attachEntry.rootId, config);
+    }
     const policyForEntry = (entry) => {
       const key = entry?.rootId ?? null;
       if (key !== null && policyCache.has(key)) return policyCache.get(key);
@@ -856,8 +886,11 @@ export async function apply(ctx, rawConfig = {}) {
         memoryRoot: memory.memoryRoot ?? config.memoryRoot,
         project: entry?.project ?? (samePath(root, config.projectRoot) ? config.project : path.basename(root)),
       };
-      const state = buildPolicyState(rootConfig);
-      if (key !== null) policyCache.set(key, state);
+      const state = buildPolicyState(mergeSettingsAt(rootConfig));
+      if (key !== null) {
+        policyCache.set(key, state);
+        policyConfigs.set(key, rootConfig);
+      }
       return state;
     };
     const policyForSession = (session) => {
@@ -871,6 +904,66 @@ export async function apply(ctx, rawConfig = {}) {
       }
       return policyState;
     };
+    // 1.1.0 D2：配置热更新。设置页写 profile patch 后 Host 广播 `app-boot/config-reload`；
+    // 逐 root（多根不串）重算并把新策略下发到该 root 的 guard，`policyForSession` 语义不变。
+    // 只在宿主提供 `settings` 服务时挂（纯单测 ctx 没有该服务，避免干扰事件断言）。
+    const hasSettingsService = typeof ctx.get === 'function' && ctx.get('settings') !== undefined;
+    if (hasSettingsService && typeof ctx.on === 'function') {
+      ctx.on('app-boot/config-reload', () => {
+        try {
+          policyState = buildPolicyState(mergeSettingsAt(config));
+          for (const [rootId, rootConfig] of policyConfigs) {
+            const next = buildPolicyState(mergeSettingsAt(rootConfig));
+            policyCache.set(rootId, next);
+            guardPool?.updatePolicy?.(rootId, next.policy);
+          }
+          if (attachEntry !== null) policyCache.set(attachEntry.rootId, policyState);
+        } catch (error) {
+          ctx.logger?.warn?.(`[context-governance] policy reload failed: ${String(error?.message ?? error)}`);
+        }
+      });
+    }
+    // 1.1.0 D2：只读快照路由（仅 GET；非 GET → 405；只出阈值/来源，无记忆内容、无本机路径）。
+    if (typeof ctx.webServer?.register === 'function') {
+      const snapshotNative = () => nativeRatio({
+        windowTokens: config.policy.windowTokens,
+        reservedTokens: config.policy.reservedTokens,
+      });
+      const disposeSnapshot = ctx.webServer.register({
+        kind: 'exact',
+        path: '/context-governance/policy-snapshot',
+        handler: (req, res) => {
+          if (req?.method !== 'GET') {
+            res.writeHead(405, { allow: 'GET' });
+            res.end();
+            return;
+          }
+          try {
+            const view = policySnapshot(policyForSession({}), { native: snapshotNative() });
+            res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+            res.end(JSON.stringify(view));
+          } catch (error) {
+            ctx.logger?.warn?.(`[context-governance] policy-snapshot failed: ${String(error?.message ?? error)}`);
+            res.writeHead(500);
+            res.end();
+          }
+        },
+      });
+      if (typeof ctx.effect === 'function' && typeof disposeSnapshot === 'function') {
+        ctx.effect(() => () => { try { disposeSnapshot(); } catch { /* ignore */ } }, 'context-governance: policy-snapshot route');
+      }
+    }
+    // 1.1.0 D2：声明本实例自带设置页（非自动表单），供宿主 settings 服务登记策略。
+    if (typeof ctx.inject === 'function') {
+      ctx.inject(['settings'], (sctx) => {
+        try {
+          const disposePresentation = sctx.settings.configure({ auto: false }, ctx.fiber);
+          sctx.effect?.(() => () => { try { disposePresentation?.(); } catch { /* ignore */ } }, 'context-governance: settings presentation');
+        } catch (error) {
+          ctx.logger?.warn?.(`[context-governance] settings presentation failed: ${String(error?.message ?? error)}`);
+        }
+      });
+    }
     const ruleFileForRoot = (root) => ['AGENTS.md', 'CLAUDE.md']
       .some((fileName) => fs.existsSync(path.join(root, fileName)));
     const probeReadyCapability = () => {

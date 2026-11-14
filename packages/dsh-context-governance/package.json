@@ -18,16 +18,22 @@
     "./memory/store": "./src/memory/store.js",
     "./compress": "./src/compress/index.js",
     "./tools": "./src/tools/mem-tools.js",
+    "./client": "./lib/client.js",
     "./package.json": "./package.json"
   },
   "files": [
     "src",
+    "lib/client.js",
+    "locale",
     "README.md",
     "cordis.patch.yml"
   ],
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
     }
   },
   "scripts": {

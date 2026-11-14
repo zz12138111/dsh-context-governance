@@ -349,6 +349,21 @@ export class RootGuardPool {
     return this.recordForSession(session)?.policy ?? null;
   }
 
+  /**
+   * 1.1.0 D2：配置热更新时按 **root 级** 替换生效策略（只改该 root 的 record.policy）。
+   * 只换策略本身：不重建 guard、不动 `policyForSession` 的返回语义（调用方零改动）。
+   * @param {string} rootId root 登记 id
+   * @param {object} policy 新的 `policy.resolve()` 结果（`buildPolicyState().policy`）
+   * @returns {boolean} 该 root 是否有已建 guard 并被更新
+   */
+  updatePolicy(rootId, policy) {
+    if (this.#closed || typeof rootId !== 'string' || rootId === '') return false;
+    const record = this.#guards.get(rootId);
+    if (record === undefined || record === null) return false;
+    record.policy = policy;
+    return true;
+  }
+
   policyForSessionId(sessionId) {
     return this.recordForSessionId(sessionId)?.policy ?? null;
   }
