@@ -165,7 +165,13 @@ async function loadClient() {
   }
   assert.equal(captured.length, 1, 'client.js 必须自执行 load');
   assert.equal(captured[0].id, 'dsh-context-governance');
-  const reactStub = { createElement: () => null, useState: (initial) => [initial, () => {}], useEffect: () => {} };
+  const reactStub = {
+    Component: class { constructor(props) { this.props = props; this.state = {}; } },
+    createElement: (type, props, ...children) => ({ type, props: { ...(props ?? {}), children: children.length <= 1 ? children[0] : children } }),
+    useState: (initial) => [initial, () => {}],
+    useEffect: () => {},
+    useRef: () => ({ current: null }),
+  };
   const exports = captured[0].factory((name) => {
     assert.equal(name, 'react');
     return reactStub;
@@ -522,7 +528,7 @@ test('C20 静态守卫：client.js 不得出现 subscribe(...)() 立即退订；
 test('C21 交互守卫：组件必须拿到插件 ctx（不能只靠 props.ctx）+ 打开时预填当前值', async () => {
   const { readFile } = await import('node:fs/promises');
   const source = await readFile(path.join(process.cwd(), 'lib/client.js'), 'utf8');
-  assert.match(source, /const components = \{ chip: createChip\(state, store, ctx\)/, '组件必须由 apply 注入插件 ctx');
+  assert.match(source, /createChip\(state, store, ctx\)/, '组件必须由 apply 注入插件 ctx');
   assert.match(source, /const ctx = pluginCtx \?\? props\?\.ctx \?\? props;/, 'ctx 优先取闭包注入，props.ctx 仅兜底');
   assert.equal(/const ctx = props\?\.ctx \?\? props;/.test(source), false, '不得再只依赖 props.ctx（真实宿主 slot props 不含 ctx）');
   assert.match(source, /String\(Math\.round\(view\.at \* 100\)\)/, '打开气泡时预填当前百分比');
@@ -580,4 +586,47 @@ test('C22 输入清洗：全角/百分号/空格归一；非法不落到 set', a
 });
 
 
+
+test('C23 渲染鲁棒：不读 ctx.fetch；React 错误边界拦子组件抛错，其余入口不受影响', async () => {
+  const client = await loadClient();
+  const { readFile } = await import('node:fs/promises');
+  const source = await readFile(path.join(process.cwd(), 'lib/client.js'), 'utf8');
+
+  // ① 静态：ctx.fetch 引用必须为 0；取数只用 globalThis.fetch
+  const codeLines = source.split(/\r?\n/).filter((line) => { const trimmed = line.trim(); return !trimmed.startsWith('*') && !trimmed.startsWith('//') && !trimmed.startsWith('/*'); });
+  assert.equal(codeLines.some((line) => /ctx\.fetch|ctx\?\.fetch/.test(line)), false, '代码中不得以任何形式读 ctx.fetch（注释除外）');
+  assert.equal(source.includes('fetchSnapshot(ctx?.fetch'), false);
+  assert.match(source, /fetchSnapshot\(globalThis\.fetch\)/);
+  assert.equal(/inject = \['slots', 'locale', 'configForms'\]/.test(source), true, 'inject 面不变（不把 fetch 塞进去）');
+
+  // ② 真 React 错误边界协议：getDerivedStateFromError + componentDidCatch + fallback
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => { warnings.push(args.map(String).join(' ')); };
+  try {
+    const boundary = new client.EntryBoundary({ slot: 'settings.section', fallback: 'fallback-el', children: 'child-el' });
+    assert.equal(boundary.render(), 'child-el', '未出错渲染 children');
+    assert.deepEqual(client.EntryBoundary.getDerivedStateFromError(new Error('x')), { failed: true });
+    boundary.state = { failed: true };
+    assert.equal(boundary.render(), 'fallback-el', '出错后渲染 fallback');
+    boundary.componentDidCatch(new Error('cannot get property "fetch" without inject'));
+    assert.equal(warnings.some((line) => /entry crashed: settings\.section/.test(line) && /cannot get property "fetch" without inject/.test(line)), true,
+      'componentDidCatch 必须打出入口名 + 原始 message');
+
+    // ③ 子组件（惰性元素）抛错由边界接住；不影响其它入口包装
+    const ChildBoom = () => { throw new Error('child render exploded'); };
+    const wrappedSection = client.boundedEntry('settings.section', ChildBoom, 'section-fallback');
+    const element = wrappedSection({});
+    assert.equal(element.type, client.EntryBoundary, '入口被包进边界');
+    assert.equal(element.props.slot, 'settings.section');
+    assert.equal(typeof element.props.children.type, 'function', 'children 是惰性元素，不在包装期渲染');
+    assert.throws(() => element.props.children.type(element.props.children.props), /child render exploded/);
+
+    const chipEl = client.boundedEntry('conversation.composer.dock', ChildBoom, { type: 'button', props: {} })({});
+    assert.equal(chipEl.type, client.EntryBoundary, 'chip 也有边界');
+    assert.equal(chipEl.props.fallback.type, 'button', 'chip fallback 是可点击按钮（压 —）');
+  } finally {
+    console.warn = originalWarn;
+  }
+});
 

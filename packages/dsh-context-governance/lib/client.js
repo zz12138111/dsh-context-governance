@@ -204,6 +204,30 @@ window.__ModuleLoader__.load({
       buttonDisabled: { opacity: 0.55, cursor: 'not-allowed' },
     };
 
+    /**
+     * C23：真正的 React 错误边界（class + getDerivedStateFromError + componentDidCatch）。
+     * 函数内 try/catch 拦不住子组件渲染期/hooks 抛错，所以每个入口包一层该边界。
+     * 另外：**不向宿主 ctx 读浏览器原生的 fetch**（`ctx.fetch` 引用必须为 0；未注入属性 getter 会抛）。
+     */
+    const ReactComponent = react.Component ?? class {};
+    class EntryBoundary extends ReactComponent {
+      constructor(props) {
+        super(props);
+        this.state = { failed: false };
+      }
+      static getDerivedStateFromError() { return { failed: true }; }
+      componentDidCatch(error) {
+        console.warn(`[context-governance] entry crashed: ${String(this.props?.slot ?? 'unknown')} — ${String(error?.message ?? error)}`);
+      }
+      render() {
+        if (this.state?.failed === true) return this.props?.fallback ?? null;
+        return this.props?.children ?? null;
+      }
+    }
+
+    /** 把入口组件包进边界：children 是**元素**（惰性渲染），子组件抛错由 React 交给 EntryBoundary。 */
+    const boundedEntry = (slot, Component, fallback = null) => (props) => h(EntryBoundary, { slot, fallback }, h(Component, props));
+
     /** chip（composer.dock）。 */
     const createChip = (state, store, pluginCtx = null) => (props) => {
       const ctx = pluginCtx ?? props?.ctx ?? props;
@@ -213,7 +237,7 @@ window.__ModuleLoader__.load({
       react.useEffect(() => store.subscribe((next) => { setView(next.snapshot); setOpen(next.open); }), [store]);
       react.useEffect(() => {
         let alive = true;
-        const refresh = () => { fetchSnapshot(ctx?.fetch ?? globalThis.fetch).then((snapshot) => { if (alive && snapshot) store.set({ snapshot }); }); };
+        const refresh = () => { fetchSnapshot(globalThis.fetch).then((snapshot) => { if (alive && snapshot) store.set({ snapshot }); }); };
         refresh();
         const focusTarget = globalThis.window ?? globalThis;
         if (typeof focusTarget?.addEventListener === 'function') {
@@ -278,7 +302,7 @@ window.__ModuleLoader__.load({
       react.useEffect(() => {
         if (!open) return undefined;
         let alive = true;
-        fetchSnapshot(ctx?.fetch ?? globalThis.fetch).then((snapshot) => { if (alive && snapshot) store.set({ snapshot }); });
+        fetchSnapshot(globalThis.fetch).then((snapshot) => { if (alive && snapshot) store.set({ snapshot }); });
         return () => { alive = false; };
       }, [open, ctx, store]);
       const close = () => { if (closeDecision('escape')) store.set({ open: false }); };
@@ -292,7 +316,7 @@ window.__ModuleLoader__.load({
         setError('');
         setSaved(true);
         setTimeout(() => setSaved(false), 1500);
-        const next = await fetchSnapshot(ctx?.fetch ?? globalThis.fetch);
+        const next = await fetchSnapshot(globalThis.fetch);
         store.set(next ? { snapshot: next } : {});
       };
       const onBlurField = () => {
@@ -300,7 +324,7 @@ window.__ModuleLoader__.load({
         setError(result.ok === true ? '' : result.reason);
       };
       const restoreDefault = () => { setDraft(String(defaultPercentFor(view ?? null))); setError(''); };
-      const retry = () => { fetchSnapshot(ctx?.fetch ?? globalThis.fetch).then((snapshot) => { if (snapshot) store.set({ snapshot }); }); };
+      const retry = () => { fetchSnapshot(globalThis.fetch).then((snapshot) => { if (snapshot) store.set({ snapshot }); }); };
       return h('div', {
         role: 'dialog', 'aria-modal': 'true', 'aria-label': model.title, ref: dialogRef, style: S.dialog,
         tabIndex: -1,
@@ -346,7 +370,7 @@ window.__ModuleLoader__.load({
       react.useEffect(() => store.subscribe((next) => { setView(next.snapshot); }), [store]);
       react.useEffect(() => {
         let alive = true;
-        fetchSnapshot(ctx?.fetch ?? globalThis.fetch).then((snapshot) => { if (alive && snapshot) store.set({ snapshot }); });
+        fetchSnapshot(globalThis.fetch).then((snapshot) => { if (alive && snapshot) store.set({ snapshot }); });
         return () => { alive = false; };
       }, [ctx, store]);
       const model = bubbleView(view ?? null);
@@ -356,7 +380,7 @@ window.__ModuleLoader__.load({
         setError('');
         setSaved(true);
         setTimeout(() => setSaved(false), 1500);
-        const next = await fetchSnapshot(ctx?.fetch ?? globalThis.fetch);
+        const next = await fetchSnapshot(globalThis.fetch);
         if (next) store.set({ snapshot: next });
       };
       return h('div', { style: { ...S.dialog, width: 'auto', boxShadow: 'none' } },
@@ -390,7 +414,13 @@ window.__ModuleLoader__.load({
     const apply = (ctx) => {
       const state = createViewState();
       const store = createStore(state);
-      const components = { chip: createChip(state, store, ctx), bubble: createBubble(state, store, ctx), section: createSettingsCard(state, store, ctx) };
+      // C23：三处入口各包一层 React 错误边界；chip fallback 必须是**可点击的「压 —」按钮**。
+      const chipFallback = h('button', { type: 'button', style: S.chip, 'aria-haspopup': 'dialog' }, LABELS.zh.chipUnknown);
+      const components = {
+        chip: boundedEntry('conversation.composer.dock', createChip(state, store, ctx), chipFallback),
+        bubble: boundedEntry('conversation.input.overlay', createBubble(state, store, ctx)),
+        section: boundedEntry('settings.section', createSettingsCard(state, store, ctx)),
+      };
       const labels = pickLabels(ctx);
       console.info('[context-governance] client apply', {
         slots: typeof ctx?.slots?.inject === 'function' && typeof ctx?.slots?.register === 'function',
@@ -442,6 +472,8 @@ window.__ModuleLoader__.load({
       bubbleView,
       closeDecision,
       outsidePointerDecision,
+      EntryBoundary,
+      boundedEntry,
       normalizePercentInput,
       defaultRatioFor,
       defaultPercentFor,
@@ -458,6 +490,10 @@ window.__ModuleLoader__.load({
     };
   },
 });
+
+
+
+
 
 
 
