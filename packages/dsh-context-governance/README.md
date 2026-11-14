@@ -6,6 +6,7 @@
 > 当前版本：**B 方案 1.0**——可判定根登记与 state v2、每根记忆/审计/写者锁、`RootGuardPool` 每根保护/回注/header/提前压、`configRoot` 强制合并、v1→v2 迁移、只读根披露、隔离安装/卸载/兼容回滚。**全量 488/488（P3 fix 后）**；**自 M3 T2（0.3.1）起新会话 header 默认开启**（`/cg header off` 或配置 `memoryHeader.enabled=false` 可关）。
 > 安装方式：`docs/插件安装升级-Runbook.md`（`file:` 声明 + junction + bundle；不用 pnpm）。本机已按该方式安装（junction 指向源码），其它机器按 Runbook 操作。
 > **宿主兼容边界**（1.1.0 起双区间，与 `DEFAULT_MATRIX.host` 字面一致）：`engines.dsh = ">=0.2.1-rc.2 <0.2.2-0 || >=0.2.2-rc.3 <0.3.0-0"`。0.2.1 线**实测到 0.2.1-rc.3**；0.2.2 线以 **`0.2.2-rc.3` 为下界**声明、由宿主升级窗口验证（见 `docs/1.1.0-发布说明-草稿.md`）；0.3.0+ 仍拒载。
+> **设置页（1.1.0 D2）**：宿主设置里新增「上下文治理」卡片，可按**百分比 0–100** 改 `compact.at`（内部存 0.55 比例），并显示**当前生效值 / 来源层 / 生效时点**；安全参数（`estimateSafety`/`lowThresholdAck`/`armed`）不提供 UI 入口。
 
 ## 新用户先读（5 分钟上手）
 
