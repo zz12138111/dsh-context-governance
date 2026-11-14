@@ -1187,7 +1187,12 @@ C 的初步证据：启动后本项目根 `audit.jsonl` 只有 `capability@ready
 > 9. **⚠️ 第 1 次预验「不过」（2026-11-14 23:5x）→ D2 判未完成，退回开发。** 现象：重启后**输入框下方没有 chip**（截图确认）；已按 GRANT 回退 1.0.3。00 初查两条根因：①`dsh.client` 只有 `{platform:'web'}`（对照 `dsh-im`/`skills-manager` 等有 `inject`），客户端服务未注入 → `ctx.slots` 不可用 → 三处入口**静默不注册**；②快照路由 **404**：`src/index.js:927` 直接 `ctx.webServer.register`，而 `webServer` 后挂载（`computer-use` 用 `ctx.inject(['webServer'])` 正常）。
 >    - **需求判定**：**C8-C17 全过 ≠ 可装**——单测/纯函数验不到"宿主真的把浏览器半侧挂上去了"。新增 **C16/C17（离线契约）** 与 **R9（真机可见，硬判据）**；`C12-C15` 依旧有效但**不足以判"可装"**。
 >    - **由此更正的流程**：以后"可装"类结论必须同时满足 ①离线 C 系列全绿 ②**真机可见（R9）**；只有 ① 时只能判"离线通过、待真机"。
->    - **第 2 次预验**：`GRANT-20261114-03` 已用尽（"安装到回退为止"），需 **00/用户重新授权**；新凭证到位前不许再装。
+>    - **第 2 次预验**：凭证 **`tasks\GRANT-20261114-04-第2次预验-D2修复版.md`** 已由 00 签发（同口径：装 commit 树 → 重启一次 → 用户验 R9 → 立即回退 1.0.3 + 清 `policy.at`；不升宿主、不 push/tag、不作 R 证据）。**新凭证到位前不许装，到位后仍需我判"可装"。**
+> 10. **根因定位（开发三问回执 + 需求侧独立核证，2026-11-14）**：
+>    - **否决 00 的 inject 假设**：宿主 `dsh-client-modules/lib/index.js:62-74 parseDshClient()` **只要求 `platform` 必填**，`inject`/`external`/`immediately` 全可选；`inject` 的语义是 **graph row 加载排序依赖**（`lib/client.js:776-796 arriveGraphRow()`），**不是向插件 ctx 注入服务**。反证：`dsh-cost-meter` 就是 `{platform:'web'}` 且能挂 `settings.section`。→ **`dsh.client` 不改**。
+>    - **真因 1（UI 全不出现）**：我们 `apply` 直调 `ctx.slots.register(...)` 并用 `try/catch` 吞错；宿主 slot 是"先无后有"的，官方约定是 **`ctx.slots.inject(slotName, () => ctx.slots.register({...}, Comp))`**（`dsh-client-ui-settings-shell/lib/client.js:182-189`、`dsh-cost-meter`、`dsh-context`、`skills-manager` 均如此）。直调失败 → 静默丢弃。
+>    - **真因 2（快照 404）**：`src/index.js:927` 外层 `typeof ctx.webServer?.register === 'function'` 在服务未就绪时整块跳过；应照 `computer-use`（`ctx.inject(['webServer'], scoped => scoped.effect(() => scoped.webServer.register(...)))`）与宿主 `dsh-client-modules/lib/index.js:570`。
+>    - **修改面（需求已批，2026-11-14）**：`lib/client.js`（`slots.inject` 延迟注册 + 诊断 `console.info/warn`，不再静默）、`src/index.js`（**仅** webServer 注入与注册释放这一块，其余 host 不动）、测试（C16/C17 + 路由 200/405）。**`package.json` 不改。**
 
 **窗口物料（00 已备，2026-11-14 22:30；**本轮暂不使用**，重开窗口时再用；明细见 `G:\DS-HARNESS\tasks\TASK-20261114-02-本体升级-0.2.2-rc.3.md`）**：
 
