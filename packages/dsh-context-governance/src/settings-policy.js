@@ -98,3 +98,4 @@ export function createSnapshotHandler({ getPolicy, getNative }) {
     }
   };
 }
+
