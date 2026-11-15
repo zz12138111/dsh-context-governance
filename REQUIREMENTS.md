@@ -1322,6 +1322,8 @@ C 的初步证据：启动后本项目根 `audit.jsonl` 只有 `capability@ready
 
 > - **32. rc.12 修复与两条口径（2026-11-15，开发 `c24c6a8`）**：P3-c（`index.js` 命令面 `getAuditForSession`→`auditForSessionRoot`，保存/reset 均按会话根落 `policy-set`；门 `verify-p3c-policy-set-root` **7/7**）、B2（`lib/client.js resetToGlobal` 成功→`stateAfterReset(next)`：输入框回填生效值、`lastAction='reset'`、大字/来源/生命周期随快照同步）、B1（新增 `displaySourceFor()`：保存后主标签按「已保存」呈现 + 附注「重启后从已保存值读回」，负向扫五种来源断言不同时出现「重启后失效」「重启保留」）。读数：单测 **680/680**、C31 16/16、P3-c 7/7、P3 6/6、P2 3/3、P4 5/5、C27/C29 12/12。**两条备注**：①`plugin-policy-persisted` 无会话根 → 落主根/用户级，属**已知边界**（非缺口，Release notes 一句）；②新修**测试隔离缺陷**：`m2-policy-status ①b` 曾读本机真实 `~/.dsh/context-governance/plugin-policy.json`（真机存过 0.60），clean HEAD 全量复跑必红——已改隔离 home；**判据：门不得依赖本机持久配置**，入常驻清单。
 
+> - **33. rc.12 出包阻断（2026-11-15，审核 §18 复核 `c24c6a8`）**：①**B4 BLOCKER（回归）**：`lib/client.js` 删了 `const dialogRef = react.useRef(null)` 但 `L543`/`L598` 仍引用 → 浏览器 `ReferenceError`，气泡渲染必抛（测试 `B2-render-bubble-without-throw` 红、B2 门 1/3）→ **修复前 rc.12 不出包**，恢复声明/改引用 + 常驻门「客户端产物 vm 可加载且渲染不抛」；②**P3-c 只算部分修**：开发门 `verify-p3c-policy-set-root` 7/7 仅命令链，测试 UI 形态门 `verify-p3c-b2-ui-write` **5/9 PASS（4 红）**——无 guard 会话下 UI 保存/reset 的 `policy-set` 仍落主根 → 须修到 UI 路径 **9/9**；③B1 已修（9/9 PASS）；④B2 修法在树但被 B4 阻断无法验（B4 修后应 7/7）；⑤**C40 未落地前 rc.12 不出包**（B3 定级不变：用户验收项，不计入实现缺口计数）。顺序：开发新 hash（B4+P3-c UI+C40）→ 测试复跑 → 审核新包新回执 → 需求重出 rc.12 页 → 00 放行。
+
 **窗口物料（00 已备，2026-11-14 22:30；**本轮暂不使用**，重开窗口时再用；明细见 `G:\DS-HARNESS\tasks\TASK-20261114-02-本体升级-0.2.2-rc.3.md`）**：
 
 | 项 | 值 |
