@@ -575,8 +575,11 @@ window.__ModuleLoader__.load({
       big: { fontSize: 32, fontWeight: 700, lineHeight: '1.1', fontVariantNumeric: 'tabular-nums' },
       metaLine: { fontSize: 12, color: 'var(--dsh-fg-secondary, #bdbdbd)' },
       // B8：内容区独立滚动（minHeight:0 是 flex 子项能滚动的前提），footer 不参与滚动。
-      popoverBody: { display: 'flex', flexDirection: 'column', gap: 10, flex: '1 1 auto', minHeight: 0, overflowY: 'auto' },
-      popoverFooter: { display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'flex-end', flex: '0 0 auto', flexShrink: 0 },
+      // B9：内容区至少保留 96px（低于此优先压内容区滚动，绝不再压 footer）。
+      popoverBody: { display: 'flex', flexDirection: 'column', gap: 10, flex: '1 1 auto', minHeight: 96, overflowY: 'auto' },
+      // B9：操作区两排（输入行 + 按钮行），总高 ≤88px，常驻不滚。
+      popoverFooter: { display: 'flex', flexDirection: 'column', gap: 8, flex: '0 0 auto', flexShrink: 0, maxHeight: 88, overflow: 'hidden' },
+      popoverFooterRow: { display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 },
       row: { display: 'flex', alignItems: 'center', gap: 8 },
       input: { flex: 1, minWidth: 0, padding: '6px 8px', fontSize: 14, borderRadius: 8, border: '1px solid var(--dsh-border, #444)', background: 'var(--dsh-bg, #1e1e1e)', color: 'var(--dsh-fg, #e6e6e6)' },
       inputError: { borderColor: 'var(--dsh-red, #e05252)' },
@@ -813,11 +816,25 @@ window.__ModuleLoader__.load({
       react.useEffect(() => {
         if (open !== true || layout === null) return;
         try {
-          const contentHeight = Number(bodyRef.current?.scrollHeight ?? 0)
-            + Number(footerRef.current?.getBoundingClientRect?.().height ?? 0)
-            + 34; // padding 16×2 + border 1×2
-          if (!(contentHeight > 0)) return;
-          const desired = Math.min(260, Math.round(contentHeight));
+          const panelEl = dialogRef.current;
+          const bodyEl = bodyRef.current;
+          const footerEl = footerRef.current;
+          const footerHeight = Number(footerEl?.getBoundingClientRect?.().height ?? 0);
+          const bodyScroll = Number(bodyEl?.scrollHeight ?? 0);
+          if (!(bodyScroll > 0) && !(footerHeight > 0)) return;
+          // B9：不再硬编码 `+34`。padding/border/flex gap 全部从**面板实算样式**读，
+          // 免得漏算 gap（B8 那条 10px 洞）或 footer 内部新增的两排 gap。
+          let chrome = 44; // 兜底：padding 16×2 + border 1×2 + gap 10
+          try {
+            const cs = globalThis.getComputedStyle?.(panelEl) ?? null;
+            if (cs !== null) {
+              const px = (value) => { const n = Number.parseFloat(String(value ?? '')); return Number.isFinite(n) ? n : 0; };
+              chrome = px(cs.paddingTop) + px(cs.paddingBottom)
+                + px(cs.borderTopWidth) + px(cs.borderBottomWidth)
+                + px(cs.rowGap === 'normal' ? cs.gap : cs.rowGap);
+            }
+          } catch { /* 拿不到 computed 就用兜底 */ }
+          const desired = Math.min(260, Math.ceil(bodyScroll + footerHeight + chrome));
           if (Math.abs(desired - layout.height) <= 1) return;
           const chip = chipRectRef.current;
           const viewport = viewportRef.current;
@@ -921,7 +938,12 @@ window.__ModuleLoader__.load({
             ...renderBubbleDetail(view ?? {}, labels, { entry: 'session', lastAction }).split('\n').map((line, index) => h('div', { key: `detail${index}`, style: S.metaLine }, line))),
           h('button', { key: 'detail-toggle', type: 'button', className: 'cg-detail-toggle', style: { ...S.button, flexShrink: 0 }, onClick: () => setShowDetail(showDetail !== true) }, showDetail === true ? labels.hideDetail : labels.detail),
           sessionId === null ? h('div', { style: S.error }, labels.noSession ?? LABELS.zh.noSession) : null,
-          h('div', { style: { ...S.row, flexShrink: 0 } },
+          h('div', { role: 'alert', 'aria-live': 'polite', style: { ...S.error, flexShrink: 0 } }, error),
+        ),
+        // footer：**不在滚动区内**（flex:0 0 auto）。B9：百分比输入行也搬进来——
+        // 操作区（输入 + 四个按钮）整体常驻，用户永远不需要滚动才能保存。
+        h('div', { key: 'footer', 'data-cg-footer': '1', ref: footerRef, style: S.popoverFooter },
+          h('div', { key: 'footer-input-row', 'data-cg-footer-row': 'input', style: S.popoverFooterRow },
             h('input', {
               ref: inputRef, type: 'text', inputMode: 'numeric', value: draft, 'aria-label': labels.percent,
               'aria-invalid': error === '' ? 'false' : 'true',
@@ -931,26 +953,24 @@ window.__ModuleLoader__.load({
               onKeyDown: (event) => { if (event?.key === 'Enter') { event.preventDefault?.(); save(); } if (event?.key === 'Escape') { close(); } },
             }),
             h('span', { style: S.metaLine }, labels.unit)),
-          h('div', { role: 'alert', 'aria-live': 'polite', style: S.error }, error),
-        ),
-        // footer：**不在滚动区内**（flex:0 0 auto），保存/恢复/设置永远可见可点。
-        h('div', { key: 'footer', 'data-cg-footer': '1', ref: footerRef, style: S.popoverFooter },
-          h('button', { type: 'button', style: S.button, onClick: restoreDefault, disabled: !canSaveSession }, `${labels.restore} ${model.defaultPercent}%`),
-          h('button', {
-            type: 'button',
-            className: 'cg-reset-global',
-            style: canSaveSession ? S.button : { ...S.button, ...S.buttonDisabled },
-            onClick: resetToGlobal,
-            disabled: !canSaveSession,
-          }, labels.resetGlobal ?? '恢复全局设置'),
-          model.ready ? null : h('button', { type: 'button', style: S.button, onClick: retry }, labels.retry),
-          h('button', {
-            type: 'button',
-            style: canSaveSession && !saving ? { ...S.button, ...S.buttonPrimary } : { ...S.button, ...S.buttonPrimary, ...S.buttonDisabled },
-            onClick: save,
-            disabled: !canSaveSession || saving,
-          }, saving ? labels.saving : saved ? labels.saved : labels.save),
-          h('button', { type: 'button', className: 'cg-at-settings-link', style: S.button, onClick: () => { try { ctx?.openSettings?.(); } catch { /* ignore */ } } }, labels.openSettings),
+          h('div', { key: 'footer-actions-row', 'data-cg-footer-row': 'actions', style: { ...S.popoverFooterRow, flexWrap: 'wrap', justifyContent: 'flex-end' } },
+            h('button', { type: 'button', style: S.button, onClick: restoreDefault, disabled: !canSaveSession }, `${labels.restore} ${model.defaultPercent}%`),
+            h('button', {
+              type: 'button',
+              className: 'cg-reset-global',
+              style: canSaveSession ? S.button : { ...S.button, ...S.buttonDisabled },
+              onClick: resetToGlobal,
+              disabled: !canSaveSession,
+            }, labels.resetGlobal ?? '恢复全局设置'),
+            model.ready ? null : h('button', { type: 'button', style: S.button, onClick: retry }, labels.retry),
+            h('button', {
+              type: 'button',
+              style: canSaveSession && !saving ? { ...S.button, ...S.buttonPrimary } : { ...S.button, ...S.buttonPrimary, ...S.buttonDisabled },
+              onClick: save,
+              disabled: !canSaveSession || saving,
+            }, saving ? labels.saving : saved ? labels.saved : labels.save),
+            h('button', { type: 'button', className: 'cg-at-settings-link', style: S.button, onClick: () => { try { ctx?.openSettings?.(); } catch { /* ignore */ } } }, labels.openSettings),
+          ),
         ),
       );
       // B6：portal 到 body 后 fixed 的包含块才是视口。只 portal **这一个面板节点**（不搬入口组件）。
