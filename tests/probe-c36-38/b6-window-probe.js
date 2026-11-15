@@ -146,6 +146,29 @@
     out.checks['b8-save-button-hit'] = false;
   }
 
+  // B9：操作区常驻——输入框 + 四个按钮都在视口内、输入框可命中/可聚焦（无需滚动）
+  const opsInput = footerEl !== null ? footerEl.querySelector('input') : null;
+  const opsButtons = footerEl !== null ? [...footerEl.querySelectorAll('button')] : [];
+  out.opsInput = rect(opsInput);
+  out.opsButtons = opsButtons.map((btn) => ({ text: (btn.textContent ?? '').slice(0, 12), rect: rect(btn) }));
+  const iv = out.opsInput;
+  out.checks['b9-input-in-viewport'] = iv !== null && iv.top >= 8 && iv.left >= 8 && iv.right <= innerWidth - 8 && iv.bottom <= innerHeight - 8;
+  out.checks['b9-buttons-in-viewport'] = opsButtons.length >= 4 && opsButtons.every((btn) => {
+    const r = rect(btn);
+    return r !== null && r.top >= 8 && r.bottom <= innerHeight - 8 && r.left >= 8 && r.right <= innerWidth - 8;
+  });
+  if (iv !== null && opsInput !== null) {
+    const inputHit = document.elementFromPoint(Math.round(iv.left + iv.width / 2), Math.round(iv.top + iv.height / 2));
+    out.checks['b9-input-hit'] = inputHit === opsInput || opsInput.contains?.(inputHit) === true;
+    try {
+      opsInput.focus();
+      out.checks['b9-input-focusable'] = document.activeElement === opsInput;
+    } catch { out.checks['b9-input-focusable'] = false; }
+  } else {
+    out.checks['b9-input-hit'] = false;
+    out.checks['b9-input-focusable'] = false;
+  }
+
   for (const [key, value] of Object.entries(out.checks)) {
     if (value === false) out.problems.push(key);
   }
