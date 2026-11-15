@@ -894,6 +894,23 @@ const a2Store = createA2Store({
   pins: [],
   isActive: (sessionId) => isSessionActive(sessionId),
 });
+// C37④：status 需要走“每次 stat 重建”的 policyForEntry（startRuntime 内赋值）。
+let policyForEntryRef = null;
+// C38：memory-pointer-miss 去重（sessionId|id|reason），避免 header 每步刷屏。
+const memoryMissSeen = new Set();
+const auditMemoryEvent = (event, details) => {
+  if (event === 'memory-pointer-miss') {
+    const sessionId = details?.sessionId ?? null;
+    const key = `${sessionId ?? ''}|${details?.id ?? ''}|${details?.reason ?? ''}`;
+    if (memoryMissSeen.has(key)) return;
+    memoryMissSeen.add(key);
+    if (memoryMissSeen.size > 2000) {
+      const first = memoryMissSeen.values().next().value;
+      if (first !== undefined) memoryMissSeen.delete(first);
+    }
+  }
+  try { primaryAudit?.append?.(event, details); } catch { /* 审计失败不影响记忆 */ }
+};
 let policyState = buildPolicyState(mergeSettingsAt(config), {
   a2Store,
   markActive: markSessionActive,
@@ -1136,6 +1153,7 @@ let policyState = buildPolicyState(mergeSettingsAt(config), {
       policyConfigs.set(attachEntry.rootId, config);
       policyTemplateSignatures.set(attachEntry.rootId, projectTemplateSignature(attachEntry.root));
     }
+    policyForEntryRef = (entry) => policyForEntry(entry);
     const policyForEntry = (entry) => {
       const key = entry?.rootId ?? null;
       const rootForSignature = entry?.root ?? config.projectRoot;
@@ -1489,7 +1507,7 @@ let policyState = buildPolicyState(mergeSettingsAt(config), {
         try {
           const home = process.env.USERPROFILE ?? process.env.HOME ?? '';
           if (home === '') return null;
-          const pointerStore = openSessionMemory({ home, sessionId });
+          const pointerStore = openSessionMemory({ home, sessionId, audit: auditMemoryEvent });
           return pointerStore.count() > 0 ? pointerStore.query() : null;
         } catch {
           return null;
@@ -1576,7 +1594,19 @@ let policyState = buildPolicyState(mergeSettingsAt(config), {
       getAuditForSession: (sessionId) => (guardPool === null ? primaryAudit : guardPool.auditForSessionId(sessionId)),
       rootAudit,
       policy: policyState,
-      getPolicyForSession: (sessionId) => (guardPool === null ? policyState : (guardPool.policyForSessionId(sessionId) ?? policyState)),
+      getPolicyForSession: (sessionId) => {
+  if (guardPool === null) return policyState;
+  // C37④：/cg status 的生效值必须每次按模板 stat 重建（不能拿 guard 创建时快照）。
+  try {
+    const resolved = registry?.resolveSessionRoot?.({ header: { id: sessionId } }) ?? null;
+    if (resolved?.entry !== null && resolved?.entry !== undefined && policyForEntryRef !== null) {
+      return policyForEntryRef(resolved.entry);
+    }
+  } catch {
+    /* 回退 guard 快照 */
+  }
+  return guardPool.policyForSessionId(sessionId) ?? policyState;
+},
       getStoreForSession: (sessionId) => (guardPool === null ? store : (guardPool.storeForSessionId(sessionId) ?? store)),
       logger: ctx.logger,
       getEarlyStatus: () => {
