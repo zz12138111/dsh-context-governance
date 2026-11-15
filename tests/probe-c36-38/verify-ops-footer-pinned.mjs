@@ -220,27 +220,31 @@ try {
   check('OPS-structure-exists', wrapper !== undefined && panel !== undefined && body !== undefined && footer !== undefined,
     `wrapper=${wrapper !== undefined} panel=${panel !== undefined} body=${body !== undefined} footer=${footer !== undefined}`);
 
-  // ① footer 同时含输入框 + 三个按钮（B12：删除「打开设置页」静默 no-op 后，控件 4 / 按钮 3）
+  // ① footer 同时含输入框 + 两个按钮（B14：再删「恢复默认 60%」后，控件 3 / 按钮 2）
   const footerInput = findAll(footer ?? null, (node) => node.type === 'input' || node.props?.type === 'text')[0];
   const footerButtons = findAll(footer ?? null, (node) => node.type === 'button');
   const buttonTexts = footerButtons.map((node) => textOf(node));
-  const hasRestore = buttonTexts.some((text) => /恢复默认/.test(text));
   const hasResetGlobal = buttonTexts.some((text) => /恢复全局/.test(text));
   const hasSave = buttonTexts.some((text) => /保存/.test(text));
   check('OPS-footer-has-input-and-buttons',
-    footerInput !== undefined && footerButtons.length === 3 && hasRestore && hasResetGlobal && hasSave,
-    `input=${footerInput !== undefined} buttons=${JSON.stringify(buttonTexts)}（B12：恰好 3 个——恢复默认=${hasRestore} 恢复全局=${hasResetGlobal} 保存=${hasSave}；不得有「打开设置页」）`);
+    footerInput !== undefined && footerButtons.length === 2 && hasResetGlobal && hasSave,
+    `input=${footerInput !== undefined} buttons=${JSON.stringify(buttonTexts)}（B14：恰好 2 个——恢复全局=${hasResetGlobal} 保存=${hasSave}；不得有「打开设置页」「恢复默认」）`);
 
-  // ①b B12：按钮集合**精确相等**（不是包含），且每个都有 onClick（防静默 no-op）
-  const expectedButton = [/恢复默认/, /恢复全局/, /保存/];
-  const setExact = footerButtons.length === 3
+  // ①b B12/B14：按钮集合**精确相等**，且每个都有 onClick（防静默 no-op）
+  const expectedButton = [/恢复全局/, /保存/];
+  const setExact = footerButtons.length === 2
     && expectedButton.every((pattern) => buttonTexts.some((text) => pattern.test(text)))
     && buttonTexts.every((text) => expectedButton.some((pattern) => pattern.test(text)));
   check('OPS-footer-button-set-exact', setExact,
-    `buttons=${JSON.stringify(buttonTexts)}（期望精确 {恢复默认, 恢复全局, 保存到本会话}，多一个「打开设置页」也红）`);
+    `buttons=${JSON.stringify(buttonTexts)}（期望精确 {恢复全局设置, 保存到本会话}，多一个「打开设置页」或「恢复默认」都红）`);
   const silentButtons = footerButtons.filter((node) => typeof node.props?.onClick !== 'function');
-  check('OPS-footer-no-silent-noop', silentButtons.length === 0 && footerButtons.length === 3,
-    `无 onClick 的按钮=${JSON.stringify(silentButtons.map((node) => textOf(node)))}（B12 教训：不允许有按钮但点了没动作；若实现不了就删掉入口）`);
+  check('OPS-footer-no-silent-noop', silentButtons.length === 0 && footerButtons.length === 2,
+    `无 onClick 的按钮=${JSON.stringify(silentButtons.map((node) => textOf(node)))}（B12 教训：不允许有按钮但点了没动作）`);
+  // B14 负向：footer 树 + 源码渲染路径都不得再出现「恢复默认」/`footer-restore`（防回退）
+  const restoreInTree = footerButtons.some((node) => /恢复默认/.test(textOf(node)));
+  const restoreInSource = /key: 'footer-restore'/.test(src);
+  check('OPS-footer-no-restore-entry', !restoreInTree && !restoreInSource,
+    `footer 树含恢复默认=${restoreInTree} 源码含 key:'footer-restore'=${restoreInSource}（B14：该入口已删，回退即红）`);
 
   // ② footer 布局样式（B11 扁平化后不再要求"两行容器"；footer 自身必须 flex + gap）
   const footerStyle = footer?.props?.style ?? {};
@@ -373,8 +377,8 @@ try {
     const insidePanel = footerBottom <= panelBottom;
     const insideViewport = footerTop >= 8 && footerBottom <= VIEWPORT.height - 8;
     const tag = `@${band.width}`;
-    check(`OPS-footer-button-count-3${tag}`, band.buttons.length === 3,
-      `buttons=${band.buttons.length} ${JSON.stringify(band.buttons.map((item) => item.text))}（B12：精确 3 个）`);
+    check(`OPS-footer-button-count-2${tag}`, band.buttons.length === 2,
+      `buttons=${band.buttons.length} ${JSON.stringify(band.buttons.map((item) => item.text))}（B14：精确 2 个）`);
     check(`OPS-input-width-cap${tag}`, band.inputItem !== undefined && band.inputItem.width <= 72,
       `inputWidth=${band.inputItem === undefined ? 'missing' : Math.round(band.inputItem.width)}（期望 ≤72，目标 56）`);
     check(`OPS-footer-no-overflow${tag}`, !band.overflowHeight && !band.overflowWidth,
@@ -404,8 +408,8 @@ try {
   const extremeInsidePanel = extremeFooterBottom <= panelBottom;
   const extremeInsideViewport = extremeFooterBottom <= VIEWPORT.height - 8;
   check('OPS-footer-extreme-all-items-in-panel',
-    extreme.buttons.length === 3 && extreme.rows.length >= 4 && extremeInsidePanel && extremeInsideViewport,
-    `rows=${extreme.rows.length} footerHeight=${extreme.totalHeight} footerBottom=${extremeFooterBottom} panelBottom=${panelBottom} viewportH=${VIEWPORT.height}（B12：4 控件即 input+3 按钮，必须全部在面板与视口内）`);
+    extreme.buttons.length === 2 && extreme.rows.length >= 3 && extremeInsidePanel && extremeInsideViewport,
+    `rows=${extreme.rows.length} footerHeight=${extreme.totalHeight} footerBottom=${extremeFooterBottom} panelBottom=${panelBottom} viewportH=${VIEWPORT.height}（B14：3 控件即 input+2 按钮，必须全部在面板与视口内）`);
   check('OPS-footer-extreme-no-overflow', !extreme.overflowWidth && !extreme.overflowHeight,
     `contentHeight=${extreme.totalHeight} footerClientHeight=${extreme.footerClientHeight} rows=${JSON.stringify(extreme.rowsDump)}（不许被 hidden 裁；可提高 clientHeight，body 滚动是合法结果）`);
   check('OPS-footer-extreme-body-scroll-allowed', String(body?.props?.style?.overflowY ?? '') === 'auto',
@@ -419,9 +423,10 @@ try {
     ? heightFn({ bodyScroll: layoutModel.bodyScroll, footerHeight: extreme.totalHeight, chrome: CHROME })
     : null;
   const expectedExtremeFloor = Math.min(96, Math.max(0, 260 - extreme.totalHeight - CHROME));
-  check('OPS-footer-extreme-bodyFloor-dynamic', extremeFloor === expectedExtremeFloor && extremePanel === 260,
-    `bodyFloor=${extremeFloor}(期望${expectedExtremeFloor}=min(96,260−${extreme.totalHeight}−${CHROME})) panelHeight=${extremePanel}(期望260)`
-    + `（body 保底随 footer 让位，不写死 96；此时 body.scrollHeight(${layoutModel.bodyScroll}) > clientHeight(${extremePanel === null ? '?' : extremePanel - extreme.totalHeight - CHROME}) 是合法结果）`);
+  const expectedExtremePanel = Math.min(260, Math.max(layoutModel.bodyScroll, expectedExtremeFloor) + extreme.totalHeight + CHROME);
+  check('OPS-footer-extreme-bodyFloor-dynamic', extremeFloor === expectedExtremeFloor && extremePanel === expectedExtremePanel,
+    `bodyFloor=${extremeFloor}(期望${expectedExtremeFloor}=min(96,260−${extreme.totalHeight}−${CHROME})) panelHeight=${extremePanel}(期望${expectedExtremePanel}=min(260,max(bodyScroll,floor)+footer+chrome))`
+    + `（body 保底随 footer 让位，不写死 96）`);
   check('OPS-panel-height-le-260', wrapperHeightPx !== null && wrapperHeightPx <= 260,
     `wrapperHeight=${wrapperHeightPx}（极端档 panel 高度仍须 ≤260）`);
 
@@ -438,7 +443,7 @@ try {
     const heightAfter = pxValue(styleAfter.height);
     const topAfter = pxValue(styleAfter.top);
     check('OPS-detail-expand-keeps-ops',
-      inputAfter !== undefined && buttonsAfter.length >= 3
+      inputAfter !== undefined && buttonsAfter.length >= 2
         && heightAfter !== null && heightAfter <= 260 && topAfter !== null && topAfter + heightAfter <= VIEWPORT.height - 8,
       `inputAfter=${inputAfter !== undefined} buttonsAfter=${buttonsAfter.length} height=${JSON.stringify(styleAfter.height)} top=${JSON.stringify(styleAfter.top)} vh=${VIEWPORT.height}`);
   } else {
