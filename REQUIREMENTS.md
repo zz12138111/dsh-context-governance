@@ -1324,6 +1324,8 @@ C 的初步证据：启动后本项目根 `audit.jsonl` 只有 `capability@ready
 
 > - **33. rc.12 出包阻断（2026-11-15，审核 §18 复核 `c24c6a8`）**：①**B4 BLOCKER（回归）**：`lib/client.js` 删了 `const dialogRef = react.useRef(null)` 但 `L543`/`L598` 仍引用 → 浏览器 `ReferenceError`，气泡渲染必抛（测试 `B2-render-bubble-without-throw` 红、B2 门 1/3）→ **修复前 rc.12 不出包**，恢复声明/改引用 + 常驻门「客户端产物 vm 可加载且渲染不抛」；②**P3-c 只算部分修**：开发门 `verify-p3c-policy-set-root` 7/7 仅命令链，测试 UI 形态门 `verify-p3c-b2-ui-write` **5/9 PASS（4 红）**——无 guard 会话下 UI 保存/reset 的 `policy-set` 仍落主根 → 须修到 UI 路径 **9/9**；③B1 已修（9/9 PASS）；④B2 修法在树但被 B4 阻断无法验（B4 修后应 7/7）；⑤**C40 未落地前 rc.12 不出包**（B3 定级不变：用户验收项，不计入实现缺口计数）。顺序：开发新 hash（B4+P3-c UI+C40）→ 测试复跑 → 审核新包新回执 → 需求重出 rc.12 页 → 00 放行。
 
+> - **34. rc.12 作废与 rc.13 对象（2026-11-15）**：①**rc.12（锚 `87794f2`、包 `01EEF762…4C63`）作废**——`lib/client.js` 早退 `if (!open) return null`（`:662`）在 `useState(layout)`（`:669`）之前 → 关闭 14/打开 16 hook → **React #310（B5）**，chip/气泡齐哑；另 **P4b**：dispose 写审计重建已删根（`12:39:20.202`）。包改名 `…rc.12-作废-锚87794f2.zip`，回执/签字打⛔，覆盖页 `1.1.0-终版需求覆盖对照-rc12-20261115.md` 已加作废声明。②**rc.13 对象 `4145ddb`**：包 `dsh-context-governance-1.1.0-rc.13.zip` · 49 文件 · 276,726 B · SHA256 `1B81D351D04F7B93B30518DFA26236FE90D0E50CA5E9E05653DA5431AEE89D36`；B5 门 `rc12-b5-click-chain.test.mjs` 4/4、P4b 门 `verify-p4b-dispose-no-rebuild` 4/4；单测 686/686、C40 9/9、C31 16/16、CP0 0、`--strict` 0、对树 49/49。③**真机窗口（用户选 B）**：不回滚 rc.12，rc.13 一次装 + 一次重启，期间走 `/cg set`；**第一关只验 chip 能开/能关**，过了才谈 C40 三档截图。④**新增边界（Release notes 必写）**：`AuditLog.append` 不建目录——运行期审计文件被删 → 该行只留内存、不落盘；dispose 写失败回落主根并记 `root-unresolved{root-gone}`；**不得写"保证落盘"**。⑤判定：实现缺口 0、未实现条款 0、离线红项 0；差距=真机未跑；可装=是（限本批）、终版未签。
+
 **窗口物料（00 已备，2026-11-14 22:30；**本轮暂不使用**，重开窗口时再用；明细见 `G:\DS-HARNESS\tasks\TASK-20261114-02-本体升级-0.2.2-rc.3.md`）**：
 
 | 项 | 值 |
