@@ -30,6 +30,7 @@ function makeRes() {
   return res;
 }
 
+const TEST_TOKEN = 'test-csrf-token';
 function makeReq({ method = 'POST', headers = {}, body = undefined, raw = undefined, socket = { remoteAddress: '127.0.0.1' } } = {}) {
   const mergedHeaders = {
     'content-type': 'application/json',
@@ -88,7 +89,7 @@ async function loadClient() {
 // ---- 路由 ---------------------------------------------------------------
 test('C11③ 写路由：合法 POST 调用会话写入口并回 session:A2', async () => {
   const calls = [];
-  const handler = createSessionPolicyHandler({
+  const handler = createSessionPolicyHandler({ csrfToken: TEST_TOKEN,
     writeSessionAt: async (input) => { calls.push(input); return { ok: true }; },
   });
   const res = makeRes();
@@ -101,7 +102,7 @@ test('C11③ 写路由：合法 POST 调用会话写入口并回 session:A2', as
 
 test('C11③ 写路由：非 POST → 405 且不写；缺会话/越界 → 400 且不写', async () => {
   const calls = [];
-  const handler = createSessionPolicyHandler({ writeSessionAt: async (input) => { calls.push(input); return { ok: true }; } });
+  const handler = createSessionPolicyHandler({ csrfToken: TEST_TOKEN, writeSessionAt: async (input) => { calls.push(input); return { ok: true }; } });
 
   const get = makeRes();
   await handler(makeReq({ method: 'GET' }), get);
@@ -124,7 +125,7 @@ test('C11③ 写路由：非 POST → 405 且不写；缺会话/越界 → 400 �
 });
 
 test('C11③ 写路由：跨源 403、体超限 413、坏 JSON 400、命令链拒绝 409 带原因、无命令面 503', async () => {
-  const handler = createSessionPolicyHandler({ writeSessionAt: async () => ({ ok: true }) });
+  const handler = createSessionPolicyHandler({ csrfToken: TEST_TOKEN, writeSessionAt: async () => ({ ok: true }) });
 
   const cross = makeRes();
   await handler(makeReq({ headers: { origin: 'https://evil.example', host: '127.0.0.1:14915' }, body: { sessionId: 's1', at: 0.5 } }), cross);
@@ -143,7 +144,7 @@ test('C11③ 写路由：跨源 403、体超限 413、坏 JSON 400、命令链�
   assert.equal(broken.status, 400);
   assert.equal(json(broken).error, 'invalid-json');
 
-  const rejected = createSessionPolicyHandler({
+  const rejected = createSessionPolicyHandler({ csrfToken: TEST_TOKEN,
     writeSessionAt: async () => ({ ok: false, error: 'rejected', detail: '被拒绝: below-min' }),
   });
   const rejectedRes = makeRes();
@@ -152,7 +153,7 @@ test('C11③ 写路由：跨源 403、体超限 413、坏 JSON 400、命令链�
   assert.equal(json(rejectedRes).error, 'rejected');
   assert.match(json(rejectedRes).detail, /below-min/);
 
-  const unavailable = createSessionPolicyHandler({ writeSessionAt: null });
+  const unavailable = createSessionPolicyHandler({ csrfToken: TEST_TOKEN, writeSessionAt: null });
   const unavailableRes = makeRes();
   await unavailable(makeReq({ body: { sessionId: 's1', at: 0.5 } }), unavailableRes);
   assert.equal(unavailableRes.status, 503);
@@ -168,7 +169,7 @@ test('C11③ 端到端：UI 写 → 会话层即时生效且落 A2（重启后�
   });
   // 生产里 sessionWriteRef 就是跑这条命令链；这里同构地拿它当写入口。
   const command = createStatusCommand({ policy: state });
-  const handler = createSessionPolicyHandler({
+  const handler = createSessionPolicyHandler({ csrfToken: TEST_TOKEN,
     writeSessionAt: async ({ sessionId, at }) => {
       const result = await command.handler({ agent: { session: { id: sessionId } }, rawInput: `set compact.at=${at}` });
       return result.kind === 'success' ? { ok: true } : { ok: false, error: 'rejected', detail: result.text };

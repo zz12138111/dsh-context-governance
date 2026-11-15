@@ -27,6 +27,7 @@ function fakeA2(initial = new Map()) {
 
 // 包根由本文件位置推导（不依赖测试运行时 cwd）。
 const PKG_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const TEST_TOKEN = 'test-csrf-token';
 const makeState = (a2) => buildPolicyState(
   resolveConfig({ projectRoot: 'D:/tmp/c27c29', policy: { values: { 'compact.at': 0.58 } } }),
   { readFile: () => { throw new Error('no project file'); }, a2Store: a2, onPolicyResolved: () => {} },
@@ -64,7 +65,7 @@ test('C27/C29 ②：A1 + A2 同时在 → reset 两层都清（cleared 计 2）'
 
 test('C29 ③：写路由支持 {reset:true} 且走 reset 链路（不是写值）', async () => {
   const calls = { set: [], reset: [] };
-  const handler = createSessionPolicyHandler({
+  const handler = createSessionPolicyHandler({ csrfToken: TEST_TOKEN,
     writeSessionAt: async ({ sessionId, at }) => { calls.set.push({ sessionId, at }); return { ok: true }; },
     resetSessionAt: async ({ sessionId }) => { calls.reset.push({ sessionId }); return { ok: true }; },
   });
@@ -90,7 +91,7 @@ test('C29 ③：写路由支持 {reset:true} 且走 reset 链路（不是写值�
 });
 
 test('C31：写路由边界——仅 loopback、同源必做、只收 JSON、sessionId 白名单', async () => {
-  const handler = createSessionPolicyHandler({ writeSessionAt: async () => ({ ok: true }) });
+  const handler = createSessionPolicyHandler({ csrfToken: TEST_TOKEN, writeSessionAt: async () => ({ ok: true }) });
   const makeRes = () => {
     const res = { status: 0, body: null };
     res.writeHead = (status) => { res.status = status; };
@@ -122,7 +123,7 @@ test('C31：写路由边界——仅 loopback、同源必做、只收 JSON、ses
   const noOriginRes = makeRes();
   await handler(noOrigin, noOriginRes);
   assert.equal(noOriginRes.status, 403);
-  assert.equal(JSON.parse(noOriginRes.body).error, 'missing-origin');
+  assert.equal(JSON.parse(noOriginRes.body).error, 'missing-proof');
 
   // Sec-Fetch-Site: same-origin 可替代 Origin。
   const secFetch = base();
@@ -203,7 +204,7 @@ test('C29 ④：client 有「恢复全局设置」入口且走 reset 链路（�
 });
 
 test('C31：::ffff:127.0.0.1 与 Sec-Fetch-Site:none 也放行；跨源 `cross-origin`', async () => {
-  const handler = createSessionPolicyHandler({ writeSessionAt: async () => ({ ok: true }) });
+  const handler = createSessionPolicyHandler({ csrfToken: TEST_TOKEN, writeSessionAt: async () => ({ ok: true }) });
   const makeRes = () => {
     const res = { status: 0, body: null };
     res.writeHead = (status) => { res.status = status; };

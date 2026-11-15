@@ -10,6 +10,7 @@
  */
 
 import fs from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
 import { registerStatusCommand } from './commands/cg-status.js';
@@ -722,8 +723,8 @@ export function buildPolicyState(config, deps = {}) {
  * ——与 `@local/dsh-computer-use` 同写法）。无 `inject` 的 ctx（部分单测）回退直挂。
  * @returns {boolean} 已挂载或已排队等待 webServer
  */
-export function mountSnapshotRoute(ctx, { getPolicy, getNative, onError = null, path = '/context-governance/policy-snapshot' } = {}) {
-  const handler = createSnapshotHandler({ getPolicy, getNative, onError });
+export function mountSnapshotRoute(ctx, { getPolicy, getNative, onError = null, path = '/context-governance/policy-snapshot', csrfToken = null } = {}) {
+  const handler = createSnapshotHandler({ getPolicy, getNative, onError, csrfToken });
   const mount = (host) => {
     if (host === null || host === undefined || typeof host.webServer?.register !== 'function') return false;
     try {
@@ -1307,6 +1308,8 @@ let policyState = buildPolicyState(mergePluginPolicy(config), {
         }
       });
     }
+    // P5：UI 同源凭据（每次进程启动一个新的随机 token，经快照下发、写路由校验）。
+    const csrfToken = randomUUID();
     // 1.1.0 D2：只读快照路由（仅 GET；非 GET → 405；只出阈值/来源，无记忆内容、无本机路径）。
     // webServer 是后挂服务：经 `ctx.inject(['webServer'])` 注册（与 @local/dsh-computer-use 同写法）。
     {
@@ -1328,6 +1331,7 @@ let policyState = buildPolicyState(mergePluginPolicy(config), {
         },
       });
       mountSnapshotRoute(ctx, {
+        csrfToken,
         getPolicy: resolveSnapshotPolicy,
         getNative: snapshotNative,
         onError: (error) => ctx.logger?.warn?.(`[context-governance] policy-snapshot failed: ${String(error?.message ?? error)}`),
@@ -1335,6 +1339,7 @@ let policyState = buildPolicyState(mergePluginPolicy(config), {
     }
     // C11③：会话级写路由（UI 保存 → A2）。只写会话层，校验/审计复用 `/cg set` 命令链。
     mountSessionPolicyRoute(ctx, {
+      csrfToken,
       resetSessionAt: async ({ sessionId }) => {
         const writer = sessionWriteRef;
         if (writer === null || typeof writer.reset !== 'function') return { ok: false, error: 'command-unavailable' };
@@ -1367,6 +1372,7 @@ let policyState = buildPolicyState(mergePluginPolicy(config), {
     // `~/.dsh/context-governance/plugin-policy.json`，重启后仍以 source=plugin 读回。
     // 不依赖宿主 volatile 字段是否跨进程保留（那层只负责表单可编辑 / 即时投影）。
     mountPluginPolicyRoute(ctx, {
+      csrfToken,
       writePluginAt: ({ at }) => {
         const store = getPluginPolicyStore();
         if (store === null) return { ok: false, error: 'persist-unavailable' };

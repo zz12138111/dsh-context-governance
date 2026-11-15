@@ -175,7 +175,7 @@ export function createSnapshotPolicyResolver({
  * @param {{getPolicy: (input?: {sessionId?: string|null, scope?: string|null}) => object,
  *   getNative: () => number|null, onError?: (error: object) => void}} deps
  */
-export function createSnapshotHandler({ getPolicy, getNative, onError = null }) {
+export function createSnapshotHandler({ getPolicy, getNative, onError = null, csrfToken = null }) {
   return (req, res) => {
     if (req?.method !== 'GET') {
       res.writeHead(405, { allow: 'GET' });
@@ -186,6 +186,8 @@ export function createSnapshotHandler({ getPolicy, getNative, onError = null }) 
       const query = parseSnapshotQuery(req?.url);
       const policy = typeof getPolicy === 'function' ? getPolicy(query) : null;
       const view = policySnapshot(policy, { native: typeof getNative === 'function' ? getNative() : null });
+      // P5：把 UI 写请求需要的同源凭据随快照下发（页面内脚本可读，外部脚本不可知）。
+      if (typeof csrfToken === 'string' && csrfToken !== '') view.csrfToken = csrfToken;
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
       res.end(JSON.stringify(view));
     } catch (error) {

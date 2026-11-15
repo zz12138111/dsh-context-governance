@@ -27,6 +27,7 @@ function makeRes() {
   res.end = (payload) => { res.body = payload === undefined ? '' : String(payload); };
   return res;
 }
+const TEST_TOKEN = 'test-csrf-token';
 function makeReq({ method = 'POST', headers = {}, body = undefined, raw = undefined, socket = { remoteAddress: '127.0.0.1' } } = {}) {
   const mergedHeaders = {
     'content-type': 'application/json',
@@ -151,7 +152,7 @@ test('C11② 合并优先级：持久值只替代 plugin 默认，不越级压 A
 test('C11② 路由：POST 成功回 source=plugin；405/400/403/413/409/503 齐', async () => {
   assert.equal(PLUGIN_POLICY_PATH, '/context-governance/plugin-policy');
   const calls = [];
-  const handler = createPluginPolicyHandler({ writePluginAt: ({ at }) => { calls.push(at); return { ok: true }; } });
+  const handler = createPluginPolicyHandler({ csrfToken: TEST_TOKEN, writePluginAt: ({ at }) => { calls.push(at); return { ok: true }; } });
 
   const ok = makeRes();
   await handler(makeReq({ body: { at: 0.6 } }), ok);
@@ -178,13 +179,13 @@ test('C11② 路由：POST 成功回 source=plugin；405/400/403/413/409/503 齐
   await handler(makeReq({ raw: 'x'.repeat(9000) }), big);
   assert.equal(big.status, 413);
 
-  const rejected = createPluginPolicyHandler({ writePluginAt: () => ({ ok: false, error: 'persist-failed' }) });
+  const rejected = createPluginPolicyHandler({ csrfToken: TEST_TOKEN, writePluginAt: () => ({ ok: false, error: 'persist-failed' }) });
   const rejectedRes = makeRes();
   await rejected(makeReq({ body: { at: 0.6 } }), rejectedRes);
   assert.equal(rejectedRes.status, 409);
   assert.equal(json(rejectedRes).error, 'persist-failed');
 
-  const unavailable = createPluginPolicyHandler({ writePluginAt: null });
+  const unavailable = createPluginPolicyHandler({ csrfToken: TEST_TOKEN, writePluginAt: null });
   const unavailableRes = makeRes();
   await unavailable(makeReq({ body: { at: 0.6 } }), unavailableRes);
   assert.equal(unavailableRes.status, 503);
@@ -196,7 +197,7 @@ test('C11② 端到端：设置页保存 0.6 → 重启 → plugin 层值保留�
   try {
     const file = path.join(dir, 'context-governance', 'plugin-policy.json');
     const store = createPluginPolicyStore({ file });
-    const handler = createPluginPolicyHandler({
+    const handler = createPluginPolicyHandler({ csrfToken: TEST_TOKEN,
       writePluginAt: ({ at }) => (store.writeAt(at) ? { ok: true } : { ok: false, error: 'persist-failed' }),
     });
     const res = makeRes();

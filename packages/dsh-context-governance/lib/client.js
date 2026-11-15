@@ -25,6 +25,9 @@ window.__ModuleLoader__.load({
     /** rc.9：快照必须带会话上下文；设置页显式要全局。 */
     const SNAPSHOT_PATH_SESSION = '/context-governance/policy-snapshot?session=';
     const SNAPSHOT_PATH_GLOBAL = '/context-governance/policy-snapshot?scope=global';
+    /** P5：写请求的同源凭据头（token 由快照下发；外部脚本不可知）。 */
+    const CSRF_HEADER = 'x-context-governance-csrf';
+    let csrfToken = null;
     const SESSION_POLICY_PATH = '/context-governance/session-policy';
     const PLUGIN_POLICY_PATH = '/context-governance/plugin-policy';
     const AT_MIN = 0.2;
@@ -163,10 +166,11 @@ window.__ModuleLoader__.load({
     const postSessionAt = async ({ sessionId, at, fetchImpl = globalThis.fetch } = {}) => {
       if (typeof sessionId !== 'string' || sessionId === '') return { ok: false, error: 'no-session', requestSent: false };
       if (typeof fetchImpl !== 'function') return { ok: false, error: 'no-fetch', requestSent: false };
+      if (csrfToken === null) { try { await fetchSnapshot(fetchImpl, { sessionId }); } catch { /* 取不到 token 时写请求会 403 并显示原因 */ } }
       try {
         const response = await fetchImpl(SESSION_POLICY_PATH, {
           method: 'POST',
-          headers: { 'content-type': 'application/json', accept: 'application/json' },
+          headers: writeHeaders(),
           body: JSON.stringify({ sessionId, at }),
         });
         if (response && response.ok === true) return { ok: true, error: null, requestSent: true };
@@ -189,10 +193,11 @@ window.__ModuleLoader__.load({
     const resetSessionAt = async ({ sessionId, fetchImpl = globalThis.fetch } = {}) => {
       if (typeof sessionId !== 'string' || sessionId === '') return { ok: false, error: LABELS.zh.noSession, requestSent: false };
       if (typeof fetchImpl !== 'function') return { ok: false, error: 'no-fetch', requestSent: false };
+      if (csrfToken === null) { try { await fetchSnapshot(fetchImpl, { sessionId }); } catch { /* ignore */ } }
       try {
         const response = await fetchImpl(SESSION_POLICY_PATH, {
           method: 'POST',
-          headers: { 'content-type': 'application/json', accept: 'application/json' },
+          headers: writeHeaders(),
           body: JSON.stringify({ sessionId, reset: true }),
         });
         if (response && response.ok === true) return { ok: true, requestSent: true };
@@ -232,7 +237,7 @@ window.__ModuleLoader__.load({
       try {
         const response = await fetchImpl(PLUGIN_POLICY_PATH, {
           method: 'POST',
-          headers: { 'content-type': 'application/json', accept: 'application/json' },
+          headers: writeHeaders(),
           body: JSON.stringify({ at: result.ratio }),
         });
         if (response && response.ok === true) {
@@ -318,6 +323,12 @@ window.__ModuleLoader__.load({
       return SNAPSHOT_PATH;
     };
 
+    const writeHeaders = () => ({
+      'content-type': 'application/json',
+      accept: 'application/json',
+      ...(csrfToken === null ? {} : { [CSRF_HEADER]: csrfToken }),
+    });
+
     /** 拉取快照：失败 warn + 3 次退避（C19）；导出供假 fetch 序列单测。 */
     const fetchSnapshotWithRetry = async (
       fetchImpl = globalThis.fetch,
@@ -332,7 +343,11 @@ window.__ModuleLoader__.load({
       for (let index = 0; index < attempts; index += 1) {
         try {
           const response = await fetchImpl(url, { method: 'GET', headers: { accept: 'application/json' } });
-          if (response && response.ok === true) return await response.json();
+          if (response && response.ok === true) {
+            const body = await response.json();
+            if (body !== null && typeof body === 'object' && typeof body.csrfToken === 'string' && body.csrfToken !== '') csrfToken = body.csrfToken;
+            return body;
+          }
           reason = response ? `HTTP ${response.status}` : 'no response';
           warn(`[context-governance] snapshot fetch failed: ${reason} (attempt ${index + 1}/${attempts})`);
         } catch (error) {
@@ -689,6 +704,8 @@ window.__ModuleLoader__.load({
       validateRatio,
       fetchSnapshot,
       fetchSnapshotWithRetry,
+      CSRF_HEADER,
+      csrfTokenValue: () => csrfToken,
       createChip,
       createBubble,
       createSettingsCard,

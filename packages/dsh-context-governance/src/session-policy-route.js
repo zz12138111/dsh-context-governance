@@ -19,6 +19,16 @@ export const SESSION_POLICY_PATH = '/context-governance/session-policy';
 /** 会话 id：宿主是 uuid，历史/别名统一按白名单字符集收口。 */
 export const SESSION_ID_PATTERN = /^[A-Za-z0-9._-]{1,128}$/;
 
+/** UI 同源凭据：插件进程生成的随机 token，经快照下发给客户端，写请求用该头回传。 */
+export const CSRF_HEADER = 'x-context-governance-csrf';
+
+/** 请求是否携带合法 token（与服务端 token 比较；空 token 一律不认）。 */
+export function hasValidCsrf(req, token) {
+  if (typeof token !== 'string' || token === '') return false;
+  const provided = req?.headers?.[CSRF_HEADER];
+  return typeof provided === 'string' && provided !== '' && provided === token;
+}
+
 const DEFAULT_MAX_BYTES = 4096;
 
 /** C31①：只接受 loopback 来源（IPv4 / IPv6 / IPv4-mapped）；取不到 socket 地址按拒绝处理。 */
@@ -47,6 +57,26 @@ export function isSameOriginRequest(req) {
     return new URL(origin).host === host;
   } catch {
     return false;
+  }
+}
+
+/** 请求是否带 Origin 头（有则额外校验同源；不要求存在）。 */
+export function hasOriginHeader(req) {
+  const origin = req?.headers?.origin;
+  return typeof origin === 'string' && origin !== '';
+}
+
+/** 显式给了 Origin 且与 Host 不同源（跨站请求）——无论 token 是否合法都拒。 */
+export function hasExplicitCrossOrigin(req) {
+  const headers = req?.headers ?? {};
+  const origin = headers.origin;
+  const host = headers.host;
+  if (typeof origin !== 'string' || origin === '') return false;
+  if (typeof host !== 'string' || host === '') return true;
+  try {
+    return new URL(origin).host !== host;
+  } catch {
+    return true;
   }
 }
 
@@ -92,7 +122,7 @@ async function readBody(req, maxBytes) {
  *   onError?: (error: unknown) => void, maxBytes?: number}} deps
  * @returns {(req: any, res: any) => Promise<void>}
  */
-export function createSessionPolicyHandler({ writeSessionAt, resetSessionAt = null, onError = null, maxBytes = DEFAULT_MAX_BYTES } = {}) {
+export function createSessionPolicyHandler({ writeSessionAt, resetSessionAt = null, onError = null, maxBytes = DEFAULT_MAX_BYTES, csrfToken = null } = {}) {
   return async (req, res) => {
     const send = (status, payload) => {
       try {
@@ -114,9 +144,20 @@ export function createSessionPolicyHandler({ writeSessionAt, resetSessionAt = nu
       send(403, { ok: false, error: 'not-loopback' });
       return;
     }
-    // C31③：同源必做（缺失即拒，不作为可选）。
-    if (isSameOriginRequest(req) !== true) {
-      send(403, { ok: false, error: sameOriginErrorCode(req) });
+    // C31③：同源必做——但 Electron/DSH renderer 的同源 fetch 可能不带 Origin/Sec-Fetch-Site，
+    // 所以接受"合法 CSRF token"或"同源头"二者之一；token 缺失且无同源头 → 403（curl 无凭据被拒）。
+    // P5：token 必填（同源头不能单独放行——Origin/Host 可伪造）。
+    // 顺序：跨源显式拒绝 → 缺/错 token 拒绝 → 有 Origin 时再做同源校验。
+    if (hasExplicitCrossOrigin(req)) {
+      send(403, { ok: false, error: 'cross-origin' });
+      return;
+    }
+    // C31③（需求 504cc15 按意图解释）：①合法 Origin ②Sec-Fetch-Site:same-origin ③宿主 token —— 三者任一即可。
+    // 只拒"三者皆无"；loopback 强制已在上面，不变。
+    const tokenOk = typeof csrfToken === 'string' && csrfToken !== '' && hasValidCsrf(req, csrfToken);
+    const proof = tokenOk || isSameOriginRequest(req) === true;
+    if (proof !== true) {
+      send(403, { ok: false, error: 'missing-proof' });
       return;
     }
     // C31②：只收 JSON。
@@ -175,10 +216,10 @@ export function createSessionPolicyHandler({ writeSessionAt, resetSessionAt = nu
  * 注册写路由（与只读快照路由同写法：`ctx.inject(['webServer'], ...)`）。
  * @returns {boolean} 已挂载或已排队等待 webServer
  */
-export function mountSessionPolicyRoute(ctx, { writeSessionAt, onError = null, path = SESSION_POLICY_PATH } = {}) {
+export function mountSessionPolicyRoute(ctx, { writeSessionAt, resetSessionAt = null, onError = null, path = SESSION_POLICY_PATH, csrfToken = null } = {}) {
   return mountWriteRoute(ctx, {
     path,
-    handler: createSessionPolicyHandler({ writeSessionAt, onError }),
+    handler: createSessionPolicyHandler({ writeSessionAt, resetSessionAt, onError, csrfToken }),
     label: 'context-governance: session-policy route',
   });
 }
@@ -193,7 +234,7 @@ export const PLUGIN_POLICY_PATH = '/context-governance/plugin-policy';
  * @param {{writePluginAt: (input:{at:number}) => {ok:boolean, error?:string, detail?:string},
  *   onError?: (error: unknown) => void, maxBytes?: number}} deps
  */
-export function createPluginPolicyHandler({ writePluginAt, onError = null, maxBytes = DEFAULT_MAX_BYTES } = {}) {
+export function createPluginPolicyHandler({ writePluginAt, onError = null, maxBytes = DEFAULT_MAX_BYTES, csrfToken = null } = {}) {
   return async (req, res) => {
     const send = (status, payload) => {
       try {
@@ -208,13 +249,23 @@ export function createPluginPolicyHandler({ writePluginAt, onError = null, maxBy
       } catch { /* ignore */ }
       return;
     }
-    // 与 A2 写路由同一安全边界（C31①③②）：仅 loopback、同源必做、只收 JSON。
+    // 与 A2 写路由同一安全边界（C31①③②）：仅 loopback、同源或合法 CSRF token、只收 JSON。
     if (isLoopbackRequest(req) !== true) {
       send(403, { ok: false, error: 'not-loopback' });
       return;
     }
-    if (isSameOriginRequest(req) !== true) {
-      send(403, { ok: false, error: sameOriginErrorCode(req) });
+    // P5：token 必填（同源头不能单独放行——Origin/Host 可伪造）。
+    // 顺序：跨源显式拒绝 → 缺/错 token 拒绝 → 有 Origin 时再做同源校验。
+    if (hasExplicitCrossOrigin(req)) {
+      send(403, { ok: false, error: 'cross-origin' });
+      return;
+    }
+    // C31③（需求 504cc15 按意图解释）：①合法 Origin ②Sec-Fetch-Site:same-origin ③宿主 token —— 三者任一即可。
+    // 只拒"三者皆无"；loopback 强制已在上面，不变。
+    const tokenOk = typeof csrfToken === 'string' && csrfToken !== '' && hasValidCsrf(req, csrfToken);
+    const proof = tokenOk || isSameOriginRequest(req) === true;
+    if (proof !== true) {
+      send(403, { ok: false, error: 'missing-proof' });
       return;
     }
     if (isJsonContentType(req) !== true) {
@@ -257,7 +308,7 @@ export function createPluginPolicyHandler({ writePluginAt, onError = null, maxBy
   };
 }
 
-export function mountPluginPolicyRoute(ctx, { writePluginAt, onError = null, path = PLUGIN_POLICY_PATH } = {}) {
+export function mountPluginPolicyRoute(ctx, { writePluginAt, onError = null, path = PLUGIN_POLICY_PATH, csrfToken = null } = {}) {
   return mountWriteRoute(ctx, {
     path,
     handler: createPluginPolicyHandler({ writePluginAt, onError }),
