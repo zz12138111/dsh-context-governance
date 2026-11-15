@@ -109,7 +109,7 @@ function formatEarlyStatus(earlyStatus) {
   return `last-early: ${event}${reason}${effective}${at}`;
 }
 
-function statusText({ store, guard, audit, rootAudit = null, rootsView = null, rootCounts = null, poolStats = null, diagnosticsLogFile = null, diagnosticsError = null, now, policy = null, earlyStatus = null, sessionId = null, rootInfo = null, identity = null }) {
+function statusText({ store, guard, audit, rootAudit = null, rootsView = null, rootCounts = null, poolStats = null, diagnosticsLogFile = null, diagnosticsError = null, now, policy = null, earlyStatus = null, sessionId = null, rootInfo = null, identity = null, userStore = null }) {
   const lines = [];
   const status = guard?.status ?? null;
   lines.push('context-governance status');
@@ -332,6 +332,8 @@ function statusText({ store, guard, audit, rootAudit = null, rootsView = null, r
       `rotations=${rootAudit.rotations ?? 0} failures=${rootFailures.join(',') || 'none'} (this-process)`,
     );
   }
+  // C39：用户级基座必须可见（不可得时显式 unavailable，绝不静默降到 cwd）。
+  lines.push(`user-store: ${userStore === null || userStore === '' ? 'unavailable (profileContext)' : userStore}`);
   // P1：全部纳管根视图（只读；不打开 store、不建目录）。
   lines.push(...rootsStatusLines({ rootsView, rootCounts }));
   if (poolStats !== null) {
@@ -375,7 +377,7 @@ function rootsStatusLines({ rootsView = null, rootCounts = null }) {
  */
 export function createStatusCommand({ store = null, guard = null, getGuard = null, audit = null, rootAudit = null, policy = null, now = () => new Date(), logger = null, getEarlyStatus = null, getEarlyStatusForSession = null, getPolicyForSession = null, getStoreForSession = null, getAuditForSession = null, sessionIdOf = defaultSessionIdOf, getRootInfo = null, getPersistenceIdentity = null, getRootsView = null, getRootCounts = null, getPoolStats = null, getDiagnosticsLogFile = null, getDiagnosticsError = null,
   // rc.10：会话记忆审计共享去重器 + 会话根解析（`/cg memory` 的 root/rootId 与 miss 去重）+ home 可注入。
-  auditMemoryEvent = null, resolveSessionRoot = null, home = null } = {}) {
+  auditMemoryEvent = null, resolveSessionRoot = null, home = null, getUserStoreDir = null } = {}) {
   const policyFor = (sessionId) => {
     if (typeof getPolicyForSession !== 'function') return policy;
     try {
@@ -440,7 +442,8 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
    * 于是 `memory show` 显示 `(root-unresolved)`，`shared` / `import --from legacy` 全部不可用。
    */
   const memoryContext = (sessionId) => {
-    const homeDir = typeof home === 'string' && home !== '' ? home : os.homedir();
+    // C39：命令面必须与事件面用同一个用户级基座（注入 getter），os.homedir() 只作测试兜底。
+    const homeDir = typeof home === 'function' ? (home() ?? os.homedir()) : (typeof home === 'string' && home !== '' ? home : os.homedir());
     let projectRoot = '';
     let rootId = null;
     // ① 权威：该会话解析出的根（registry 的 entry）。
@@ -1031,6 +1034,7 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
             sessionId,
             rootInfo,
             identity,
+            userStore: typeof getUserStoreDir === 'function' ? getUserStoreDir() : null,
           }),
         };
       } catch (error) {

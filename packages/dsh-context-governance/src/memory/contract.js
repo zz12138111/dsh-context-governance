@@ -173,7 +173,7 @@ const TITLE_PREFIX_MIN = 8;
 
 /**
  * 标题键"前缀近似"判定（1.0.3 去重口径，5b）。
- * 实测同一指针被续写会变成两个键：`回滚点：G:\DS-HARNESS`` 与 `回滚点：G:\DS-HARNESS`（见记忆`。
+ * 实测同一指针被续写会变成两个键：带反引号残片与不带残片（见记忆）。
  * 键完全相同，或较长键以较短键开头且较短键长度 ≥ `TITLE_PREFIX_MIN`，视为同一条内容。
  */
 export function titleKeyMatches(a, b) {

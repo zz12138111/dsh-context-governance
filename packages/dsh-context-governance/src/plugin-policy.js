@@ -20,10 +20,10 @@ export const PLUGIN_POLICY_FILENAME = 'plugin-policy.json';
 export const PLUGIN_POLICY_VERSION = 1;
 export const PLUGIN_POLICY_SOURCE = 'plugin';
 
-/** `~/.dsh/context-governance/plugin-policy.json`（home 为空 → null，调用方按不可用处理）。 */
-export function pluginPolicyFile(home = process.env.USERPROFILE ?? process.env.HOME ?? '') {
-  if (typeof home !== 'string' || home === '') return null;
-  return path.join(home, '.dsh', 'context-governance', PLUGIN_POLICY_FILENAME);
+/** `<DSH home>/context-governance/plugin-policy.json`（home 为空 → null，调用方按不可用处理）。 */
+export function pluginPolicyFile(home = '') {
+  if (typeof home !== 'string' || home.trim() === '') return null;
+  return path.join(home.trim(), 'context-governance', PLUGIN_POLICY_FILENAME);
 }
 
 function atomicWriteJson(file, data) {

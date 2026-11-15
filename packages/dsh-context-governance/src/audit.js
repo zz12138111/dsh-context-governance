@@ -290,6 +290,10 @@ export const AUDIT_EVENTS = Object.freeze([
   /** C36 ④：A2 持久会话层淘汰（TTL/上限）与装载失败（损坏/未知版本）。 */
   'a2-evicted',
   'a2-load-failed',
+  /** C39：用户级基座不可得（无 profileContext.home 且无 USERPROFILE/HOME）——显式不写盘。 */
+  'user-store-unavailable',
+  /** C39：会话记忆从旧基座复制到新基座（只提示一次，不移动不删除）。 */
+  'session-memory-legacy-copied',
   /** C11②：plugin 层自持久化（保存落盘 / 装载失败），供真机核"哪次保存落了盘"。 */
   'plugin-policy-persisted',
   'plugin-policy-load-failed',

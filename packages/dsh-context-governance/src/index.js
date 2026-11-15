@@ -38,6 +38,11 @@ import { mountSessionPolicyRoute, mountPluginPolicyRoute } from './session-polic
 import { rebuildPolicyStates } from './policy-rebuild.js';
 import { createPluginPolicyStore, pluginPolicyFile } from './plugin-policy.js';
 import { createDedupedMemoryAudit } from './memory-audit.js';
+import { legacySessionBase, resolveUserHome, userDataDir } from './user-paths.js';
+
+// C39：用户级 home（profileContext 优先）。startRuntime 赋值；命令/header/工具面统一读 currentUserHome()。
+let userHomeRef = null;
+const currentUserHome = () => (typeof userHomeRef === 'string' && userHomeRef !== '' ? userHomeRef : (resolveUserHome(null, process.env).home ?? ''));
 
 export const name = 'dsh-context-governance';
 
@@ -862,10 +867,19 @@ export async function apply(ctx, rawConfig = {}) {
     config.memoryRoot = memory.memoryRoot;
     const attachEntry = registry?.attach ?? null;
     if (config.project === '') config.project = attachEntry?.project ?? path.basename(root);
+    userHomeRef = resolveUserHome(identity, process.env).home;
+    const userHome = userHomeRef ?? '';
     // 策略链只在 attach 时算：profile 标签 → 插件配置 → 项目 .cg-policy.json（命令侧只读它）。
     // 1.1.0 D2：设置页的 volatile 字段 `policy.at` 合入 plugin 层（实时读 `.get()`）。
     // C36 ④：A2 会话持久层落在用户级 ~/.dsh/context-governance/session-policy.json。
-const a2File = path.join(process.env.USERPROFILE ?? process.env.HOME ?? '', '.dsh', 'context-governance', 'session-policy.json');
+// C39：用户级基座统一由 profileContext 推导（env 只作 fallback）；老位置由 session-store 兼容读取。
+const userData = userDataDir(userHome);
+const a2File = userData === null ? '' : path.join(userData, 'session-policy.json');
+// C39 P3：基座不可得 → 显式不建不写（绝不拼相对路径写进进程 cwd），并留审计与 status 可见。
+if (userData === null) {
+  try { rootAudit?.append?.('user-store-unavailable', { reason: 'profileContext-or-env-missing' }); } catch { /* 审计失败不阻断装载 */ }
+  ctx.logger?.warn?.('[context-governance] user-level store unavailable (no profileContext.home / USERPROFILE / HOME); user-level writes disabled');
+}
 // C36：A2/policy-resolved 事件写根审计（用户级，只读根审计也能落）。
 let a2AuditSink = (event, details) => {
   try {
@@ -899,7 +913,7 @@ const isSessionActive = (sessionId) => {
 // C38 默认口径：会话指针库 on；=0 为显式 opt-out（legacy）。
 const sessionPointersMode = process.env.DSH_CG_SESSION_MEMORY !== '0';
 const memoryModeSeen = new Set();
-const a2Store = createA2Store({
+const a2Store = a2File === '' ? null : createA2Store({
   file: a2File,
   logger: ctx.logger,
   audit: (event, details) => a2AuditSink(event, details),
@@ -924,7 +938,7 @@ const auditMemoryEvent = createDedupedMemoryAudit({
 const pluginPolicyStoreSingleton = { value: null };
 const getPluginPolicyStore = () => {
   if (pluginPolicyStoreSingleton.value !== null) return pluginPolicyStoreSingleton.value;
-  const file = pluginPolicyFile();
+  const file = pluginPolicyFile(currentUserHome());
   if (file === null) return null;
   pluginPolicyStoreSingleton.value = createPluginPolicyStore({
     file,
@@ -1062,10 +1076,10 @@ let policyState = buildPolicyState(mergePluginPolicy(config), {
     }
     const sessionId = exec?.agent?.session?.id ?? null;
     if (typeof sessionId !== 'string' || sessionId === '') return null;
-    const home = process.env.USERPROFILE ?? process.env.HOME ?? '';
+    const home = currentUserHome();
     if (home === '') return null;
     try {
-      return openSessionMemory({ home, sessionId, audit: auditMemoryEvent });
+      return openSessionMemory({ home, sessionId, audit: auditMemoryEvent, legacyBase: legacySessionBase(process.env) });
     } catch {
       return null;
     }
@@ -1594,9 +1608,9 @@ let policyState = buildPolicyState(mergePluginPolicy(config), {
         const sessionId = typeof session?.id === 'string' ? session.id : null;
         if (sessionId === null) return null;
         try {
-          const home = process.env.USERPROFILE ?? process.env.HOME ?? '';
+          const home = currentUserHome();
           if (home === '') return null;
-          const pointerStore = openSessionMemory({ home, sessionId, audit: auditMemoryEvent });
+          const pointerStore = openSessionMemory({ home, sessionId, audit: auditMemoryEvent, legacyBase: legacySessionBase(process.env) });
           return pointerStore.count() > 0 ? pointerStore.query() : null;
         } catch {
           return null;
@@ -1731,6 +1745,9 @@ let policyState = buildPolicyState(mergePluginPolicy(config), {
           return null;
         }
       },
+      // C39：命令面与事件面必须用同一个用户级基座（否则 show 读不到、register 又写旧位置）。
+      home: () => currentUserHome(),
+      getUserStoreDir: () => userDataDir(currentUserHome()),
     };
     const commandRef = { current: registerStatusCommand(ctx, commandOptions) };
     // C11③：UI（chip / 气泡）会话级保存的唯一写入口——直接跑 `/cg set compact.at=<at>` 同一条处理链，

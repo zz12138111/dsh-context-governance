@@ -119,9 +119,22 @@ export function serializePointers(entries) {
 
 /**
  * @param {{home:string, sessionId:string, now?:()=>Date, audit?:(event:string,details:object)=>void,
- *   subagent?:boolean}} options
+ *   subagent?:boolean, sharedRootId?:string|null, legacyBase?:string|null}} options
+ *
+ * C39 ④：`home` 现在是**宿主用户级基座**（`profileContext.home`，如 `~/.dsh`），
+ * 新写入统一落在 `<home>/context-governance/{sessions,shared}`。rc.9 及以前写在
+ * `<用户主目录>/context-governance/...`；传 `legacyBase` 时若新目录还没有索引、
+ * 旧目录有 → **复制**旧库到新基座（不移动、不删除，只提示一次），之后的写入都在新基座。
  */
-export function openSessionMemory({ home, sessionId, now = () => new Date(), audit = null, subagent = false, sharedRootId = null } = {}) {
+export function openSessionMemory({
+  home,
+  sessionId,
+  now = () => new Date(),
+  audit = null,
+  subagent = false,
+  sharedRootId = null,
+  legacyBase = null,
+} = {}) {
   if (typeof home !== 'string' || home === '') throw new Error('session memory needs a home dir');
   const isShared = typeof sharedRootId === 'string' && sharedRootId !== '';
   if (!isShared && (typeof sessionId !== 'string' || sessionId === '')) throw new Error('session memory needs a session id');
@@ -140,6 +153,25 @@ export function openSessionMemory({ home, sessionId, now = () => new Date(), aud
       /* 审计失败不影响记忆 */
     }
   };
+
+  // C39 ④：旧基座（rc.9 及以前 `<用户主目录>/context-governance/...`）→ 复制到新基座，只做一次。
+  // 不移动、不删除用户已有数据；新基座已有索引时不动。
+  if (typeof legacyBase === 'string' && legacyBase !== '') {
+    try {
+      const legacyDir = isShared
+        ? path.join(path.resolve(legacyBase), 'shared', String(sharedRootId))
+        : path.join(path.resolve(legacyBase), 'sessions', sessionId);
+      const hasNew = fs.existsSync(path.join(dir, 'MEMORY.md'));
+      const hasLegacy = fs.existsSync(path.join(legacyDir, 'MEMORY.md'));
+      if (hasNew !== true && hasLegacy === true) {
+        fs.mkdirSync(dir, { recursive: true });
+        fs.cpSync(legacyDir, dir, { recursive: true, force: false, errorOnExist: false });
+        emit('session-memory-legacy-copied', { sessionId: isShared ? null : sessionId, from: legacyDir });
+      }
+    } catch {
+      /* 兼容失败不影响新基座正常读写 */
+    }
+  }
 
   const pointers = load();
   const dates = loadWatermark();

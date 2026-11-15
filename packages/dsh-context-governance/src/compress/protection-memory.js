@@ -39,7 +39,7 @@ function sanitizeTitle(value, fallback) {
   if (detectSensitive(title) !== null) return fallbackSensitive(title, fallback);
   const cut = cutTitle(title);
   // 1.0.3-5c：切分后仍被判"截断"（未闭合反引号 / 残尾分隔符 / 省略号）就退回指针式标题，
-  // 绝不把半句写进库——真机 #5 的 `回滚点：G:\DS-HARNESS`（见记忆` 就是这么来的。
+  // 绝不把半句写进库——历史缺陷里出现过"回滚点：<仓库根>"被截半后当成标题的情况（见记忆）。
   if (detectTitleTruncation(cut) !== null) return String(fallback ?? '').trim();
   return cut;
 }

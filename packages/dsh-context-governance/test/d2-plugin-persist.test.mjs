@@ -212,10 +212,11 @@ test('C11② 端到端：设置页保存 0.6 → 重启 → plugin 层值保留�
   }
 });
 
-test('C11② 路径：默认落在用户级 ~/.dsh/context-governance/plugin-policy.json', () => {
-  const file = pluginPolicyFile('C:/Users/x');
-  assert.equal(file, path.join('C:/Users/x', '.dsh', 'context-governance', 'plugin-policy.json'));
+test('C11②/C39 路径：落在 <DSH home>/context-governance/plugin-policy.json（基座可注入）', () => {
+  const file = pluginPolicyFile(path.join('C:', 'tmp', 'dsh-home'));
+  assert.equal(file, path.join('C:', 'tmp', 'dsh-home', 'context-governance', 'plugin-policy.json'));
   assert.equal(pluginPolicyFile(''), null);
+  assert.equal(pluginPolicyFile(null), null);
 });
 
 test('C11② client：设置页保存走 plugin 写路由（不只写宿主 volatile 表单）', async () => {
