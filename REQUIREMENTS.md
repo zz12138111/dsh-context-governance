@@ -393,7 +393,7 @@
 
 ### 目标（可验收）
 
-> **定位（用户 2026-10-26 拍板 B：全局纳管；1.0 发布已延期）**：插件是**全局上下文治理层**——**纳管所有可判定根的工作区会话**（记忆、校验、压缩、审计完整覆盖），**不是单项目工具**；无 `.git` 祖先的 cwd **不属于工作区**，按 3A 豁免完全不碰。**该目标是 1.0 目标、当前处于开发中、尚未达成**（**当前进度：P1 骨架；全纳管为三段目标**，见「多根通用性」第 14 条）；D8「多项目纳管」是其核心部分，不再后置 1.1。**1.0 发布与否由用户另行拍板**（用户原话：「基本功能没做完怎么叫 1.0 发布」）。
+> **定位（用户 2026-10-26 拍板 B：全局纳管；1.0 发布已延期）**：插件是**全局上下文治理层**——**纳管所有会话**（有 session id 即纳入：记忆、保护/回注、压缩策略、审计完整覆盖），**不是单项目工具**；`.git` **不再是治理闸门**（3A 豁免经用户 2026-11-15 决定 A 撤回）。**该目标是 1.0 目标、当前处于开发中、尚未达成**（**当前进度：P1 骨架；全纳管为三段目标**，见「多根通用性」第 14 条）；D8「多项目纳管」是其核心部分，不再后置 1.1。**1.0 发布与否由用户另行拍板**（用户原话：「基本功能没做完怎么叫 1.0 发布」）。
 
 1. **提前压默认开**：`compact.at` 语义为**真实占窗口比例**，默认 `0.60`；到点后于安全时机调 `compactNow`。
 2. **四层配置 + 可解释**：内置 → 插件配置 → 项目 `.cg-policy.json` → 会话 `/cg set`；`/cg status` 打印合成链与 `native`。
@@ -443,21 +443,23 @@
 | C5 | profile 打标入口 | **已定（需求侧判定 D7）**：入口形态**由实现定**（命令 / 会话元数据 / 配置键均可），需求只约束效果——按会话隔离、`/cg status` 显示本会话 profile 与来源、设置立即生效（草案 `R-PROFILE-2`，草案未生效、用户可推翻） | **已定（需求侧）** |
 | D4 | 配置级关闭 | `compact.early.armed=false`（加载后全局）；与会话级（A5）、策略级（`compact.early=false`）构成三层（见补定义 E5） | 已录 |
 | E1 | `compact.early.armed` 参数 | 默认 `true`、来源 `default`；项目层出现一律不生效（忽略 + `policy-invalid`，不清空整层）（`docs/1.0-状态定义-v1.md:39,65`） | 已录（参数表已加行） |
-| E2 | 「本项目」判定 | **已定（2026-10-26 用户拍板 B：全局纳管）**：**每个会话按自身项目根判定**（不再有「单一本项目」/「外部会话」）；无 `.git` 祖先 = `no-project-root`（完全不碰，见 3A 豁免）。根来源沿用 D9=A | **已定（每会话根）** |
+| E2 | 「本项目」判定 | **已定（2026-10-26 用户拍板 B：全局纳管；2026-11-15 撤回 3A）**：**每个会话按自身 cwd/分组判定项目默认**（不再有「单一本项目」/「外部会话」）；`.git` **不决定是否受治**；cwd 不可用 → `root-unresolved`，**仍受治并审计**。根来源沿用 D9=A | **已定（每会话根）** |
 | E4 | 默认值调整规则 | **已定（用户 2026-10-26 拍 A）**：任何**内置默认值**变更须记 **`DECISIONS` 编号 + Release notes 一句话**；适用面见下「默认值变更规则」 | **已定** |
 
 **补录条款（主单自表述；语义与派生草案一致，不引草案）**
 
-1. **R-SCOPE（全局纳管；用户 2026-10-26 拍板 B）**
-   - **插件纳管所有可判定根的工作区会话**：每个会话按**自身项目根**纳入记忆、保护/回注、压缩策略、审计与成本账本；**无 `.git` 祖先的 cwd 不属于工作区**（按 3A 豁免完全不碰）；**不存在「外部会话」概念**（`foreign-session` 枚举删除）。
-   - **无根会话**（cwd 无 `.git` 祖先，`no-project-root`）**完全不碰**：不观测、不记账、不保护、不写记忆（与 3A 豁免一致）；**总闸/项目层禁用**（`out-of-scope`）照旧不干预。
+1. **R-SCOPE（平台级会话覆盖；用户 2026-10-26 拍板 B，2026-11-15 撤回 3A 豁免）**
+   - **插件纳管所有可观测会话**：存在 session id 即纳入记忆、保护/回注、压缩策略、审计与成本账本；**cwd 是否为 `.git` 仓库不影响受治**；**不存在「外部会话」概念**（`foreign-session` 枚举删除）。
+   - **未纳管仅限以下情形（均须可观测）**：①无 session id（审计 `no-session-id`）；②cwd 不可读/不可写/离线（压缩与审计仍按 session 管，记忆/分组标 `root-unresolved`；审计事件 `root-unresolved` 必带 `sessionId/cwd/reason`，**每会话每 cycle 至少 1 条**（同 cycle 去重），**不参与 `compaction-loss` 分型**）；③显式关闭（`out-of-scope`/`observe-only`，照旧不干预并审计）；④宿主能力缺失（降级 observe-only）。
+   - **层级与来源审计**：取值顺序 **A1（运行时）> A2（会话持久）> cwd（项目）> plugin（全局）**；`/cg status` 与审计事件 `policy-resolved` 必须带 `source`（`session:A1`/`session:A2`/`project`/`plugin`）与最终 `at`；多层命中时以该字段可核。
+   - **A2 落盘**：键=完整 session id，值含 `at`/`source`/`updatedAt`/`version`；文件在 `~/.dsh/context-governance/` 下（由开发定，不进项目根）；重启读回、不清空。
    - **不得存在「被压缩但无保护、无回注、无成本」的纳管会话**。
    - 凡观测到真实压缩（含宿主原生压缩），成本账本必须有对应记录；取不到数值写 `null` 并标 `unknown`，**不得整行缺失**；该类记录**只含压缩事实与用量**。
 2. **R-AUDIT（审计枚举）**：`early-forced.compaction` 只能取**本次触发**的事实结果，枚举 `committed` / `skipped` / `failed` / `unknown`；**无 fresh report 时必须写 `unknown`**，不得沿用上一轮报告、不得用默认值补位；`unknown` 不得被 `/cg status` 或账本渲染为成功。
 3. **R-MEMROOT（多根模型；用户 2026-10-26 拍板 B）**
-   - **每会话按自身项目根**：cwd 上溯含 `.git` 的最近祖先；**无根 → `no-project-root`，完全不碰**（见 R-SCOPE）。
+   - **每会话按自身 cwd 归一为记忆/审计归属**：root = `realpath(cwd)` 归一（可结合 `workspaceRegistry` 分组/显式登记），**不要求 `.git`**；cwd 不可用时按 **session 级**归属并标 `root-unresolved`，**仍受治并审计**。
    - **记忆根按项目根隔离**：各工作区在**自己的根下**写 `memory/governance/`（授权边界见下），**不得跨根读写**。
-   - **根来源（configRoot 强制合并）**：`projectRoot` **非空**时，其下会话的根 = `projectRoot`（`source=config`），**嵌套 `.git` 不另立根**——**已知限制：显式配置根内多根隔离不完整**（P1 / P4 文档须披露）；`configRoot` 外会话按自身 cwd 独立成根；`projectRoot` **为空**时按最近 `.git`（文件或目录）多根推断；首见推断并持久化（D9=A），**重启沿用、不重推**；**不再存在「单项目模式」**。
+   - **根来源（configRoot 强制合并）**：`projectRoot` **非空**时，其下会话的根 = `projectRoot`（`source=config`），**嵌套 `.git` 不另立根**——**已知限制：显式配置根内多根隔离不完整**（P1 / P4 文档须披露）；`configRoot` 外会话按自身 cwd 独立成根；`projectRoot` **为空**时按会话 cwd 的 **realpath 归一**作分组根（**不要求 `.git`**；同目录会话归同根），首见持久化（D9=A），**重启沿用、不重推**；**不再存在「单项目模式」**。
    - 根变化（配置变更 / 持久化状态丢失 / 换机）必须在 `/cg status` 与审计可见（`project-root-changed` / `inferred-fresh`）；**重启后根不得静默改变**。
    - 已写入的记忆**不迁移、不删除**，留在原根路径；**卸载保留各根 memory、回滚不回写旧根**（见「多根通用性」第 11 条）。
 
@@ -470,21 +472,21 @@
 **多根通用性（用户 2026-10-26 拍板；收敛 23 条通用性缺口）**
 
 1. **根发现（A）**：纳管根集合 = **已出现会话的根并集**，**不主动扫描磁盘**；`/cg roots` 可查看当前根清单。
-2. **子会话（A）**：subagent / 子会话**纳管压缩与审计，不写记忆**（不建记忆写路径、不注入 header）。**根归属：父根已知 → 继承父根（不新增根）；父根未知 → 按自身 cwd 推断；仍无法判定 → 3A 豁免**。
+2. **子会话（A）**：subagent / 子会话**纳管压缩与审计，不写记忆**（不建记忆写路径、不注入 header）。**根归属：父根已知 → 继承父根（不新增根）；父根未知 → 按自身 cwd 推断；仍无法判定 → 按 session 级归属（`root-unresolved`），仍纳管压缩与审计、不写记忆**。
 3. **跨根查询（A）**：`mem_query` **默认只查本会话根**；**跨根查询 1.0 不做**（后续能力，**明确不做**，不留空）。
 4. **根限额（A）**：**不设硬上限**；根数超阈值（默认 16）**只告警、不拒绝**。
 5. **窗口口径**：`#lastSession` 取**本会话所属根内**最近会话，**跨根不混用**；**无窗口事件的会话（headless / CLI）→ `native=unknown`，不提前压**。
 6. **项目层配置**：**每个纳管根各自读取** `<root>/.cg-policy.json`，互不影响。
 7. **聚合维度**：记忆/账本聚合使用**根标识（路径 hash）**；`project` 字段**仅作展示名**、不用于区分（避免同名目录撞名）。
 8. **header**：按**当前会话根**取记忆；子会话按第 2 条（不写记忆、不注入）。
-9. **根判定**：`.git` **文件或目录**均可作根；符号链接按 **realpath** 判根；Windows 路径**大小写归一**后比较；UNC 可判根则纳管，否则 `no-project-root`；**空 cwd 的非子会话 → `no-project-root`（fail-closed，完全不碰）**。
+9. **根判定（2026-11-15 改）**：root 仅用于记忆/审计归属与项目默认值分组——cwd **realpath** 归一并大小写归一；**不要求 `.git`**；符号链接按 realpath；UNC 可用则纳管；**空 cwd 的非子会话 → `root-unresolved`（仍受治、审计，不静默）**。
 10. **状态与审计**：`/cg status` 增「全部纳管根」视图（根列表 + 各根记忆条数 / 审计末行）；审计按根存储，**跨根聚合只读**；根状态按 **profile** 隔离（`root-state-<profile>.json`）。
 11. **卸载 / 回滚**：卸载**保留各根 memory**；回滚**不回写旧根**（旧根数据只读保留）。
 12. **多 profile**：每个 profile **各自安装、各自根状态**，不跨 profile 共享根状态。
 13. **验收（负向，多根后必须验）**：① A 根会话**不影响** B 根（记忆/审计/策略）；② 删除根状态文件 → 重新推断且可见（`inferred-fresh`）；③ 同根两会话并发写记忆 → 锁提示 / 串行，**不丢写**。
-14. **分层交付（用户 2026-10-26 拍板 A）**：**全纳管是 1.0 目标，分三层交付**——**P1 = 可判定根登记 + 主根纳管骨架**（其他根**已登记、未纳管**；**P1 不宣称全纳管**）；**P2 = 多根记忆与审计**（每根各自 `memory/governance/`）；**P3 = 全会话保护/回注**。**完成 P3 后才可对外宣称「全纳管」**。
+14. **分层交付（用户 2026-10-26 拍板 A；2026-11-15 改口径）**：**全纳管 = 所有会话受治**；根登记只影响记忆/审计分组与项目默认值。**P1 = 根登记 + 主根骨架**（不宣称全纳管）；**P2 = 多根记忆与审计**；**P3 = 全会话保护/回注**；**完成 P3 且 C36 过才可对外宣称「全纳管」**。
 15. **P1 `unmanaged` 诊断行（可选实现，四条限定）**：允许每根**最多一次**（或根状态变化时一次）`root-unmanaged` 诊断行；字段仅 `root` / `rootId` / `reason` / `count`；**不写 `sessionId`（全 id / 短 id 都不写）、不写正文**；root audit **按根汇总一条**（同根多会话只累计 `count`）；放**用户级 root audit**，**不写进任何根内 `audit.jsonl`**；该行只表示「跳过」，不代表已纳管。
-16. **功能闭环判据**：**P1 + P2 + P3 全部完成，且多根负向验收（第 13 条）全过 = 功能闭环**。~~当前不满足（只到 P1 骨架）~~ → **2026-10-26 已满足**：P1/P2/P3 已签 + gap16 真机证据经审核裁定 ①②③ 有效（附加严格项不作否决）；证据包 `analysis/req-20261025-12/P4-drill-20261026-200123/gap16/`——`RESULT.md` sha256 `4A50DDFCB67861C7480ADFCD8F0A85741E2E17AC77983A6A0843FF28CB10D345`、`EVIDENCE-SHA256.txt` sha256 `98439AF955E899018715BBFD90DE1C4489955329DDE85BB7FDB7FC33702AB9B1`（26,425 B / 194 文件全匹配）；启动预算 **9/10**（8 有效 + 1 中止 0 证据）。
+16. **功能闭环判据**：**P1 + P2 + P3 全部完成，且多根负向验收（第 13 条）全过 = 功能闭环**。~~当前不满足（只到 P1 骨架）~~ → **2026-10-26 已满足**（P1/P2/P3 功能闭环；**会话覆盖面另按 C36 验收**）：P1/P2/P3 已签 + gap16 真机证据经审核裁定 ①②③ 有效（附加严格项不作否决）；证据包 `analysis/req-20261025-12/P4-drill-20261026-200123/gap16/`——`RESULT.md` sha256 `4A50DDFCB67861C7480ADFCD8F0A85741E2E17AC77983A6A0843FF28CB10D345`、`EVIDENCE-SHA256.txt` sha256 `98439AF955E899018715BBFD90DE1C4489955329DDE85BB7FDB7FC33702AB9B1`（26,425 B / 194 文件全匹配）；启动预算 **9/10**（8 有效 + 1 中止 0 证据）。
 17. **`mem_write` 根归属**：**默认写入本会话所属根**；**跨根写入一律拒绝**（不提供跨根写参数）——与第 3 条 `mem_query` 默认只查本会话根对称。
 18. **多进程同根**：**不做跨进程合并**；同根第二个进程以**只读 / 锁提示**方式运行，**不双写**。
 19. **便携 / 移动盘**：移动盘或换机**视为新根**；旧状态留原路径、**不迁移**。
@@ -503,14 +505,14 @@
 
 **`logFile` 严格两处（用户 2026-10-26 拍板）**：`diagnostics.logFile` 只允许 ① `<home>/context-governance/`（含默认 `<home>/context-governance/logs/governance.log`）或 ② `<root>/memory/governance/`；**`<root>/logs/` 不允许**。**白名单外 → `CONFIG` 拒绝 + 插件不加载该 profile（显式失败，不静默禁用）**；**迁移到 `<home>/context-governance/logs/governance.log` 才可用**；**多根下只有用户级路径安全**（根内路径只能 per-root sink，每根一份）。**破坏性变更**：现有 `D:\DS-PROJECT\DSH插件开发\logs\governance.log` 会被拒，须在 P1 / P4 文档披露。
 
-**豁免（用户 2026-10-26 拍 3A，拍板 B 后扩展）**：`no-project-root`（未知 cwd，无 `.git` 祖先）会话**完全不碰**——不建立 store / guard / 审计，不观测压缩、不记账、不保护、不写记忆；仅保留**根推断 watcher**。若未来需要「孤儿账本」，**单独立项**。
+**3A 豁免撤回（历史记录，不抹）**：用户 2026-10-26 拍板 B 时扩展的 3A 豁免（`no-project-root` 完全不碰）**经用户 2026-11-15 决定 A 正式撤回**；`root-unresolved` 会话**仍受治**（压缩、审计、保护/回注），仅记忆/项目分组标注并审计。仅"无 session id / cwd 不可用（降级）/ 显式关闭 / 宿主能力缺失"按 R-SCOPE 上列处置。
 
 **R-DOC（用户可见入口；用户 2026-10-26 拍 4A）**：新增**用户可见命令/入口**（如 `/cg profile`）必须在 **help 与 README** 中列出，实现负责同步；**新入口不得只存在于代码里**。
 
 **发布根来源（用户 2026-10-26 拍 D9=A）**
 
 1. **发布物 0 绝对路径**：发布物（包 / 配置 / 文档 / 示例）**不得包含本机绝对路径**；`projectRoot` / `memoryRoot` / `logFile` 在包内必须为**空或相对值**。
-2. **`/cg status` 显示本会话根与来源 + 全部纳管根视图**：多根模型下显示**本会话**的项目根与来源（`config` / `persisted` / `inferred`）；**无根时显示 `project-root: unknown (no-project-root)`**；同时提供**全部纳管根视图**（根列表 + 各根记忆条数 / 审计末行，见「多根通用性」第 10 条）。
+2. **`/cg status` 显示本会话根与来源 + 全部纳管根视图**：多根模型下显示**本会话**的项目根与来源（`config` / `persisted` / `inferred`）；**无根时显示 `project-root: unresolved (root-unresolved)`**；同时提供**全部纳管根视图**（根列表 + 各根记忆条数 / 审计末行，见「多根通用性」第 10 条）。
 3. **D9 决策记录**：发布包默认 `projectRoot` 为**空**；首次需要时按会话 cwd 上溯 `.git` 推断并持久化，**重启沿用、不重推**；该结论须写入 **Release notes 与安装文档**。
 4. **P2 关闭**：D9=A 下不存在「未配置启动引导」需求（未配置即默认形态），原 P2 卡**随本决定关闭**。
 
@@ -1189,6 +1191,7 @@ C 的初步证据：启动后本项目根 `audit.jsonl` 只有 `capability@ready
 | **C33** | **插件补写 `system/message` 的 payload 合法性**（2026-11-15 新增；根因 D-MGMT-021 防回归） | A | 单测（四态 payload）+ 代码审查 | 任何由本插件补写 `system/message` 的路径，payload **必须**带宿主合法的 `turn`/`step`（`protection.js:417-421` 现只传 `{message}`，调用点 `runtime.js:2290-2296`）；**推不出合法值时必须跳过并留审计（`protection-write-skipped(reason=…)`），禁止伪造/猜 turn**；**回归必须覆盖四态**：① `{message}`（缺 turn/step）→ 拒 ② `{turn,step,message}` → 通过 ③ `turn:null` → 拒（marker 允许 `number\|null` 不适用于该事件）④ 缺 `step` → 拒；且坏事件**不得被 try/catch 吞成静默重试**（必须可诊断：审计/日志含原因） |
 | **C34** | ~~`system-prompt` 压缩事务内不兜底重建：pending 延迟判定 + 分型 loss~~（**2026-11-15 已作废**；用户批方案 A：rules 重建删除，system 规则不再产生 skip/pending） | — | — | 作废依据：用户批 A（删 rules 重建、只留 `latestUser`）；原 v3b 判据历史留档于 `analysis/dsh-021-turn-cursor/保护面重建-真伪判定-20261115.md` §8、口径对比稿 |
 | **C35** | **压缩后指令/目录一致性（宿主自愈验收，取代 C34）**（2026-11-15 用户批） | A | 新用例：压缩时零 rules 副本 + 下个 pre-step 证据；**真实压缩判定待重启后复验** | ①压缩后**不得**写 rules 副本（无 `source.form=surface-rebuild` 的 rules；仅 `latestUser` 一条可重建），不写 `baseline:true/baselineIdentity`；②`rule-injection` 审计为 `skip(reason=host-self-heal)`，压缩时**不得**计 fail/写 `compaction-loss(rule-injection)`；③**事件级判定 + digest 观察（2026-11-15 真机后回归，三处同字）**：窗口（`compaction/end` → 首个 `turn/start` → 该 `turn/end`）内出现该 kind 的**非治理新节点**（`type∈{user/message,system/message}`、`seq>compaction`、`plugin!=='context-governance'`、`form!=='surface-rebuild'`）⇒ **pass**；窗口结束仍无 ⇒ **fail + `compaction-loss(rule-injection, unacceptable)`**；**digest 仅观察**：baseline `source.changes[]` 有 `path`+`digest` 时按 `sha1(raw content)` 复算记录，不一致记 `self-heal-suspect` warn、读盘失败/字段缺失记 `self-heal-unverified` warn，**均不判 fail**（真机 cycle `76f00aed`：节点 digest `d2789382…`/`18354bec…` 与读盘重算 `298adbeb…` 不一致，导致每轮假 15 条 `baseline-stale`，故 digest 不进判定）；skill-catalog 事件级即 pass；旧修订版由 `seq>`+非治理+窗口三重排除；digest 观察字段照记（`hashMatch`）；④本轮不重启，真实压缩判定标“待重启后复验”；⑤证据字段：`seq/kind/digest/form/plugin` |
+| **C36** | **平台级会话覆盖（2026-11-15 用户批 A，撤回 3A 豁免）** | A | 真机：两个指定无 `.git` 工作区各建会话 + 不同压缩比重启保留 | ①**无 `.git` 也受治**：在 `D:\DS-PROJECT\娱乐管理`、`D:\DS-PROJECT\绝地潜兵2工具开发` 各建会话（在该目录启动 DSH / 新建会话，cwd=该目录）→ 有治理审计、压缩策略、保护/回注；②**每会话压缩比**：两会话分别设 **0.55 / 0.65**（`/cg set` 或 UI）→ 重启 DSH 后各自保留，`/cg status` 显示各自 `at` 且 `source=A2`；③**层级取值**：`A1 > A2 > cwd > plugin`，`/cg status` 与 `policy-resolved` 审计带 `source`（`session:A1`/`session:A2`/`project`/`plugin`）与最终值，多层命中时以此可核；④**A2 落盘**：键=完整 session id、值含 `at/source/updatedAt/version`，位置在 `~/.dsh/context-governance/` 下（不写项目根），重启可读回；⑤**`root-unresolved` 不静默**：cwd 不可读/不可写/空 cwd → 审计 `root-unresolved{sessionId,cwd,reason}`，**每会话每 cycle 至少 1 条**（同 cycle 去重），**不参与 `compaction-loss` 分型**；⑥**负向**：显式关闭（`out-of-scope`/`observe-only`）不干预但留审计；⑦**证据边界**：现有两轮实测均在含 `.git` 根下采集，不覆盖无 `.git` 会话，本条必须真机补；⑧子会话仍不写记忆（沿用多根 #2）。 |
 | **C11** | D2 层与生效提示（2026-11-15 修订） | A | 文案断言 | 界面必须同时写明：①**写的是哪一层**——主入口 = **A2 持久会话层（本会话，重启保留）**；设置页 = **plugin 全局层（影响所有会话）**；②**生效时点**（A1 运行时=重启失效；A2/plugin=重启保留）。**缺①或缺②即判不过** |
 | **C12** | A 主入口（输入框下条目） | A | 注册形状单测 + 渲染文本 | `conversation.composer.dock` 注册项形状正确（唯一 id、order、返回 React 节点）；渲染文本为 `压 NN%`，**数值与快照 `at` 一致**；快照失败时渲染 `压 —` 且不抛错 |
 | **C13** | A 气泡三行信息 | A | 渲染文本断言 | 气泡含「当前生效 / 来源层 / 生效时点」三行，值取自快照 `{at, source, effectiveAt}`，与 `/cg status` 口径一致；含"打开设置页"兜底链接 |
