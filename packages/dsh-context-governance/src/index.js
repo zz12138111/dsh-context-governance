@@ -1033,7 +1033,7 @@ let policyState = buildPolicyState(mergeSettingsAt(config), {
     const home = process.env.USERPROFILE ?? process.env.HOME ?? '';
     if (home === '') return null;
     try {
-      return openSessionMemory({ home, sessionId });
+      return openSessionMemory({ home, sessionId, audit: auditMemoryEvent });
     } catch {
       return null;
     }
