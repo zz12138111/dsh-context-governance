@@ -393,6 +393,17 @@ try {
     `contentHeight=${extreme.totalHeight} footerClientHeight=${extreme.footerClientHeight} rows=${JSON.stringify(extreme.rowsDump)}（不许被 hidden 裁；可提高 clientHeight，body 滚动是合法结果）`);
   check('OPS-footer-extreme-body-scroll-allowed', String(body?.props?.style?.overflowY ?? '') === 'auto',
     `body.overflowY=${JSON.stringify(body?.props?.style?.overflowY)}（控件不可裁 > 内容区保底：body 滚动合法）`);
+  // 极端档的动态 bodyFloor：footer 184 → `min(96, 260−184−44)=32`（保底不写死 96，随 footer 让位）
+  const floorFn = typeof client?.computeBodyFloor === 'function' ? client.computeBodyFloor : null;
+  const extremeFloor = floorFn !== null
+    ? floorFn({ footerHeight: extreme.totalHeight, chrome: CHROME, maxHeight: 260, minContent: 96 })
+    : null;
+  const extremePanel = heightFn !== null
+    ? heightFn({ bodyScroll: layoutModel.bodyScroll, footerHeight: extreme.totalHeight, chrome: CHROME })
+    : null;
+  check('OPS-footer-extreme-bodyFloor-dynamic', extremeFloor === 32 && extremePanel === 260,
+    `bodyFloor=${extremeFloor}(期望32=min(96,260−184−44)) panelHeight=${extremePanel}(期望260)`
+    + `（body 保底随 footer 让位，不写死 96；此时 body.scrollHeight(${layoutModel.bodyScroll}) > clientHeight(${extremePanel === null ? '?' : extremePanel - extreme.totalHeight - CHROME}) 是合法结果）`);
   check('OPS-panel-height-le-260', wrapperHeightPx !== null && wrapperHeightPx <= 260,
     `wrapperHeight=${wrapperHeightPx}（极端档 panel 高度仍须 ≤260）`);
 
