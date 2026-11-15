@@ -138,7 +138,90 @@ window.__ModuleLoader__.load({
       }
       return { labelKey: key, note: null };
     };
-    /** C11①/C11③：写层文案按入口区分——主入口写本会话（A1 即时 + A2 落盘），设置页写全局（plugin）。 */
+    /**
+     * C40 / B3（rc.12）：chip 弹层几何——**默认向上**，仅上方空间不足（< 面板高 + 16）时翻下方；
+     * 不做左右翻转；水平中心对齐 chip（偏差 ≤8，必要时整体平移贴边）。
+     *
+     * 硬线（需求 C40 §4/§5）：
+     * - 上弹：底边 ≤ 输入框顶 − 4；下弹：顶边 ≥ 输入框底 + 4；与输入框交集必须为 0；
+     * - 任意边距视口 ≥ 8px；宽 ≤ min(360, 视口宽 − 16)；高 ≤ 260（内部滚动）。
+     *
+     * 入参 rect 均按 `{x, y, width, height}`（与 `getBoundingClientRect()` 同形，DOM 侧取回后直接传）。
+     * @returns {{x:number, y:number, left:number, top:number, width:number, height:number,
+     *   placement:'up'|'down'}}
+     */
+    const computePopoverRect = ({ chip = {}, panel = {}, viewport = {}, input = null } = {}) => {
+      const EDGE = 8;
+      const GAP = 16;        // 与 chip 的间距（下弹时贴 chip 下沿 + 16）
+      const INPUT_GAP = 4;   // 输入框硬线间距
+      const viewportWidth = Number(viewport.width ?? 0) || 1024;
+      const viewportHeight = Number(viewport.height ?? 0) || 768;
+      const width = Math.max(120, Math.min(Number(panel.width ?? 320), 360, viewportWidth - 2 * EDGE));
+      const wanted = Math.max(80, Math.min(Number(panel.height ?? 240), 260));
+      const chipX = Number(chip.x ?? 0);
+      const chipY = Number(chip.y ?? 0);
+      const chipW = Number(chip.width ?? 0);
+      const chipH = Number(chip.height ?? 0);
+      const chipCenter = chipX + chipW / 2;
+      const chipTop = chipY;
+      const chipBottom = chipY + chipH;
+      const inputTop = input === null || input === undefined ? null : Number(input.y ?? 0);
+      const inputBottom = inputTop === null ? null : inputTop + Number(input.height ?? 0);
+      let height = wanted;
+      // ① 先定方向：上方够 → 向上；否则向下（先定方向再出现，不跳位）。
+      let placement = chipTop >= height + GAP ? 'up' : 'down';
+      let top = placement === 'up' ? chipTop - height : chipBottom + GAP;
+      if (placement === 'down' && top + height > viewportHeight - EDGE) {
+        // 下方也放不下：允许压缩高度（内部滚动），但既不越界也不盖输入框。
+        height = Math.max(80, viewportHeight - EDGE - top);
+      }
+      // ② 输入框硬线避让（上弹压底边、下弹抬顶边）。
+      if (inputTop !== null && placement === 'up') top = Math.min(top, inputTop - INPUT_GAP - height);
+      if (inputBottom !== null && placement === 'down') top = Math.max(top, inputBottom + INPUT_GAP);
+      // ③ 视口垂直 clamp（必要时换向，仍满足步 ②）。
+      if (top < EDGE) {
+        placement = 'down';
+        const downTop = Math.max(chipBottom + GAP, inputBottom === null ? 0 : inputBottom + INPUT_GAP);
+        height = Math.min(height, Math.max(80, viewportHeight - EDGE - downTop));
+        top = downTop;
+      }
+      if (top + height > viewportHeight - EDGE) height = Math.max(80, viewportHeight - EDGE - top);
+      // ④ 水平：中心对齐 chip，再整体平移到边距内（不做左右翻转）。
+      let left = Math.round(chipCenter - width / 2);
+      left = Math.max(EDGE, Math.min(left, viewportWidth - width - EDGE));
+      return { x: left, y: Math.round(top), left, top: Math.round(top), width, height, placement };
+    };
+    /** C40 §2：主视图三行（数值 / 状态 / 生效），每行 ≤18 汉字、禁技术字段。 */
+    const compactBubbleLines = (snapshot = null, { lastAction = null } = {}) => {
+      const ready = snapshot !== null && snapshot !== undefined;
+      if (!ready) return ['—', '读取中…', ''];
+      const source = String(snapshot.source ?? 'unknown');
+      const percent = toPercentText(snapshot.at);
+      let state;
+      let effect;
+      if (lastAction === 'reset') {
+        state = '已清除本会话覆盖';
+        effect = '重启后仍生效';
+      } else if (lastAction === 'save' && source === 'session:A1') {
+        state = '本会话·已保存（重启保留）';
+        effect = '重启后从已保存值读回';
+      } else if (source === 'session:A2') {
+        state = '本会话·已保存（重启保留）';
+        effect = '重启后仍生效';
+      } else if (source === 'session:A1' || source === 'session') {
+        state = '本会话·临时（重启失效）';
+        effect = '重启后失效';
+      } else if (source === 'session') {
+        state = '本会话·临时（重启失效）';
+        effect = '重启后失效';
+      } else {
+        state = layerLabel(source);
+        effect = '重启后仍生效';
+      }
+      return [percent, state, effect].filter((line) => line !== '');
+    };
+
+
     const writeLayerTextFor = (entry = 'session', { source = null, lastAction = null } = {}) => {
       if (lastAction === 'reset') {
         const layer = String(source ?? '') === 'unknown' ? '全局/项目层' : layerLabel(source);
@@ -356,7 +439,8 @@ window.__ModuleLoader__.load({
      * @param {object} labels
      * @param {{entry?: 'session'|'global'}} options
      */
-    const renderBubbleText = (snapshot = {}, labels = LABELS.zh, { entry = 'session', lastAction = null } = {}) => {
+    /** C40 §3：技术细节只在二级/设置页（带 `source=`、层级代码、写入层；**不进主视图**）。 */
+    const renderBubbleDetail = (snapshot = {}, labels = LABELS.zh, { entry = 'session', lastAction = null } = {}) => {
       const rawSource = snapshot.source;
       const display = displaySourceFor(rawSource ?? 'unknown');
       const source = display.labelKey;
@@ -370,6 +454,10 @@ window.__ModuleLoader__.load({
         ...(entry === 'global' && sessionCustomized ? [labels.overrideNote ?? LABELS.zh.overrideNote] : []),
       ].join('\n');
     };
+    /** C40 §2：**主视图**（气泡）= 至多三行短句，禁技术字段；细节走 `renderBubbleDetail`。 */
+    const renderBubbleText = (snapshot = {}, labels = LABELS.zh, options = {}) => (
+      compactBubbleLines(snapshot, options).join('\n')
+    );
 
     /**
      * rc.9：快照 URL 必须带会话上下文——chip/气泡显示的是**本会话**生效值，
@@ -522,8 +610,17 @@ window.__ModuleLoader__.load({
       const [saved, setSaved] = react.useState(false);
       // B2（rc.12）：记录最近一次动作——'reset' → 写层说"已清除覆盖"；'save' → 回会话口径。
       const [lastAction, setLastAction] = react.useState(null);
+      // C40：技术细节默认收起（主视图只三行短句），一键展开。
+      const [showDetail, setShowDetail] = react.useState(false);
       const inputRef = react.useRef(null);
       const dialogRef = react.useRef(null);
+      // C40 §4：切会话自动关（弹层只对当前会话有意义，切走后必须收起，避免误写错会话）。
+      const lastSessionRef = react.useRef(sessionId);
+      react.useEffect(() => {
+        const previous = lastSessionRef.current;
+        lastSessionRef.current = sessionId;
+        if (previous !== sessionId && open === true) store.set({ open: false });
+      }, [sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
       react.useEffect(() => store.subscribe((next) => { setView(next.snapshot); setOpen(next.open); }), [store]);
       // U1/U7：打开即聚焦并全选；重开回到当前生效值（不保留草稿）。
       react.useEffect(() => {
@@ -556,9 +653,60 @@ window.__ModuleLoader__.load({
         fetchSnapshot(globalThis.fetch, { sessionId }).then((snapshot) => { if (alive && snapshot) store.set({ snapshot }); });
         return () => { alive = false; };
       }, [open, ctx, store]);
-      const close = () => { if (closeDecision('escape')) store.set({ open: false }); };
+      const close = () => {
+        if (!closeDecision('escape')) return;
+        store.set({ open: false });
+        // C40 §4：关闭后焦点回到 chip（键盘用户不丢位置）。
+        try { globalThis.document?.querySelector?.('[data-cg-chip]')?.focus?.(); } catch { /* ignore */ }
+      };
       if (!open) return null;
       const model = bubbleView(view ?? null, { lastAction });
+      /**
+       * C40：打开时按 chip / 输入框的真实 `getBoundingClientRect()` 定位——
+       * 向上默认，上方不足才翻下，四边贴边 clamp，绝不遮输入框；面板 ≤min(360,视口−16)×260。
+       * 先定方向再出现（`visibility` 在拿到 rect 前保持 hidden，避免跳位）。
+       */
+      const [layout, setLayout] = react.useState(null);
+      react.useEffect(() => {
+        if (!open) { setLayout(null); return; }
+        const doc = globalThis.document ?? null;
+        const toRect = (element) => {
+          try {
+            const rect = element?.getBoundingClientRect?.();
+            return rect === undefined || rect === null
+              ? null
+              : { x: rect.x ?? rect.left, y: rect.y ?? rect.top, width: rect.width, height: rect.height };
+          } catch { return null; }
+        };
+        const chipRect = toRect(doc?.querySelector?.('[data-cg-chip]')) ?? {
+          x: (globalThis.innerWidth ?? 1024) - 120,
+          y: (globalThis.innerHeight ?? 768) - 120,
+          width: 80,
+          height: 26,
+        };
+        const inputRect = toRect(doc?.querySelector?.('[data-cg-composer]'))
+          ?? toRect(doc?.querySelector?.('textarea'))
+          ?? null;
+        const viewport = {
+          width: globalThis.innerWidth ?? doc?.documentElement?.clientWidth ?? 1024,
+          height: globalThis.innerHeight ?? doc?.documentElement?.clientHeight ?? 768,
+        };
+        const lines = compactBubbleLines(view ?? null, { lastAction });
+        // 面板高：三行文字 + 输入行 + 按钮行；上限 260（超出内部滚动）。
+        const desired = Math.min(260, 96 + lines.length * 22 + 64);
+        setLayout(computePopoverRect({ chip: chipRect, panel: { width: 320, height: desired }, viewport, input: inputRect }));
+      }, [open, lastAction, view?.at, view?.source]);
+      const popoverStyle = layout === null
+        ? { ...S.dialog, visibility: 'hidden' }
+        : {
+          ...S.dialog,
+          position: 'fixed',
+          left: `${layout.left}px`,
+          top: `${layout.top}px`,
+          width: `${layout.width}px`,
+          maxHeight: `${layout.height}px`,
+          overflowY: 'auto',
+        };
       // C11③：主入口保存写本会话（A2）；无会话标识时明确不可保存，绝不退化写全局。
       const canSaveSession = model.canSave && sessionId !== null;
       const save = async () => {
@@ -596,14 +744,18 @@ window.__ModuleLoader__.load({
       };
       const retry = () => { fetchSnapshot(globalThis.fetch, { sessionId }).then((snapshot) => { if (snapshot) store.set({ snapshot }); }); };
       return h('div', {
-        role: 'dialog', 'aria-modal': 'true', 'aria-label': model.title, ref: dialogRef, style: S.dialog,
+        role: 'dialog', 'aria-modal': 'true', 'aria-label': model.title, ref: dialogRef, style: popoverStyle,
         tabIndex: -1,
         onKeyDown: (event) => { if (event?.key === 'Escape') { event.stopPropagation?.(); close(); } },
         onBlur: (event) => { const next = event?.relatedTarget; if (next !== null && next !== undefined && !event.currentTarget?.contains?.(next)) close(); },
       },
         h('div', { style: S.title }, model.title),
         h('div', { style: S.big, 'data-role': 'current-percent' }, model.percentText),
-        ...renderBubbleText(view ?? {}, labels, { entry: 'session', lastAction }).split('\n').slice(1).map((line, index) => h('div', { key: index, style: S.metaLine }, line)),
+        // C40：主视图只三行短句；技术细节进「详情」（默认收起，仍可一键展开）。
+        ...compactBubbleLines(view ?? {}, { lastAction }).map((line, index) => h('div', { key: `main${index}`, style: S.metaLine }, line)),
+        h('div', { key: 'detail', 'data-role': 'detail', style: showDetail ? undefined : { display: 'none' } },
+          ...renderBubbleDetail(view ?? {}, labels, { entry: 'session', lastAction }).split('\n').map((line, index) => h('div', { key: `detail${index}`, style: S.metaLine }, line))),
+        h('button', { key: 'detail-toggle', type: 'button', className: 'cg-detail-toggle', style: S.button, onClick: () => setShowDetail(showDetail !== true) }, showDetail === true ? labels.hideDetail : labels.detail),
         sessionId === null ? h('div', { style: S.error }, labels.noSession ?? LABELS.zh.noSession) : null,
         h('div', { style: S.row },
           h('input', {
@@ -762,6 +914,9 @@ window.__ModuleLoader__.load({
       layerLabel,
       writeLayerTextFor,
       displaySourceFor,
+      computePopoverRect,
+      compactBubbleLines,
+      renderBubbleDetail,
       stateAfterReset,
       stateAfterSave,
       saveSessionAt,

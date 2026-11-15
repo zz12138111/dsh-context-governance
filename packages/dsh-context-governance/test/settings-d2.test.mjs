@@ -198,23 +198,27 @@ test('C12 主入口：dock 条目 id/order + chip 文案与快照一致（缺快
 
 test('C13/C8/C11/C32 气泡四行：当前生效 / 来源层（固定标签+原始键）/ 生命周期（随 source 派生）/ 写入层（主入口=会话级）', async () => {
   const client = await loadClient();
+  // C40（rc.12）：主视图 ≤3 行短句、禁技术字段；四行技术信息下沉到 renderBubbleDetail。
   const text = client.renderBubbleText({ at: 0.55, source: 'plugin' });
   const lines = text.split('\n');
-  assert.equal(lines.length, 4, 'C13 三行信息 + C11 写入层 = 四行');
+  assert.equal(lines.length <= 3, true, `C40：主视图至多三行（实际 ${lines.length}）`);
   assert.match(lines[0], /55%/);
-  assert.equal(lines[1], '来源层: 全局（影响所有会话） (source=plugin)', 'C32：plugin 固定标签 + 原始键并列');
-  assert.equal(lines[2], `生效时点: ${PERSISTENT_LIFECYCLE_TEXT}`, '持久层：保存后生效、重启仍有效');
-  assert.equal(lines[3], '本次修改写入：本会话（session:A2，重启保留）', 'C11③：主入口写会话层');
+  assert.equal(/source=|session:A|本次修改写入/.test(text), false, 'C40：主视图禁技术字段');
+  const detail = client.renderBubbleDetail({ at: 0.55, source: 'plugin' }).split('\n');
+  assert.equal(detail.length, 4, 'C13 三行信息 + C11 写入层 = 四行（详情/设置页）');
+  assert.equal(detail[1], '来源层: 全局（影响所有会话） (source=plugin)', 'C32：plugin 固定标签 + 原始键并列');
+  assert.equal(detail[2], `生效时点: ${PERSISTENT_LIFECYCLE_TEXT}`, '持久层：保存后生效、重启仍有效');
+  assert.equal(detail[3], '本次修改写入：本会话（session:A2，重启保留）', 'C11③：主入口写会话层');
   // 设置页（全局入口）同一快照：写层文案必须变成全局，且带 C28 提示。
-  const globalText = client.renderBubbleText({ at: 0.55, source: 'session:A2' }, undefined, { entry: 'global' });
-  assert.match(globalText, /本次修改写入：全局（plugin 层，影响所有会话）/, 'C11①/C28：设置页写全局');
-  assert.match(globalText, /本会话已自定义，全局修改不影响本会话/, 'C28：已自定义会话时提示全局不影响本会话');
+  const globalDetail = client.renderBubbleDetail({ at: 0.55, source: 'session:A2' }, undefined, { entry: 'global' });
+  assert.match(globalDetail, /本次修改写入：全局（plugin 层，影响所有会话）/, 'C11①/C28：设置页写全局');
+  assert.match(globalDetail, /本会话已自定义，全局修改不影响本会话/, 'C28：已自定义会话时提示全局不影响本会话');
 
-  const sessionText = client.renderBubbleText({ at: 0.5, source: 'session' });
-  assert.match(sessionText, /本会话有效，重启后失效/, 'C8：session 必须用会话生命周期文案');
+  const sessionDetail = client.renderBubbleDetail({ at: 0.5, source: 'session' });
+  assert.match(sessionDetail, /本会话有效，重启后失效/, 'C8：session 必须用会话生命周期文案');
   assert.equal(client.effectiveTextFor('session'), '本会话有效，重启后失效');
   assert.equal(client.effectiveTextFor('plugin'), '保存后生效、重启仍有效');
-  assert.match(client.renderBubbleText({}, {}), /unknown/);
+  assert.match(client.renderBubbleDetail({}, {}), /unknown/);
 });
 
 test('C22 保存尝试：非法不发请求；合法 set/mutate；失败保留输入；不可用返回非成功', async () => {

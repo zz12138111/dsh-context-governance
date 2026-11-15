@@ -59,13 +59,17 @@ test('B1：A1 与非 A1 都不允许出现「重启失效」+「重启保留」�
     const both = text.includes('重启后失效') && text.includes('重启保留');
     assert.equal(both, false, `source=${source} 出现并列：\n${text}`);
   }
-  // A1 的原始键必须留在附注里，便于诊断（不能藏掉）。
-  const a1 = client.renderBubbleText({ at: 0.45, source: 'session:A1' });
-  assert.match(a1, /source=session:A1/, '原始层键必须在附注中可见');
-  assert.match(a1, /来源层: 本会话·已保存（重启保留） \(source=session:A2\)/, '展示层来源=A2');
-  // A2/plugin/project 的原有口径不回归。
-  assert.equal(client.renderBubbleText({ at: 0.55, source: 'plugin' }).split('\n').length, 4);
-  assert.match(client.renderBubbleText({ at: 0.5, source: 'session' }), /本会话有效，重启后失效/);
+  // A1 的原始键必须留在**详情**里（主视图按 C40 禁技术字段），便于诊断。
+  const a1Detail = client.renderBubbleDetail({ at: 0.45, source: 'session:A1' });
+  assert.match(a1Detail, /source=session:A1/, '详情里原始层键必须可见');
+  assert.match(a1Detail, /来源层: 本会话·已保存（重启保留） \(source=session:A2\)/, '详情展示层来源=A2');
+  // 主视图（C40）：三行以内、无技术字段。
+  const a1Main = client.renderBubbleText({ at: 0.45, source: 'session:A1' }, undefined, { lastAction: 'save' });
+  assert.equal(a1Main.split('\n').length <= 3, true);
+  assert.equal(/source=|session:A/.test(a1Main), false, '主视图禁技术字段');
+  // A2/plugin/project 的原有口径不回归（详情仍是四行以上）。
+  assert.equal(client.renderBubbleDetail({ at: 0.55, source: 'plugin' }).split('\n').length, 4);
+  assert.match(client.renderBubbleDetail({ at: 0.5, source: 'session' }), /本会话有效，重启后失效/);
 });
 
 test('B4：client 载入 + 渲染打开态气泡不抛（运行时未声明标识符门）', async () => {
@@ -80,6 +84,36 @@ test('B4：client 载入 + 渲染打开态气泡不抛（运行时未声明标�
   assert.ok(tree !== null && tree !== undefined, '气泡必须渲染出节点');
   const flat = JSON.stringify(tree);
   assert.match(flat, /当前生效|55%|45%/, '渲染内容应含生效值文本');
+});
+
+test('C40：定位函数三档视口——向上默认/翻下/贴边/不遮输入框/中心偏差≤8', async () => {
+  const client = await loadClient();
+  const layout = (chip, input, viewport, panel = { width: 320, height: 240 }) =>
+    client.computePopoverRect({ chip, panel, viewport, input });
+  const cases = [
+    { name: 'wide', viewport: { width: 1400, height: 900 }, chip: { x: 1100, y: 700, width: 90, height: 28 }, input: { x: 300, y: 860, width: 800, height: 40 } },
+    { name: 'narrow', viewport: { width: 800, height: 800 }, chip: { x: 600, y: 640, width: 80, height: 26 }, input: { x: 80, y: 740, width: 640, height: 38 } },
+    { name: 'short', viewport: { width: 900, height: 640 }, chip: { x: 680, y: 500, width: 80, height: 26 }, input: { x: 120, y: 590, width: 660, height: 36 } },
+  ];
+  for (const item of cases) {
+    const rect = layout(item.chip, item.input, item.viewport);
+    assert.equal(rect.width <= Math.min(360, item.viewport.width - 16), true, `${item.name} 宽超限`);
+    assert.equal(rect.height <= 260, true, `${item.name} 高超限`);
+    assert.equal(rect.left >= 8 && rect.top >= 8, true, `${item.name} 越界（左/上）`);
+    assert.equal(rect.left + rect.width <= item.viewport.width - 8, true, `${item.name} 越界（右）`);
+    assert.equal(rect.top + rect.height <= item.viewport.height - 8, true, `${item.name} 越界（下）`);
+    // 与输入框交集为 0（硬线）
+    const overlapY = rect.top < item.input.y + item.input.height && rect.top + rect.height > item.input.y;
+    const overlapX = rect.left < item.input.x + item.input.width && rect.left + rect.width > item.input.x;
+    assert.equal(overlapX && overlapY, false, `${item.name} 遮挡输入框`);
+    const chipCenter = item.chip.x + item.chip.width / 2;
+    const panelCenter = rect.left + rect.width / 2;
+    assert.equal(Math.abs(chipCenter - panelCenter) <= 8, true, `${item.name} 中心偏差超 8px`);
+  }
+  // 上方空间不足 → 翻下，且顶边 ≥ 输入框底 + 4
+  const flip = layout({ x: 400, y: 60, width: 80, height: 26 }, { x: 100, y: 620, width: 600, height: 36 }, { width: 900, height: 700 });
+  assert.equal(flip.placement, 'down', '上方不足必须翻下');
+  assert.equal(flip.top >= 620 + 36 + 4, true, '下弹顶边必须 ≥ 输入框底 + 4');
 });
 
 test('B2：reset 成功后状态必须回落到全局口径（值/来源/写层），输入框不留旧值', async () => {
