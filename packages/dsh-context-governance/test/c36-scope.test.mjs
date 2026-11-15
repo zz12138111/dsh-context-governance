@@ -138,6 +138,12 @@ test('C36 ⑤：无根会话 root-unresolved 每会话每 cycle 去重、跨 cyc
     assert.equal(first[0].details.sessionId, 'session-c36-u');
     assert.equal(first[0].details.reason, 'cwd-missing');
     assert.equal(first[0].details.cycle, 'turn:7');
+    // C36⑭：无根会话同样写 session-governed（首个事件一次，带 reason）。
+    const governedRows = rootAudit.rows.filter((row) => row.event === 'session-governed');
+    assert.equal(governedRows.length, 1, '无根会话也要有 session-governed 证据');
+    assert.equal(governedRows[0].details.sessionId, 'session-c36-u');
+    assert.equal(governedRows[0].details.reason, 'cwd-missing');
+    assert.equal(governedRows[0].details.rootId, null);
     // 下一轮 → 再 1 条（每 cycle 至少 1 条）。
     ctx.handlers[0].handler(session, { type: 'turn/start', seq: 4, data: { turn: 8 } });
     await flush();

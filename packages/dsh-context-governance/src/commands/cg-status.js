@@ -5,7 +5,13 @@
  * 命令注册与输出都走宿主公开接口；本文件不 import 任何 `@deepseek-ai/*` 包，便于单测。
  */
 
+import os from 'node:os';
+import path from 'node:path';
+
 import { resolveBackendFields } from '../compress/adapters.js';
+import { rootIdOf } from '../roots/identity.js';
+import { openSessionMemory, renderMemoryHeader } from '../memory/session-store.js';
+import { importFromRole, importLegacy, openSharedMemory, promotePointers } from '../memory/import.js';
 import { identityDiagnostic } from '../root-state.js';
 import {
   CONFIG_ONLY_KEYS,
@@ -412,6 +418,110 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
     return { value: number };
   };
   const sessionText = (sessionValues) => formatSession(sessionValues);
+  const memoryContext = (sessionId) => {
+    const policy = policyFor(sessionId);
+    const home = os.homedir();
+    const projectRoot = typeof policy?.projectRoot === 'string' ? policy.projectRoot : '';
+    const rootId = projectRoot === '' ? null : rootIdOf(projectRoot);
+    return { home, projectRoot, rootId, policy };
+  };
+  /** C38：`/cg memory ...`（register/promote/import/show）。 */
+  const handleMemoryCommand = (argText, sessionId = null) => {
+    if (sessionId === null) return { kind: 'error', text: NO_SESSION_TEXT };
+    const { home, projectRoot, rootId } = memoryContext(sessionId);
+    const audit = auditFor(sessionId);
+    const store = openSessionMemory({ home, sessionId, audit: (event, details) => audit?.append?.(event, details) });
+    const tokens = String(argText ?? '').trim().split(/\s+/).filter(Boolean);
+    const action = tokens[0] ?? 'show';
+    if (action === 'show') {
+      const header = renderMemoryHeader(store, { audit: (event, details) => audit?.append?.(event, details) });
+      const meta = store.meta();
+      const lines = [
+        'context-governance memory',
+        `session: ${sessionId}`,
+        `role: ${meta.role ?? '(unset)'}`,
+        `root: ${rootId ?? '(root-unresolved)'}`,
+        header.text,
+        `count: ${store.count()}`,
+      ];
+      if (meta.originRole !== undefined || meta.originSessionId !== undefined) {
+        lines.push(`last-import: role=${meta.originRole ?? '-'} from=${meta.originSessionId ?? '-'}`);
+      }
+      return { kind: 'success', text: lines.join('\n') };
+    }
+    if (action === 'register') {
+      const [, type, target, ...rest] = tokens;
+      if (target === undefined) return { kind: 'error', text: 'Usage: /cg memory register <type> <file>:<line> [summary]' };
+      const result = store.append({ type: type ?? 'fact', title: rest.join(' ') || '指针', target, summary: rest.join(' ') });
+      if (result.ok !== true) return { kind: 'error', text: `[context-governance] register failed: ${result.reason ?? 'unknown'}` };
+      return {
+        kind: 'success',
+        text: [`context-governance memory`, `registered: ${result.id}`, `target: ${target}`].join('\n'),
+      };
+    }
+    if (action === 'promote') {
+      if (rootId === null) return { kind: 'error', text: '[context-governance] promote 需要可解析 root（当前 root-unresolved）' };
+      const ids = tokens.slice(1);
+      if (ids.length === 0) return { kind: 'error', text: 'Usage: /cg memory promote <id…>' };
+      const result = promotePointers({
+        home, rootId, sessionId, fromStore: store, ids,
+        audit: (event, details) => audit?.append?.(event, details),
+      });
+      if (result.ok !== true) {
+        return { kind: 'error', text: `[context-governance] promote failed: ${result.reason ?? 'unknown'}` };
+      }
+      return {
+        kind: 'success',
+        text: [`context-governance memory`, `promoted: ${result.promoted.length}`, `shared: ${result.shared.dir}`].join('\n'),
+      };
+    }
+    if (action === 'import') {
+      const fromIndex = tokens.indexOf('--from');
+      const fromRoleIndex = tokens.indexOf('--from-role');
+      const emit = (event, details) => audit?.append?.(event, details);
+      if (fromIndex >= 0 && tokens[fromIndex + 1] === 'legacy') {
+        const result = importLegacy({
+          legacyDir: projectRoot === '' ? '' : path.join(projectRoot, 'memory', 'governance'),
+          toStore: store, sessionId, audit: emit,
+        });
+        if (result.ok !== true) return { kind: 'error', text: `[context-governance] import legacy failed: ${result.reason ?? 'unknown'}` };
+        return { kind: 'success', text: `context-governance memory\nimported: ${result.imported.length}` };
+      }
+      if (fromRoleIndex >= 0) {
+        const role = tokens[fromRoleIndex + 1];
+        if (role === undefined) return { kind: 'error', text: 'Usage: /cg memory import --from-role <role>' };
+        const result = importFromRole({ home, role, rootId, sessionId, toStore: store, audit: emit });
+        if (result.ok !== true) return { kind: 'error', text: `[context-governance] import role failed: ${result.reason ?? 'unknown'}` };
+        return { kind: 'success', text: `context-governance memory\nimported: ${result.imported.length} (from ${result.from})` };
+      }
+      return { kind: 'error', text: 'Usage: /cg memory import --from legacy | --from-role <role>' };
+    }
+    if (action === 'shared') {
+      if (rootId === null) return { kind: 'error', text: '[context-governance] root-unresolved，无 shared 库' };
+      const shared = openSharedMemory({ home, rootId });
+      return { kind: 'success', text: `context-governance memory\nshared: ${shared.count()} pointer(s)` };
+    }
+    return { kind: 'error', text: 'Usage: /cg memory [show|register <type> <file>:<line> [summary]|promote <id…>|import --from legacy|--from-role <role>|shared]' };
+  };
+  /** C38 ⑬：`/cg role [set <role>]`（role id 校验后写会话元数据）。 */
+  const handleRoleCommand = (argText, sessionId = null) => {
+    if (sessionId === null) return { kind: 'error', text: NO_SESSION_TEXT };
+    const { home } = memoryContext(sessionId);
+    const audit = auditFor(sessionId);
+    const store = openSessionMemory({ home, sessionId, audit: (event, details) => audit?.append?.(event, details) });
+    const tokens = String(argText ?? '').trim().split(/\s+/).filter(Boolean);
+    if (tokens[0] === 'set') {
+      const role = tokens[1];
+      if (role === undefined || !/^[A-Za-z0-9._-]{1,32}$/.test(role)) {
+        return { kind: 'error', text: 'Usage: /cg role set <role>（^[A-Za-z0-9._-]{1,32}$）' };
+      }
+      const result = store.setRole(role);
+      if (result.ok !== true) return { kind: 'error', text: `[context-governance] role set failed: ${result.reason ?? 'unknown'}` };
+      return { kind: 'success', text: `context-governance role\nrole: ${role} (source=session)` };
+    }
+    const meta = store.meta();
+    return { kind: 'success', text: `context-governance role\nrole: ${meta.role ?? '(unset)'}\nupdatedAt: ${meta.updatedAt ?? '-'}` };
+  };
   /** D：项目模板显式入口 `/cg project-template [show|create key=value…|clear]`。 */
   const handleProjectTemplate = (argText, sessionId = null) => {
     const policy = policyFor(sessionId);
@@ -753,6 +863,12 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
           return { kind: 'success', text: `context-governance compact\narmed: ${arg === 'arm' ? 'on' : 'off'} (source=session)` };
         }
         return { kind: 'error', text: 'Usage: /cg compact [status|arm|disarm]' };
+      }
+      if (raw === 'memory' || raw.startsWith('memory ')) {
+        return handleMemoryCommand(raw.slice('memory'.length).trim(), sessionId);
+      }
+      if (raw === 'role' || raw.startsWith('role ')) {
+        return handleRoleCommand(raw.slice('role'.length).trim(), sessionId);
       }
       if (raw === 'project-template' || raw.startsWith('project-template ')) {
         return handleProjectTemplate(raw.slice('project-template'.length).trim(), sessionId);

@@ -118,10 +118,12 @@ export class RootGuardPool {
     }
     this.#auditRoot('session-governed', {
       sessionId,
+      cwd: resolved.cwd ?? '',
       root: resolved.entry?.root ?? null,
       rootId: resolved.entry?.rootId ?? null,
       source: resolved.source ?? null,
       subagent: resolved.isSubagent === true,
+      ...(resolved.entry === null ? { reason: resolved.reason ?? 'no-root' } : {}),
     });
   }
 
@@ -225,6 +227,8 @@ export class RootGuardPool {
       return;
     }
     if (resolved.status !== 'managed' || resolved.entry === null) {
+      // C36⑭：无根会话同样写 session-governed（首个可观测事件、同 session 去重）。
+      this.#noteGoverned(session, resolved);
       this.#noteUnresolved(session, resolved, event);
       return;
     }
