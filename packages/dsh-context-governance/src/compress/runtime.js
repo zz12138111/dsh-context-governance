@@ -909,6 +909,9 @@ export class CompressionGuard {
       list = [];
       this.#pendingHeals.set(sessionId, list);
     }
+    // 同一 compactionId + kind 只登记一条：一个周期内同类别可能有多份被 shadow 的规则节点，
+    // 逐条登记会产生重复 pending（真机 5 条 agent-instructions 即此），后续会重复结算。
+    if (list.some((item) => item.compactionId === entry.compactionId && item.kind === entry.kind)) return;
     list.push({ ...entry, windowTurnId: null, recordedAt: Date.now() });
     this.#auditEvent('self-heal-pending', {
       sessionId,
@@ -936,11 +939,40 @@ export class CompressionGuard {
     const kind = source.kind ?? null;
     if (kind === null) return;
     const seq = event?.seq;
+    // 同一 kind 可能出现多条 pending（多个压缩周期、或同一周期内同一类别被多份规则登记）。
+    // 命中时按 seqAtEnd 取最新的一条做判定；更早的视为被新周期取代，记 accepted（不记 loss）。
+    const matches = [];
     for (let index = list.length - 1; index >= 0; index -= 1) {
       const item = list[index];
       if (item.kind !== kind) continue;
       if (!(typeof seq === 'number' && seq > item.seqAtEnd)) continue;
-      list.splice(index, 1);
+      matches.push(item);
+    }
+    if (matches.length === 0) return;
+    matches.sort((left, right) => (right.seqAtEnd - left.seqAtEnd) || ((right.recordedAt ?? 0) - (left.recordedAt ?? 0)));
+    for (const item of matches) {
+      const at = list.indexOf(item);
+      if (at >= 0) list.splice(at, 1);
+    }
+    const newest = matches[0];
+    for (const superseded of matches.slice(1)) {
+      this.#auditEvent('self-heal-verified', {
+        sessionId,
+        cycle: superseded.cycle,
+        compactionId: superseded.compactionId,
+        kind,
+        seq,
+        form: source.form ?? null,
+        plugin: source.plugin ?? null,
+        digest: null,
+        mode: 'event-level',
+        reason: 'superseded-by-newer-compaction',
+        disposition: 'accepted',
+        dispositionRule: 'v1',
+      });
+    }
+    {
+      const item = newest;
       const base = {
         sessionId,
         cycle: item.cycle,
@@ -976,7 +1008,8 @@ export class CompressionGuard {
             reason: 'baseline-stale',
             auditVersion: 'loss-v1.0',
           });
-          continue;
+          if (list.length === 0) this.#pendingHeals.delete(sessionId);
+          return;
         }
         if (check.state === 'unverified') {
           this.#auditEvent('self-heal-unverified', {

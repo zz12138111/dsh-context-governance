@@ -14,7 +14,7 @@ import test from 'node:test';
 
 import { CompressionGuard } from '../src/compress/runtime.js';
 import { MemoryStore } from '../src/memory/store.js';
-import { FIVE_SECTION_SUMMARY, buildCompaction, healthyMessages, skillCatalog } from './compress-helpers.mjs';
+import { FIVE_SECTION_SUMMARY, agentInstructions, buildCompaction, healthyMessages, skillCatalog } from './compress-helpers.mjs';
 import { tempDir } from './helpers.mjs';
 
 function makeCtx() {
@@ -383,3 +383,65 @@ test('C35③ loss 带 reason：turn/end / stop() / turn/abort / restart 与 miss
     await fs.rm(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   }
 });
+
+// rc.2 真机回归：一个周期里同类别有多份被 shadow 的规则节点时，只登记一条 pending，
+// 自愈命中只产生一条 verified（真机曾出现 5 条重复 self-heal-pending）。
+test('rc.2 同类别多份规则只登记一条 pending，命中只产一条 verified', async () => {
+  const base = await tempDir('cg-rc2-dedupe-');
+  const store = await MemoryStore.open({ rootDir: path.join(base, 'memory'), project: 'test-project' });
+  const audits = [];
+  const ctx = makeCtx();
+  const guard = new CompressionGuard({
+    resolveScope: () => ({ mode: 'single-root', root: 'D:/work/rc2', cwd: '', governed: true, skipReason: null, unattributed: false }),
+    ctx,
+    hostVersion: '0.2.2-rc.3',
+    store,
+    rootAudit: { append() {} },
+    audit: { append(event, details) { audits.push({ event, details }); return true; } },
+    rootId: 'root-rc2',
+    projectRoot: 'D:/work/rc2',
+    logger: ctx.logger,
+  });
+  guard.start();
+  try {
+    const messages = healthyMessages();
+    const built = buildCompaction({
+      // 三份 agent-instructions + 两份 skill-catalog（seq 1..5），其余沿用健康消息 0/6..12，
+      // 全部落在 shadow 区间 [0, 13]。
+      before: [
+        messages[0],
+        agentInstructions(1),
+        agentInstructions(2),
+        agentInstructions(3),
+        skillCatalog(4),
+        skillCatalog(5),
+        ...messages.slice(6),
+      ],
+      summary: FIVE_SECTION_SUMMARY, start: 0, end: 13, manual: true,
+    });
+    const session = liveSession(built);
+    const handler = ctx.handlers[0].handler;
+    handler(session, eventOf(built, 'compaction/start'));
+    handler(session, eventOf(built, 'compaction/summary'));
+    handler(session, checkpointOf(built));
+    session.surface.nodes = [...built.postSurface];
+    handler(session, eventOf(built, 'compaction/end'));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const pending = audits.filter((item) => item.event === 'self-heal-pending');
+    assert.equal(pending.length, 2, '每个 kind 只登记一条');
+    assert.deepEqual(pending.map((item) => item.details.kind).sort(), ['agent-instructions', 'skill-catalog']);
+    const maxSeq = Math.max(...session.surface.nodes);
+    handler(session, hostHeal(session, maxSeq + 1, { kind: 'agent-instructions' }));
+    handler(session, hostHeal(session, maxSeq + 2, { kind: 'skill-catalog' }));
+    const verified = audits.filter((item) => item.event === 'self-heal-verified');
+    assert.equal(verified.length, 2, '每个 kind 只产一条 verified');
+    assert.equal(audits.filter((item) => item.event === 'self-heal-missing').length, 0);
+  } finally {
+    await guard.flush().catch(() => {});
+    guard.stop();
+    await store.close().catch(() => {});
+    await fs.rm(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+  }
+});
+
+
