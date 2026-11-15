@@ -1304,6 +1304,13 @@ C 的初步证据：启动后本项目根 `audit.jsonl` 只有 `capability@ready
 
 > 28a. **开发判定与落地（2026-11-15，维持 B）**：开发判**假丢**——`MEM-20261115-1002 · anchor · 回滚点：D:\DS-PROJECT\娱乐管理\影音\待决策-20261115.md` 已落库（`memory/governance/MEMORY.md:8`，源路径完整）；同 cycle `protection-write count=3 kinds=[latest-user,rules,rollback]` → `protection-materialized moved:3/requested:3` → `reinjection count:3`。失败只在 `verifyProtection.rollbackCovered()`（`protection.js:639` 一带）**只读摘要文本**、要求字面命中关键词+绝对路径，宿主改写成「可回滚 / logs\backup-*.csv」等近义/相对形式即误判。修法（commit `8097e0a`，单测 660/660，+2 用例）：①判定改为「摘要**或**已 materialize+回注的保护条目任一覆盖即 pass」，**未 materialize 仍 fail**（真丢不被吞）；②摘要未覆盖但保护兜住时另写 **`protection-covered{names,ids,reason:"summary-paraphrase"}`** 审计（保留可见性，不静默、不删 `compaction-loss` 历史行）；③**rc.10 包面未动**（`3e03a0d` 不变，本修随下一版单包出），审核对 rc.10 的终版签字不因此作废。真机账：rc.10 两无 `.git` 会话各 1 行 `b-class/unacceptable` 记「假丢/伴随告警」。
 
+> 29. **口径裁定：rc.10 真机窗口新增缺陷归属（2026-11-15，需求裁；证据 `analysis/dsh-021-turn-cursor/rc10-真机窗口-20261115.md`、测试新门 `verify-c38-pointer-roundtrip` 1/3）**：
+> - **P2 指针 `type/status` 不持久 → 实现缺口，计入终版差距**：依据 `:40②`「条目包含 `id/type/status/project/source/writer/confidence`」+ `:42④`「回注只放记忆 ID/状态/指针」——重开后索引/`mem_query` 的 `type/status` 为空即**条目字段丢失**（不是"列内元数据不影响功能"）。修法：`serializePointers`/`parsePointerBlock` 往返 `type/status` + 「重开后保持」用例（测试门即验收）。rc.10 不重出包，下一版必修。
+> - **P3 命令面审计落根错位 → 实现缺口，计入终版差距**（此处更正审核倾向"只要求审计存在"）：依据 `:462`「每会话按自身 cwd 归一为**记忆/审计归属**」+ `:485`「审计按根存储、跨根聚合只读」——G 根会话 `memory-imported`/`memory-pointer-miss` 落 D 根、G 根 0 行即**归属违规**。修法：命令面审计与事件面同一 root 解析；`header-injected`(G)/`header-truncated`(D) 分裂同一修复。
+> - **CP5 定性**：宿主在 cwd 校验处直接 `turn/end{error: working-directory…}`、插件该 turn 零行 → 无治理周期可审计，记「**不可造（宿主 cwd 校验），离线用例覆盖**」，不转用户开 GUI；但「根被删后插件重建 `<root>/memory/governance` 且仍判 managed（pin 绕过 cwd 校验）」属另一事——若开发确认触发路径存在，即 `:454②` `root-unresolved` 漏判，另立实现缺口（待开发一句确认，不在本条内预判）。
+> - **P4「根目录被删后插件重建已删根去写审计」→ 实现缺口，计入终版差距**（开发判缺陷，我认同）：依据 `:454②`（cwd 不可读/不可写/离线 → 降级但仍受治，记忆/分组标 `root-unresolved`、审计 `root-unresolved{sessionId,cwd,reason}`）+ `:462`（cwd 不可用时按 session 级归属）+ `:458`（不得存在被压缩但无保护/回注/成本的纳管会话——无根会话仍须留痕，但**不得伪造根**）。**不得为写审计 mkdir 已被删除的根**；应走 `root-unresolved` + 用户级审计。用户可见副作用（在已删目录重建 `memory/governance`）使其不能降为"内部实现选择"。与 P2/P3 **同版修**。
+> - 计数：rc.10 终版差距 = 离线 **0** + 真机窗口新增 **3**（P2/P3/P4）；覆盖表已随同批更新，真机窗结束后按最终读数收口。**下一版单包** = `8097e0a`+`d868e3a`（b-class 假丢口径修复，不计缺口）**+ P2/P3/P4 三修**；rc.10 包面 `3e03a0d` 不动、不重出包。
+
 **窗口物料（00 已备，2026-11-14 22:30；**本轮暂不使用**，重开窗口时再用；明细见 `G:\DS-HARNESS\tasks\TASK-20261114-02-本体升级-0.2.2-rc.3.md`）**：
 
 | 项 | 值 |
