@@ -37,6 +37,8 @@ export const AUDIT_FIELD_WHITELIST = Object.freeze({
   backupPath: 'text',
   violation: 'text',
   target: 'text',
+  /** C38③：指针条 id——memory-pointer-miss 的去重键是 sessionId|id|reason，缺它落盘后无法事后核去重。 */
+  id: 'id',
   /** C38：导入/继承来源。 */
   from: 'text',
   fromSessionId: 'text',

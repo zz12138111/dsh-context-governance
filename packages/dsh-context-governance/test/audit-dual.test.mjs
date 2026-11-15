@@ -121,6 +121,7 @@ test('P1/T13 审计白名单：新事件在册、字段可落盘、未知字段�
     backupPath: 'C:/tmp/x.bak',
     violation: 'outside-root',
     target: 'C:/repo/memory/governance',
+    id: 'MEM-20261115-1011',
     subagent: true,
     unknownField: 'drop-me',
     root: 'C:/repo',
@@ -133,6 +134,8 @@ test('P1/T13 审计白名单：新事件在册、字段可落盘、未知字段�
   assert.equal(sanitized.backupPath, 'C:/tmp/x.bak');
   assert.equal(sanitized.violation, 'outside-root');
   assert.equal(sanitized.target, 'C:/repo/memory/governance');
+  // C38③：memory-pointer-miss 的去重键是 sessionId|id|reason，id 必须能落盘（否则事后无法核去重）。
+  assert.equal(sanitized.id, 'MEM-20261115-1011');
   assert.equal(sanitized.subagent, true);
   assert.equal('unknownField' in sanitized, false);
   const sensitive = sanitizeAuditDetails({ reason: 'token ghp_abcdefghijklmnopqrstuvwxyz0123456789' });
