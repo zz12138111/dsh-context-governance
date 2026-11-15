@@ -1,0 +1,19 @@
+PASS C11b-file-path :: path=C:\Users\19091\AppData\Local\Temp\cg-c11b-t3uZaJ\home\.dsh\context-governance\plugin-policy.json
+PASS C11b-write-ok :: exists=true
+PASS C11b-file-version-and-source :: disk={"version":1,"at":0.58,"updatedAt":"2026-11-15T03:40:43.419Z","source":"plugin"}
+PASS C11b-readback-after-restart :: read={"at":0.58,"updatedAt":"2026-11-15T03:40:43.419Z","source":"plugin"}
+PASS C11b-idempotent-write :: writeAtIfChanged=false
+PASS C11b-external-change-visible :: read={"at":0.47,"updatedAt":"2026-11-15T03:40:43.425Z","source":"plugin"}
+PASS C11b-4a-missing-no-throw :: read=null threw=false
+PASS C11b-4b-corrupt-null-and-audited :: read=null audit=["plugin-policy-load-failed"]
+PASS C11b-4c-unknown-version-null-and-audited :: read=null audit=["plugin-policy-load-failed"]
+PASS C11b-persist-readback-source-plugin :: policyLine="policy: compact.at=0.58 (source=plugin) native=0.6785 (config-fallback) early=on (default; unvalidated) 层=全局（影响所有会话）"
+PASS C11b-restart-readback-source-plugin :: policyLine="policy: compact.at=0.58 (source=plugin) native=0.6785 (config-fallback) early=on (default; unvalidated) 层=全局（影响所有会话）"
+PASS C11b-restart-not-builtin :: 重启后不得回 builtin
+PASS C11b-corrupt-file-falls-back :: threw=false policyLine="policy: compact.at=0.60 (source=builtin) native=0.6785 (config-fallback) early=on (default; unvalidated) 层=内置默认"
+PASS C11b-unknown-version-falls-back :: threw=false policyLine="policy: compact.at=0.60 (source=builtin) native=0.6785 (config-fallback) early=on (default; unvalidated) 层=内置默认"
+PASS C11b-no-override-of-higher-layers :: at=0.62 source=session:A2
+PASS C11b-resolveconfig-keeps-at :: policy.at=0.55
+PASS C11b-apply-volatile-branch :: policyLine="policy: compact.at=0.63 (source=plugin) native=0.6785 (config-fallback) early=on (default; unvalidated) 层=全局（影响所有会话）" diskAt=0.63
+
+C11② TOTAL 17/17 PASS
