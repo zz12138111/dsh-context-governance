@@ -39,6 +39,7 @@ const audit = new AuditLog({ file: path.join(storeDir, 'audit.jsonl'), maxBytes:
 const entry = { root, rootId: 'p4d-root-1', state: 'active', project: 'p4d', managed: true };
 const session = { id: 'session-p4dispose-1111-2222-3333-444455556666', cwd: root, header: { id: 'session-p4dispose-1111-2222-3333-444455556666', cwd: root } };
 let pool = null;
+let pool2 = null;
 
 try {
   check('P4d-audit-seeded', audit.append('seed', {}) === true, `seedAppend=${fs.existsSync(path.join(storeDir, 'audit.jsonl'))}`);
@@ -65,10 +66,39 @@ try {
   const audited = rootAuditRows.some((row) => row.event === 'root-unresolved' && row.details?.reason === 'root-gone');
   check('P4d-dispose-falls-back-to-root-audit', audited,
     `rootAuditRows=${JSON.stringify(rootAuditRows.map((row) => row.event))}（期望含 root-unresolved{reason:'root-gone'}）`);
+
+  // 正常路径不误伤（审核要求）：根健康时 dispose 仍必须写根内 `root-guard-disposed`，
+  // 且不得误报 `root-unresolved`——P4-b 修复只能"写不进时回落"，不能把正常审计也吞掉。
+  const healthyRoot = path.join(base, 'healthy');
+  const healthyStoreDir = path.join(healthyRoot, 'memory', 'governance');
+  fs.mkdirSync(healthyStoreDir, { recursive: true });
+  const healthyFile = path.join(healthyStoreDir, 'audit.jsonl');
+  const healthyAudit = new AuditLog({ file: healthyFile, maxBytes: 4 * 1024 * 1024, allowedBase: healthyRoot });
+  healthyAudit.append('seed', {});
+  const healthyEntry = { root: healthyRoot, rootId: 'p4d-root-healthy', state: 'active', project: 'p4d', managed: true };
+  pool2 = new RootGuardPool({
+    registry: { resolveSessionRoot: () => ({ status: 'managed', entry: healthyEntry, isSubagent: false, cwd: healthyRoot }) },
+    storePool: { pin: async () => ({ store: null, audit: healthyAudit, release: async () => {} }) },
+    createGuard: () => ({ guard: { stop() {} }, policy: null, early: null, dispose: async () => {} }),
+    rootAudit,
+  });
+  await pool2.ensureForSession({ id: 'session-p4healthy-1111-2222-3333-444455556666', cwd: healthyRoot, header: { id: 'session-p4healthy-1111-2222-3333-444455556666', cwd: healthyRoot } });
+  const rootAuditBefore = rootAuditRows.length;
+  const healthyDisposed = await pool2.dispose(healthyEntry.rootId, 'dispose');
+  const healthyRows = fs.existsSync(healthyFile)
+    ? fs.readFileSync(healthyFile, 'utf8').split(/\r?\n/).filter(Boolean).map((line) => { try { return JSON.parse(line); } catch { return null; } }).filter(Boolean)
+    : [];
+  check('P4d-healthy-root-dispose-audited', healthyDisposed === true
+    && healthyRows.some((row) => row.event === 'root-guard-disposed' && row.rootId === healthyEntry.rootId),
+    `disposed=${healthyDisposed} rows=${JSON.stringify(healthyRows.map((row) => row.event))}（根健康时必须写 disposed）`);
+  check('P4d-healthy-root-no-false-unresolved',
+    !rootAuditRows.slice(rootAuditBefore).some((row) => row.event === 'root-unresolved'),
+    `新增根审计=${JSON.stringify(rootAuditRows.slice(rootAuditBefore).map((row) => row.event))}（根健康时不得误报 root-unresolved）`);
 } catch (error) {
   check('P4d-window', false, `抛错：${String(error?.stack ?? error).slice(0, 500)}`);
 } finally {
   try { await pool?.closeAll?.('test'); } catch { /* ignore */ }
+  try { await pool2?.closeAll?.('test'); } catch { /* ignore */ }
   fs.rmSync(base, { recursive: true, force: true, maxRetries: 5 });
 }
 
