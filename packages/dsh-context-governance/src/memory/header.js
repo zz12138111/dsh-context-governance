@@ -13,6 +13,8 @@
 
 import { randomUUID } from 'node:crypto';
 
+import { renderMemoryHeader } from './session-store.js';
+
 export const MEMORY_HEADER_SOURCE_KIND = 'plugin:context-governance';
 export const MEMORY_HEADER_FORM = 'memory-header';
 
@@ -151,6 +153,7 @@ function isSubagentPayload(payload) {
  *   enabled?: boolean, isEnabled?: (session: object|null) => boolean, hasRuleFile?: boolean,
  *   getHasRuleFile?: (session: object|null) => boolean,
  *   resolveStore?: (session: object|null) => object|null|Promise<object|null>,
+ *   resolvePointers?: (session: object|null) => object[]|Promise<object[]>（C38 会话指针优先，非空则替代 root 记忆）
  *   maxLines?: number, maxChars?: number, oldAgeDays?: number, oldLimit?: number,
  *   onInjected?: (header: object, injection: object, context: object) => void,
  * }} [options]
@@ -184,9 +187,21 @@ export function registerMemoryHeader(ctx, store, options = {}) {
         if (decision.kind === 'reject') return decision;
         if (isSubagentPayload(payload)) return decision; // 子会话默认不注入
         // P3：按会话所属根取 store；未打开/不可判定 → 本会话不注入。
-        const rootStore = await storeNow(session);
-        if (rootStore === null || rootStore === undefined) return decision;
-        const header = buildMemoryHeader(rootStore, { ...options, hasRuleFile: hasRuleFileNow(session) });
+        // C38 ④：会话指针库优先（短行 header）；无指针时退回旧 root 记忆。
+        const pointers = typeof options.resolvePointers === 'function' ? await options.resolvePointers(session) : null;
+        let header = null;
+        if (Array.isArray(pointers) && pointers.length > 0) {
+          const rendered = renderMemoryHeader({ query: () => pointers }, {
+            maxLines: options.maxLines,
+            maxBytes: Number.isFinite(options.maxBytes) ? options.maxBytes : options.maxChars,
+            audit: options.onTruncated,
+          });
+          header = { text: rendered.text, ids: pointers.map((entry) => entry.id), count: pointers.length, mode: 'session-pointers' };
+        } else {
+          const rootStore = await storeNow(session);
+          if (rootStore === null || rootStore === undefined) return decision;
+          header = buildMemoryHeader(rootStore, { ...options, hasRuleFile: hasRuleFileNow(session) });
+        }
         if (header === null) return decision;
         const messages = Array.isArray(decision?.messages) ? decision.messages : [];
         if (messages.some((message) => message?.source?.kind === MEMORY_HEADER_SOURCE_KIND && message?.source?.form === MEMORY_HEADER_FORM)) {

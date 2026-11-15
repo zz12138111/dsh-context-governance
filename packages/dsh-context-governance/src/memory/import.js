@@ -73,6 +73,16 @@ export function importLegacy({
   legacyDir, toStore, sessionId, audit = null, now = () => new Date(),
 } = {}) {
   if (typeof legacyDir !== 'string' || legacyDir === '') return { ok: false, reason: 'no-legacy-dir' };
+  // C38 ⑩：原地标 legacy-shared-v1（只写标记文件，不改记忆内容）。
+  try {
+    const markerPath = path.join(legacyDir, 'legacy-shared-v1.json');
+    if (!fs.existsSync(markerPath)) {
+      const markerBody = { version: 1, markedAt: now().toISOString() };
+      fs.writeFileSync(markerPath, `${JSON.stringify(markerBody, null, 2)}\n`, 'utf8');
+    }
+  } catch {
+    /* 标记失败不影响导入 */
+  }
   const topicsDir = path.join(legacyDir, 'topics');
   let names = [];
   try {

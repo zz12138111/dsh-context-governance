@@ -68,6 +68,9 @@ test('C38 ⑩：legacy 导入生成新 id 并审计 memory-imported；原 legacy
     assert.match(result.imported[0], /^MEM-ffff6666-/);
     assert.ok(audits.some((row) => row.event === 'memory-imported' && row.details.from === 'legacy'));
     assert.equal(await fs.readFile(legacyFile, 'utf8'), before, 'legacy 正文不被修改');
+    const marker = path.join(legacy, 'legacy-shared-v1.json');
+    const markerRaw = JSON.parse(await fs.readFile(marker, 'utf8'));
+    assert.equal(markerRaw.version, 1, 'legacy 目录落 legacy-shared-v1 标记');
   } finally {
     await fs.rm(home, { recursive: true, force: true, maxRetries: 5 });
     await fs.rm(legacy, { recursive: true, force: true, maxRetries: 5 });
@@ -110,6 +113,31 @@ test('C38 ⑪⑬：--from-role 找同 role+同 root 最近会话并复制；无�
     assert.equal(missing.reason, 'no-source-session');
     assert.ok(audits.some((row) => row.event === 'memory-import-no-source' && row.details.role === 'qa'));
     assert.equal(lonely.count(), 0, '默认不继承');
+  } finally {
+    await fs.rm(home, { recursive: true, force: true, maxRetries: 5 });
+    await fs.rm(work, { recursive: true, force: true, maxRetries: 5 });
+  }
+});
+
+test('C38 ⑦：子会话不写、不读父记忆；重启后两会话指针库互相隔离', async () => {
+  const home = await tempDir('cg-c38-isolate-');
+  const work = await tempDir('cg-c38-isolate-body-');
+  try {
+    const file = await makeBody(work);
+    const parent = openSessionMemory({ home, sessionId: 'session-parent01' });
+    parent.append({ type: 'fact', title: '父记忆', target: `${file}:1`, summary: '父记忆' });
+    const child = openSessionMemory({ home, sessionId: 'session-child01', subagent: true });
+    assert.equal(child.append({ title: '子写', target: `${file}:2` }).reason, 'subagent-readonly');
+    assert.equal(child.query().length, 0, '子会话默认不读父记忆');
+
+    const other = openSessionMemory({ home, sessionId: 'session-other01' });
+    other.append({ type: 'fact', title: '另一会话', target: `${file}:3`, summary: '另一会话' });
+    const parentAfter = openSessionMemory({ home, sessionId: 'session-parent01' });
+    const otherAfter = openSessionMemory({ home, sessionId: 'session-other01' });
+    assert.equal(parentAfter.count(), 1);
+    assert.equal(otherAfter.count(), 1);
+    assert.equal(parentAfter.all()[0].title, '父记忆');
+    assert.equal(otherAfter.all()[0].title, '另一会话');
   } finally {
     await fs.rm(home, { recursive: true, force: true, maxRetries: 5 });
     await fs.rm(work, { recursive: true, force: true, maxRetries: 5 });

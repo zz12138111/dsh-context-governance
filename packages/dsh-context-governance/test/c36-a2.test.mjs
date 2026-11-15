@@ -128,3 +128,52 @@ test('C36 ③：层级 A1 > A2 > cwd > plugin；source 字面与 /cg status 可�
   const afterClear = state.resolve('session-c36');
   assert.notEqual(afterClear.sources['compact.at'], 'session:A2');
 });
+
+test('C36 裁定 3：A2 淘汰保护活跃会话与显式 pin；a2-evicted 带 sessionIds', async () => {
+  const dir = await tempDir('cg-a2-active-');
+  const audits = [];
+  try {
+    const file = path.join(dir, 'session-policy.json');
+    const old = new Date('2026-01-01T00:00:00Z');
+    const nowDate = new Date('2026-11-15T00:00:00Z');
+    const store = createA2Store({
+      file,
+      maxEntries: 10,
+      now: () => nowDate,
+      audit: (event, details) => audits.push({ event, details }),
+      pins: ['session-pinned'],
+      isActive: (sessionId) => sessionId === 'session-active',
+    });
+    // 直接写文件造“很久没更新”的两条记录（一条 active、一条 pinned、一条 idle）。
+    const write = (sid, at) => {
+      store.write(sid, at);
+    };
+    write('session-active', 0.5);
+    write('session-pinned', 0.55);
+    write('session-idle', 0.6);
+    // 把三条 updatedAt 全改成 2026-01-01（模拟长期未改压缩比）。
+    const raw = JSON.parse(await fs.readFile(file, 'utf8'));
+    for (const sid of Object.keys(raw.sessions)) raw.sessions[sid].updatedAt = old.toISOString();
+    await fs.writeFile(file, JSON.stringify(raw), 'utf8');
+    // 重新装载（read 不静默删）→ evict 只清 idle。
+    const reloaded = createA2Store({
+      file,
+      now: () => nowDate,
+      audit: (event, details) => audits.push({ event, details }),
+      pins: ['session-pinned'],
+      isActive: (sessionId) => sessionId === 'session-active',
+    });
+    assert.ok(reloaded.snapshot()['session-active'], '活跃会话不因过期被静默删除');
+    assert.equal(reloaded.read('session-active'), null, 'read 过期只返回 null（不静默删）');
+    reloaded.write('session-new', 0.65); // 触发 evict
+    const evicted = audits.filter((row) => row.event === 'a2-evicted');
+    assert.ok(evicted.length >= 1);
+    const ids = evicted.flatMap((row) => row.details.sessionIds ?? []);
+    assert.ok(ids.includes('session-idle'), '空闲会话被清');
+    assert.equal(ids.includes('session-active'), false, '活跃会话不得被清');
+    assert.equal(ids.includes('session-pinned'), false, 'pin 会话不得被清');
+    assert.ok(reloaded.snapshot()['session-pinned'], 'pin 会话保留');
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true, maxRetries: 5 });
+  }
+});

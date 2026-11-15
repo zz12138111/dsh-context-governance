@@ -35,11 +35,28 @@ export function createA2Store({
   ttlDays = DEFAULT_A2_TTL_DAYS,
   audit = null,
   logger = null,
+  pins = [],
+  isActive = null,
 } = {}) {
   if (typeof file !== 'string' || file === '') throw new Error('A2 store needs a file path');
   const limit = Math.max(Number(maxEntries) || DEFAULT_A2_MAX_ENTRIES, 1);
   const ttlMs = Math.max(Number(ttlDays) || DEFAULT_A2_TTL_DAYS, 1) * 24 * 60 * 60 * 1000;
   const sessions = new Map();
+  // 裁定 3：活跃保护——显式 pin 永不清；isActive(sessionId) 为真的会话不被 TTL/LRU 清掉。
+  const pinned = new Set(Array.isArray(pins) ? pins.filter((id) => typeof id === 'string' && id !== '') : []);
+  const protectedNow = () => {
+    const set = new Set(pinned);
+    if (typeof isActive === 'function') {
+      for (const sessionId of sessions.keys()) {
+        try {
+          if (isActive(sessionId) === true) set.add(sessionId);
+        } catch {
+          /* 活跃探测失败按不保护处理 */
+        }
+      }
+    }
+    return set;
+  };
   const emit = (event, details) => {
     try {
       audit?.(event, details);
@@ -86,30 +103,35 @@ export function createA2Store({
 
   const evict = () => {
     const nowMs = now().getTime();
-    let removed = 0;
+    const guarded = protectedNow();
+    const removed = [];
     for (const [sessionId, value] of [...sessions.entries()]) {
+      if (guarded.has(sessionId)) continue;
       const updated = Date.parse(value.updatedAt);
       if (Number.isFinite(updated) && nowMs - updated > ttlMs) {
         sessions.delete(sessionId);
-        removed += 1;
+        removed.push(sessionId);
       }
     }
-    if (removed > 0) emit('a2-evicted', { count: removed, reason: 'ttl-expired' });
+    if (removed.length > 0) {
+      emit('a2-evicted', { count: removed.length, reason: 'ttl-expired', sessionIds: removed });
+    }
+    let dropped = [];
     if (sessions.size > limit) {
-      const oldest = [...sessions.entries()]
+      const candidate = [...sessions.entries()]
+        .filter(([sessionId]) => !guarded.has(sessionId))
         .sort((left, right) => (Date.parse(left[1].updatedAt) || 0) - (Date.parse(right[1].updatedAt) || 0));
-      let dropped = 0;
-      for (const [sessionId] of oldest) {
+      for (const [sessionId] of candidate) {
         if (sessions.size <= limit) break;
         sessions.delete(sessionId);
-        dropped += 1;
+        dropped.push(sessionId);
       }
-      if (dropped > 0) emit('a2-evicted', { count: dropped, reason: 'max-entries' });
-      return dropped;
+      if (dropped.length > 0) {
+        emit('a2-evicted', { count: dropped.length, reason: 'max-entries', sessionIds: dropped });
+      }
     }
-    return 0;
+    return removed.length + dropped.length;
   };
-
   return {
     file,
     /** 读该会话的 A2（无/过期 → null）。 */
@@ -119,8 +141,7 @@ export function createA2Store({
       if (value === undefined) return null;
       const updated = Date.parse(value.updatedAt);
       if (Number.isFinite(updated) && now().getTime() - updated > ttlMs) {
-        sessions.delete(sessionId);
-        persist();
+        // 裁定 3：read 不静默删；过期只返回 null，统一由 evict（带审计、保护活跃）处理。
         return null;
       }
       return { ...value };

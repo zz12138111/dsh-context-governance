@@ -102,6 +102,8 @@ export const AUDIT_FIELD_WHITELIST = Object.freeze({
   moved: 'number',
   seq: 'number',
   ids: 'id-array',
+  /** C36 裁定 3：A2 淘汰涉及的会话 id 列表（便于核对是否清掉活跃会话）。 */
+  sessionIds: 'id-array',
   /** D-MGMT-023：同标题重复、只回注不落盘的条 id；以及可解析性对账的缺条 id。 */
   dedupedIds: 'id-array',
   missingIds: 'id-array',

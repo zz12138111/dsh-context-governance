@@ -237,6 +237,16 @@ async function runWrite(store, args, exec, expectedProject = undefined) {
 export function createMemoryTools(store, options = {}) {
   const resolveStore = typeof options.resolveStore === 'function' ? options.resolveStore : defaultResolver(store);
   const subagentOf = typeof options.isSubagent === 'function' ? options.isSubagent : isSubagentExec;
+  // C38：有 session id 时会话指针库优先（空库也优先，不回落到 legacy root 记忆）。
+  const sessionMemoryFor = async (exec) => {
+    if (typeof options.resolveSessionMemory !== 'function') return null;
+    try {
+      const resolved = await options.resolveSessionMemory(exec);
+      return resolved === null || resolved === undefined ? null : resolved;
+    } catch {
+      return null;
+    }
+  };
   const audit = options.audit ?? null;
 
   const rejectWith = (tool, exec, code, message, extra = {}, targetAudit = audit) => {
@@ -326,6 +336,17 @@ export function createMemoryTools(store, options = {}) {
               { reason: 'subagent' },
             );
           }
+          // C38①：正文由人工文件维护——有会话指针库时 mem_write 不再写正文，改走 /cg memory register。
+          const pointerStore = await sessionMemoryFor(exec);
+          if (pointerStore !== null) {
+            throw rejectWith(
+              MEM_WRITE_NAME,
+              exec,
+              'POINTER_ONLY',
+              'memory is pointer-based in this session: write the body to the human file, then register a pointer via /cg memory register <type> <file>:<line> <summary>',
+              { reason: 'pointer-only' },
+            );
+          }
           let resolution = null;
           try {
             // 先解析根（无根/只读/未纳管的错误优先），再做 1.0.3 写入准入。
@@ -404,6 +425,21 @@ export function createMemoryTools(store, options = {}) {
         execute: async (args, exec) => {
           if (Array.isArray(args?.ids) && args.ids.length > 20) {
             throw new Error('[BAD_ARGS] mem_query accepts at most 20 ids per call');
+          }
+          // C38：会话指针库优先；返回短行（id/type/title/detail=summary），miss 由库标记。
+          const pointerStore = await sessionMemoryFor(exec);
+          if (pointerStore !== null) {
+            const ids = Array.isArray(args?.ids) ? args.ids : null;
+            const needle = typeof args?.text === 'string' ? args.text.trim().toLowerCase() : '';
+            const type = typeof args?.type === 'string' && args.type !== '' ? args.type : null;
+            const entries = pointerStore.query({ text: needle, type, ids }).map((entry) => ({
+              id: entry.id,
+              status: entry.miss === true ? 'miss' : entry.status,
+              type: entry.type ?? 'fact',
+              title: entry.title ?? '',
+              detail: entry.summary ?? '',
+            }));
+            return { count: entries.length, entries };
           }
           let resolution = null;
           try {

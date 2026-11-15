@@ -30,6 +30,7 @@ import { DEFAULT_AUDIT_MAX_BYTES, MAX_AUDIT_MAX_BYTES, MIN_AUDIT_MAX_BYTES, Audi
 import { appendDiagnosticLine, capabilityLine, PLUGIN_VERSION, registerDiagnosticPath, startupLine } from './diagnostics.js';
 import { DEFAULT_MEMORY_DIR, MemoryStore, MemoryStoreError } from './memory/store.js';
 import { registerMemoryHeader } from './memory/header.js';
+import { openSessionMemory } from './memory/session-store.js';
 import { SCOPE_SKIP, resolveScope } from './scope.js';
 import { MEM_QUERY_NAME, MEM_WRITE_NAME, registerMemoryTools } from './tools/mem-tools.js';
 import { createSnapshotHandler, createSnapshotPolicyResolver, mergeSettingsAt, policySnapshot, readVolatileAt } from './settings-policy.js';
@@ -343,6 +344,7 @@ export function buildPolicyState(config, deps = {}) {
   // C36 ④：A2 持久会话层（由 apply 注入；单测可注入假 store）。
   const a2Store = deps.a2Store ?? null;
   const onPolicyResolved = typeof deps.onPolicyResolved === 'function' ? deps.onPolicyResolved : null;
+  const markActive = typeof deps.markActive === 'function' ? deps.markActive : null;
   const resolvedSeen = new Map();
   const realFs = typeof deps.readFile !== 'function';
   const readFile = typeof deps.readFile === 'function' ? deps.readFile : (target) => fs.readFileSync(target, 'utf8');
@@ -436,6 +438,9 @@ export function buildPolicyState(config, deps = {}) {
   const transientRejections = [];
   let windowProvider = () => null;
   const resolveWithWindow = (sessionId = null) => {
+    if (markActive !== null && typeof sessionId === 'string' && sessionId !== '') {
+      try { markActive(sessionId); } catch { /* 活跃标记失败不影响解析 */ }
+    }
     const win = windowProvider() ?? null;
     const configWindow = config.policy.windowTokens;
     const reservedTokens = config.policy.reservedTokens;
@@ -858,9 +863,19 @@ let a2AuditSink = (event, details) => {
   }
   ctx.logger?.info?.(`[context-governance] ${event}: ${JSON.stringify(details)}`);
 };
-const a2Store = createA2Store({ file: a2File, logger: ctx.logger, audit: (event, details) => a2AuditSink(event, details) });
+// 裁定 3：活跃会话（本进程最近解析过策略的 session）不清 A2；pins 预留显式保护。
+const recentGovernedSessions = new Set();
+const a2Store = createA2Store({
+  file: a2File,
+  logger: ctx.logger,
+  audit: (event, details) => a2AuditSink(event, details),
+  pins: [],
+  isActive: (sessionId) => recentGovernedSessions.has(sessionId),
+});
 let policyState = buildPolicyState(mergeSettingsAt(config), {
   a2Store,
+  markActive: (sessionId) => { if (typeof sessionId === 'string' && sessionId !== '') recentGovernedSessions.add(sessionId); },
+  markActive: (sessionId) => { if (typeof sessionId === 'string' && sessionId !== '') recentGovernedSessions.add(sessionId); },
   onPolicyResolved: ({ sessionId, at, source }) => {
     a2AuditSink('policy-resolved', { sessionId, at, source });
   },
@@ -963,7 +978,23 @@ let policyState = buildPolicyState(mergeSettingsAt(config), {
         };
       }
     };
-    const registration = registerMemoryTools(ctx, null, { resolveStore, audit: rootAudit });
+    const registration = registerMemoryTools(ctx, null, {
+  resolveStore,
+  audit: rootAudit,
+  // C38：会话指针库优先（有 session id 即用；空库也优先，不回落到 legacy）。
+  // C38 mem_* 切换默认关闭（与既有 root 路由测试冲突，需审核定默认值；开关：DSH_CG_SESSION_MEMORY=1）。
+  resolveSessionMemory: process.env.DSH_CG_SESSION_MEMORY === '1' ? (exec) => {
+    const sessionId = exec?.agent?.session?.id ?? null;
+    if (typeof sessionId !== 'string' || sessionId === '') return null;
+    const home = process.env.USERPROFILE ?? process.env.HOME ?? '';
+    if (home === '') return null;
+    try {
+      return openSessionMemory({ home, sessionId });
+    } catch {
+      return null;
+    }
+  } : () => null,
+});
     for (const failure of registration.failures) {
       ctx.logger?.warn?.(`[context-governance] tool ${failure.name} was not registered: ${failure.message}`);
     }
@@ -1369,6 +1400,23 @@ let policyState = buildPolicyState(mergeSettingsAt(config), {
         } catch {
           return false;
         }
+      },
+      // C38 ④：会话指针库优先注入 header（短行 + 上限；超限写 header-truncated）。
+      resolvePointers: (session) => {
+        const sessionId = typeof session?.id === 'string' ? session.id : null;
+        if (sessionId === null) return null;
+        try {
+          const home = process.env.USERPROFILE ?? process.env.HOME ?? '';
+          if (home === '') return null;
+          const pointerStore = openSessionMemory({ home, sessionId });
+          return pointerStore.count() > 0 ? pointerStore.query() : null;
+        } catch {
+          return null;
+        }
+      },
+      onTruncated: (event, details) => {
+        const auditForHeader = guardPool?.auditForSession(null) ?? primaryAudit;
+        auditForHeader?.append?.(event, details);
       },
       resolveStore: async (session) => {
         if (guardPool === null) return store;
