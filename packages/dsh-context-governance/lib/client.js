@@ -574,6 +574,9 @@ window.__ModuleLoader__.load({
       title: { fontSize: 13, fontWeight: 600, color: 'var(--dsh-fg-secondary, #bdbdbd)' },
       big: { fontSize: 32, fontWeight: 700, lineHeight: '1.1', fontVariantNumeric: 'tabular-nums' },
       metaLine: { fontSize: 12, color: 'var(--dsh-fg-secondary, #bdbdbd)' },
+      // B8：内容区独立滚动（minHeight:0 是 flex 子项能滚动的前提），footer 不参与滚动。
+      popoverBody: { display: 'flex', flexDirection: 'column', gap: 10, flex: '1 1 auto', minHeight: 0, overflowY: 'auto' },
+      popoverFooter: { display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'flex-end', flex: '0 0 auto', flexShrink: 0 },
       row: { display: 'flex', alignItems: 'center', gap: 8 },
       input: { flex: 1, minWidth: 0, padding: '6px 8px', fontSize: 14, borderRadius: 8, border: '1px solid var(--dsh-border, #444)', background: 'var(--dsh-bg, #1e1e1e)', color: 'var(--dsh-fg, #e6e6e6)' },
       inputError: { borderColor: 'var(--dsh-red, #e05252)' },
@@ -674,6 +677,8 @@ window.__ModuleLoader__.load({
       const [showDetail, setShowDetail] = react.useState(false);
       const inputRef = react.useRef(null);
       const dialogRef = react.useRef(null);
+      const bodyRef = react.useRef(null);
+      const footerRef = react.useRef(null);
       // C40 §4：切会话自动关（弹层只对当前会话有意义，切走后必须收起，避免误写错会话）。
       const lastSessionRef = react.useRef(sessionId);
       react.useEffect(() => {
@@ -730,6 +735,8 @@ window.__ModuleLoader__.load({
        */
       const [layout, setLayout] = react.useState(null);
       const viewportRef = react.useRef(null);
+      const chipRectRef = react.useRef(null);
+      const composerRectRef = react.useRef(null);
       react.useEffect(() => {
         if (!open) { setLayout(null); return; }
         const doc = globalThis.document ?? null;
@@ -761,6 +768,8 @@ window.__ModuleLoader__.load({
           height: globalThis.innerHeight ?? doc?.documentElement?.clientHeight ?? 768,
         };
         viewportRef.current = viewport;
+        chipRectRef.current = chipRect;
+        composerRectRef.current = inputRect;
         const lines = compactBubbleLines(view ?? null, { lastAction });
         // 面板高：三行文字 + 输入行 + 按钮行；上限 260（超出内部滚动）。
         const desired = Math.min(260, 96 + lines.length * 22 + 64);
@@ -795,6 +804,32 @@ window.__ModuleLoader__.load({
           if (corrected !== null) setLayout(corrected);
         } catch { /* 量不到就保持第一趟结果 */ }
       }, [layout, open]);
+      /**
+       * B8：高度**用实测**，不再猜 96+行数*22+64。
+       * 读内容区 `scrollHeight` + footer 实际高度 + padding/border，`min(260, 实测)` 重算一次几何；
+       * 与当前高度差 ≤1px 就停——避免与 `correctPopoverRect` 互相推动形成校正环。
+       * `showDetail` 变化也要重算（展开详情会改变内容高度，否则又会出界）。
+       */
+      react.useEffect(() => {
+        if (open !== true || layout === null) return;
+        try {
+          const contentHeight = Number(bodyRef.current?.scrollHeight ?? 0)
+            + Number(footerRef.current?.getBoundingClientRect?.().height ?? 0)
+            + 34; // padding 16×2 + border 1×2
+          if (!(contentHeight > 0)) return;
+          const desired = Math.min(260, Math.round(contentHeight));
+          if (Math.abs(desired - layout.height) <= 1) return;
+          const chip = chipRectRef.current;
+          const viewport = viewportRef.current;
+          if (chip === null || viewport === null) return;
+          setLayout((prev) => (prev === null ? prev : computePopoverRect({
+            chip,
+            panel: { width: prev.width, height: desired },
+            viewport,
+            input: composerRectRef.current,
+          })));
+        } catch { /* 量不到就用第一趟几何 */ }
+      }, [open, showDetail, layout?.height, view?.at, lastAction]);
       if (!open) return null;
       const model = bubbleView(view ?? null, { lastAction });
       // B6：portal 后 wrapper 负责定位（fixed 相对视口），只让面板吃指针事件。
@@ -805,7 +840,10 @@ window.__ModuleLoader__.load({
           left: `${layout.left}px`,
           top: `${layout.top}px`,
           width: `${layout.width}px`,
-          maxHeight: `${layout.height}px`,
+          // B8：**确定高度**（px）。只给 maxHeight 时，面板的 `maxHeight:100%` 会解析为 none，
+          // 面板按自然高度长并穿过窗口下沿被裁（rc.14 真机按钮不可见的根因）。
+          height: `${layout.height}px`,
+          overflow: 'hidden',
           // wrapper 透明、且不吃指针：对话区在它下面仍然可见/可滚/可点（B6 第二条判据）。
           pointerEvents: 'none',
           background: 'transparent',
@@ -817,11 +855,12 @@ window.__ModuleLoader__.load({
         ? { ...S.dialog, visibility: 'hidden' }
         : {
           ...S.dialog,
-          // 面板自身接住点击/输入；高度受 wrapper 限制，超出内部滚动。
+          // 面板 = flex 列：内容区滚动，footer 常驻（B8）。
           pointerEvents: 'auto',
           width: '100%',
+          height: '100%',
           maxHeight: '100%',
-          overflowY: 'auto',
+          overflow: 'hidden',
           boxSizing: 'border-box',
         };
       // C11③：主入口保存写本会话（A2）；无会话标识时明确不可保存，绝不退化写全局。
@@ -867,26 +906,35 @@ window.__ModuleLoader__.load({
         onKeyDown: (event) => { if (event?.key === 'Escape') { event.stopPropagation?.(); close(); } },
         onBlur: (event) => { const next = event?.relatedTarget; if (next !== null && next !== undefined && !event.currentTarget?.contains?.(next)) close(); },
       },
-        h('div', { style: S.title }, model.title),
-        h('div', { style: S.big, 'data-role': 'current-percent' }, model.percentText),
-        // C40：主视图只三行短句；技术细节进「详情」（默认收起，仍可一键展开）。
-        ...compactBubbleLines(view ?? {}, { lastAction }).map((line, index) => h('div', { key: `main${index}`, style: S.metaLine }, line)),
-        h('div', { key: 'detail', 'data-role': 'detail', style: showDetail ? undefined : { display: 'none' } },
-          ...renderBubbleDetail(view ?? {}, labels, { entry: 'session', lastAction }).split('\n').map((line, index) => h('div', { key: `detail${index}`, style: S.metaLine }, line))),
-        h('button', { key: 'detail-toggle', type: 'button', className: 'cg-detail-toggle', style: S.button, onClick: () => setShowDetail(showDetail !== true) }, showDetail === true ? labels.hideDetail : labels.detail),
-        sessionId === null ? h('div', { style: S.error }, labels.noSession ?? LABELS.zh.noSession) : null,
-        h('div', { style: S.row },
-          h('input', {
-            ref: inputRef, type: 'text', inputMode: 'numeric', value: draft, 'aria-label': labels.percent,
-            'aria-invalid': error === '' ? 'false' : 'true',
-            style: error === '' ? S.input : { ...S.input, ...S.inputError },
-            onChange: (event) => { setDraft(normalizePercentInput(event.target.value)); setSaved(false); },
-            onBlur: onBlurField,
-            onKeyDown: (event) => { if (event?.key === 'Enter') { event.preventDefault?.(); save(); } if (event?.key === 'Escape') { close(); } },
-          }),
-          h('span', { style: S.metaLine }, labels.unit)),
-        h('div', { role: 'alert', 'aria-live': 'polite', style: S.error }, error),
-        h('div', { style: S.actions },
+        // B8：**内容区可滚、footer 常驻**——按钮行永远在滚动区外，用户不需要滚动就能点。
+        h('div', {
+          key: 'body',
+          'data-cg-body': '1',
+          ref: bodyRef,
+          style: S.popoverBody,
+        },
+          h('div', { style: { ...S.title, flexShrink: 0 } }, model.title),
+          h('div', { style: { ...S.big, flexShrink: 0 }, 'data-role': 'current-percent' }, model.percentText),
+          // C40：主视图只三行短句；技术细节进「详情」（默认收起，仍可一键展开）。
+          ...compactBubbleLines(view ?? {}, { lastAction }).map((line, index) => h('div', { key: `main${index}`, style: { ...S.metaLine, flexShrink: 0 } }, line)),
+          h('div', { key: 'detail', 'data-role': 'detail', style: showDetail ? undefined : { display: 'none' } },
+            ...renderBubbleDetail(view ?? {}, labels, { entry: 'session', lastAction }).split('\n').map((line, index) => h('div', { key: `detail${index}`, style: S.metaLine }, line))),
+          h('button', { key: 'detail-toggle', type: 'button', className: 'cg-detail-toggle', style: { ...S.button, flexShrink: 0 }, onClick: () => setShowDetail(showDetail !== true) }, showDetail === true ? labels.hideDetail : labels.detail),
+          sessionId === null ? h('div', { style: S.error }, labels.noSession ?? LABELS.zh.noSession) : null,
+          h('div', { style: { ...S.row, flexShrink: 0 } },
+            h('input', {
+              ref: inputRef, type: 'text', inputMode: 'numeric', value: draft, 'aria-label': labels.percent,
+              'aria-invalid': error === '' ? 'false' : 'true',
+              style: error === '' ? S.input : { ...S.input, ...S.inputError },
+              onChange: (event) => { setDraft(normalizePercentInput(event.target.value)); setSaved(false); },
+              onBlur: onBlurField,
+              onKeyDown: (event) => { if (event?.key === 'Enter') { event.preventDefault?.(); save(); } if (event?.key === 'Escape') { close(); } },
+            }),
+            h('span', { style: S.metaLine }, labels.unit)),
+          h('div', { role: 'alert', 'aria-live': 'polite', style: S.error }, error),
+        ),
+        // footer：**不在滚动区内**（flex:0 0 auto），保存/恢复/设置永远可见可点。
+        h('div', { key: 'footer', 'data-cg-footer': '1', ref: footerRef, style: S.popoverFooter },
           h('button', { type: 'button', style: S.button, onClick: restoreDefault, disabled: !canSaveSession }, `${labels.restore} ${model.defaultPercent}%`),
           h('button', {
             type: 'button',
