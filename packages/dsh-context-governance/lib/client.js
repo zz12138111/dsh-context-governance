@@ -659,12 +659,14 @@ window.__ModuleLoader__.load({
         // C40 §4：关闭后焦点回到 chip（键盘用户不丢位置）。
         try { globalThis.document?.querySelector?.('[data-cg-chip]')?.focus?.(); } catch { /* ignore */ }
       };
-      if (!open) return null;
-      const model = bubbleView(view ?? null, { lastAction });
       /**
        * C40：打开时按 chip / 输入框的真实 `getBoundingClientRect()` 定位——
        * 向上默认，上方不足才翻下，四边贴边 clamp，绝不遮输入框；面板 ≤min(360,视口−16)×260。
        * 先定方向再出现（`visibility` 在拿到 rect 前保持 hidden，避免跳位）。
+       *
+       * ⚠️ B5（rc.12a）：**hook 必须放在 `if (!open) return null` 之前**——
+       * 放到早退之后会让"关闭→打开"的 hook 数量从 14 变 16，React 抛
+       * "Rendered more hooks than during the previous render"，整个气泡崩掉（真机 chip/气泡齐哑）。
        */
       const [layout, setLayout] = react.useState(null);
       react.useEffect(() => {
@@ -696,6 +698,8 @@ window.__ModuleLoader__.load({
         const desired = Math.min(260, 96 + lines.length * 22 + 64);
         setLayout(computePopoverRect({ chip: chipRect, panel: { width: 320, height: desired }, viewport, input: inputRect }));
       }, [open, lastAction, view?.at, view?.source]);
+      if (!open) return null;
+      const model = bubbleView(view ?? null, { lastAction });
       const popoverStyle = layout === null
         ? { ...S.dialog, visibility: 'hidden' }
         : {
