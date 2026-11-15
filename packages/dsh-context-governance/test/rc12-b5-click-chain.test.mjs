@@ -52,7 +52,14 @@ async function loadStrict() {
     end() { counts.push(hookCount); return hookCount; },
     reset() { hookCount = 0; bag.clear(); counts.length = 0; },
   };
-  const client = captured[0].factory((name) => (name === 'react' ? reactStub : {}));
+  // B6：气泡 portal 到 body，测试给 react-dom stub。
+  const reactDomStub = { createPortal: (node, container) => ({ __portal: true, node, container }) };
+  globalThis.document = globalThis.document ?? { body: { __kind: 'body' } };
+  const client = captured[0].factory((name) => {
+    if (name === 'react') return reactStub;
+    if (name === 'react-dom') return reactDomStub;
+    return {};
+  });
   return { client, react: reactStub };
 }
 
@@ -139,6 +146,45 @@ test('B5：closed→open→closed→open 三轮往返不抛（状态切换门，
   assert.equal(errors.some((text) => /hooks/i.test(text)), false, 'hook 相关报错必须判失败');
 });
 
+test('B6：气泡 portal 到 document.body（父节点 === body，不在 slot 容器内）', async () => {
+  const captured = [];
+  const previousWindow = globalThis.window;
+  const previousDocument = globalThis.document;
+  const body = { __kind: 'body' };
+  const store = makeStore();
+  let tree = null;
+  try {
+    globalThis.window = { __ModuleLoader__: { load: (spec) => captured.push(spec) } };
+    globalThis.document = { body };
+    await import(`${pathToFileURL(path.join(process.cwd(), 'lib/client.js')).href}?v=b6p-${seq += 1}`);
+    const reactStub = {
+      Component: class {},
+      createElement: (type, props, ...children) => ({ type, props: { ...(props ?? {}), children } }),
+      useState: (initial) => [initial, () => {}],
+      useEffect: () => {},
+      useRef: (value) => ({ current: value }),
+    };
+    const reactDomStub = { createPortal: (node, container) => ({ __portal: true, node, container }) };
+    const client = captured[0].factory((name) => {
+      if (name === 'react') return reactStub;
+      if (name === 'react-dom') return reactDomStub;
+      return {};
+    });
+    const Bubble = client.createBubble({ snapshot: store.value.snapshot, open: true }, store, { get: () => undefined });
+    // 渲染时 document 必须是 stub —— portal 目标是文档级 body。
+    tree = Bubble({ session: { id: 'session-b6' } });
+  } finally {
+    globalThis.window = previousWindow;
+    globalThis.document = previousDocument;
+  }
+  assert.equal(tree?.__portal, true, '必须走 portal（不能直接渲染在 slot 容器内）');
+  assert.equal(tree.container, body, 'portal 容器必须是 document.body（父节点 === body）');
+  assert.equal(tree.node?.props?.['data-cg-portaled'], '1', 'wrapper 必须带 data-cg-portaled 标记（真机一眼可核）');
+  const panelNode = tree.node?.props?.children?.[0] ?? tree.node?.props?.children;
+  assert.equal(panelNode?.props?.['data-cg-panel'], '1', 'portal 里只挂单个面板节点（data-cg-panel）');
+  assert.equal(panelNode?.props?.role, 'dialog');
+});
+
 test('B5：气泡能关（Esc → open=false）且对话框可点', async () => {
   const { client, react } = await loadStrict();
   const store = makeStore();
@@ -148,7 +194,10 @@ test('B5：气泡能关（Esc → open=false）且对话框可点', async () => 
   const tree = Bubble({ session: { id: 'session-b5' } });
   react.end();
   assert.ok(tree, '打开态必须有树');
-  assert.equal(typeof tree.props.onKeyDown, 'function', '对话框必须有 onKeyDown（Esc 关闭）');
-  tree.props.onKeyDown({ key: 'Escape', stopPropagation() {}, preventDefault() {} });
+  // portal 后顶层是 marker，对话框在 children 里（非 portal 时就是自身）。
+  const childOf = tree.node?.props?.children;
+  const dialogNode = tree.__portal === true ? (Array.isArray(childOf) ? childOf[0] : (childOf ?? tree.node)) : tree;
+  assert.equal(typeof dialogNode.props.onKeyDown, 'function', '对话框必须有 onKeyDown（Esc 关闭）');
+  dialogNode.props.onKeyDown({ key: 'Escape', stopPropagation() {}, preventDefault() {} });
   assert.equal(store.value.open, false, 'Esc 必须关闭气泡');
 });

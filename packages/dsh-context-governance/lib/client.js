@@ -19,6 +19,29 @@ window.__ModuleLoader__.load({
   factory: (require) => {
     console.info('[context-governance] client module materialized');
     const react = require('react');
+    /**
+     * B6（rc.14）：气泡必须 portal 到 `document.body` 再定位。
+     * 在 `conversation.input.overlay` 的容器里用 `position: fixed`，会被宿主祖先链上的
+     * `transform/filter/contain` 劫持成"相对该容器"定位（真机：面板跑右下角、被裁切），
+     * 容器自身若铺满且不透明还会整块盖住对话区。portal 只挪**单个面板节点**，
+     * 不把入口组件整体搬走（`dsh-doc`：不要往 body 追加第二个应用）。
+     */
+    const reactDom = (() => {
+      try { return require('react-dom'); } catch { return null; }
+    })();
+    const portalToBody = (node) => {
+      if (reactDom === null || reactDom === undefined || typeof reactDom.createPortal !== 'function') return null;
+      const doc = globalThis.document ?? null;
+      if (doc === null || doc.body === null || doc.body === undefined) return null;
+      try { return reactDom.createPortal(node, doc.body); } catch { return null; }
+    };
+    let portalWarned = false;
+    /** B6：portal 不可用只告警一次；不渲染（绝不退回 slot 开在错误位置）。 */
+    const warnPortalMissingOnce = () => {
+      if (portalWarned) return;
+      portalWarned = true;
+      try { console.warn('[context-governance] portal unavailable; popover hidden'); } catch { /* ignore */ }
+    };
 
     const ENTRY_ID = 'dsh-context-governance';
     const SNAPSHOT_PATH = '/context-governance/policy-snapshot';
@@ -191,7 +214,36 @@ window.__ModuleLoader__.load({
       left = Math.max(EDGE, Math.min(left, viewportWidth - width - EDGE));
       return { x: left, y: Math.round(top), left, top: Math.round(top), width, height, placement };
     };
-    /** C40 §2：主视图三行（数值 / 状态 / 生效），每行 ≤18 汉字、禁技术字段。 */
+    /**
+     * B6（rc.14）：把"写进 style 的坐标"与"实际渲染出来的矩形"对齐。
+     *
+     * 真机 rc.13 现象：面板出现在窗口右下角、脱离 chip 且被裁切。根因是 `position: fixed` 的
+     * **包含块不是视口**——overlay 宿主的祖先链若有 `transform/filter/contain`，fixed 会退化成
+     * 相对该宿主定位，于是"视口坐标"被叠加到宿主原点上，面板整体偏移并越界。
+     *
+     * 做法：应用一次坐标后量一次真实矩形，把差值反补进 left/top（`measured - intended` 的负值），
+     * 再按视口夹紧到 8px 边距内。差值 ≤1px 视为已对齐（返回 null，避免来回抖动）。
+     */
+    const correctPopoverRect = ({ intended = {}, measured = {}, viewport = {}, margin = 8 } = {}) => {
+      const intendedLeft = Number(intended.left ?? intended.x);
+      const intendedTop = Number(intended.top ?? intended.y);
+      const measuredLeft = Number(measured.left ?? measured.x);
+      const measuredTop = Number(measured.top ?? measured.y);
+      if (![intendedLeft, intendedTop, measuredLeft, measuredTop].every((value) => Number.isFinite(value))) return null;
+      const dx = measuredLeft - intendedLeft;
+      const dy = measuredTop - intendedTop;
+      if (Math.abs(dx) <= 1 && Math.abs(dy) <= 1) return null;
+      const width = Number(measured.width ?? intended.width ?? 320);
+      const height = Number(measured.height ?? intended.height ?? 240);
+      const viewportWidth = Number(viewport.width ?? 0) || 1024;
+      const viewportHeight = Number(viewport.height ?? 0) || 768;
+      let left = Math.round(intendedLeft - dx);
+      let top = Math.round(intendedTop - dy);
+      left = Math.max(margin, Math.min(left, viewportWidth - width - margin));
+      top = Math.max(margin, Math.min(top, viewportHeight - height - margin));
+      return { left, top, x: left, y: top, width, height, placement: intended.placement ?? 'up' };
+    };
+
     const compactBubbleLines = (snapshot = null, { lastAction = null } = {}) => {
       const ready = snapshot !== null && snapshot !== undefined;
       if (!ready) return ['—', '读取中…', ''];
@@ -581,7 +633,15 @@ window.__ModuleLoader__.load({
         'aria-expanded': open ? 'true' : 'false',
         'aria-label': labels.percent,
         style: S.chip,
-        onClick: () => store.set({ open: closeDecision('chip') ? !state.open : true }),
+        onClick: (event) => {
+          // B6：在自己被点击的这一刻量 rect（同文档坐标），供气泡定位；不依赖跨 slot 的 querySelector。
+          let anchor = null;
+          try {
+            const rect = event?.currentTarget?.getBoundingClientRect?.();
+            if (rect) anchor = { x: rect.x ?? rect.left, y: rect.y ?? rect.top, width: rect.width, height: rect.height };
+          } catch { anchor = null; }
+          store.set({ open: closeDecision('chip') ? !state.open : true, ...(anchor === null ? {} : { anchor }) });
+        },
         onKeyDown: (event) => {
           if (event?.key === 'Enter' || event?.key === ' ') { event.preventDefault?.(); store.set({ open: true }); }
           else if (event?.key === 'Escape') { store.set({ open: false }); }
@@ -669,6 +729,7 @@ window.__ModuleLoader__.load({
        * "Rendered more hooks than during the previous render"，整个气泡崩掉（真机 chip/气泡齐哑）。
        */
       const [layout, setLayout] = react.useState(null);
+      const viewportRef = react.useRef(null);
       react.useEffect(() => {
         if (!open) { setLayout(null); return; }
         const doc = globalThis.document ?? null;
@@ -680,12 +741,18 @@ window.__ModuleLoader__.load({
               : { x: rect.x ?? rect.left, y: rect.y ?? rect.top, width: rect.width, height: rect.height };
           } catch { return null; }
         };
-        const chipRect = toRect(doc?.querySelector?.('[data-cg-chip]')) ?? {
-          x: (globalThis.innerWidth ?? 1024) - 120,
-          y: (globalThis.innerHeight ?? 768) - 120,
-          width: 80,
-          height: 26,
-        };
+        // B6：锚点优先用 chip 点击时**自己量到的** rect（同文档坐标，绕开 shadow/宿主差异）；
+        // 拿不到再查 DOM；**都不猜角落**（rc.13 的右下角面板就是猜 (innerWidth-120, innerHeight-120) 的结果）。
+        const anchorFromStore = (() => {
+          try { return store?.get?.()?.anchor ?? null; } catch { return null; }
+        })();
+        const chipRect = (anchorFromStore !== null && Number.isFinite(anchorFromStore?.width)
+          ? anchorFromStore
+          : toRect(doc?.querySelector?.('[data-cg-chip]')));
+        if (chipRect === null) {
+          setLayout(null);
+          return;
+        }
         const inputRect = toRect(doc?.querySelector?.('[data-cg-composer]'))
           ?? toRect(doc?.querySelector?.('textarea'))
           ?? null;
@@ -693,23 +760,69 @@ window.__ModuleLoader__.load({
           width: globalThis.innerWidth ?? doc?.documentElement?.clientWidth ?? 1024,
           height: globalThis.innerHeight ?? doc?.documentElement?.clientHeight ?? 768,
         };
+        viewportRef.current = viewport;
         const lines = compactBubbleLines(view ?? null, { lastAction });
         // 面板高：三行文字 + 输入行 + 按钮行；上限 260（超出内部滚动）。
         const desired = Math.min(260, 96 + lines.length * 22 + 64);
         setLayout(computePopoverRect({ chip: chipRect, panel: { width: 320, height: desired }, viewport, input: inputRect }));
       }, [open, lastAction, view?.at, view?.source]);
+      /**
+       * B6 第二趟：`position: fixed` 的包含块可能不是视口（祖先有 transform/filter/contain），
+       * 于是写进去的视口坐标会被宿主原点再叠加一次 → 面板跑到右下角并被裁。
+       * 这里量一次真实矩形，把差值反补回去（只做一趟，差值 ≤1px 不动作，避免抖动）。
+       */
+      react.useEffect(() => {
+        if (open !== true || layout === null) return;
+        try {
+          const rect = dialogRef.current?.getBoundingClientRect?.();
+          if (rect === undefined || rect === null) return;
+          const corrected = correctPopoverRect({
+            intended: layout,
+            measured: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
+            viewport: viewportRef.current ?? {},
+          });
+          // B6 诊断（只 info 一行，便于下次截图取证）：portal 生效后仍需要 >1px 校正，
+          // 说明还有别的 containing block 在劫持，记下来别当遮羞布。
+          try {
+            console.info('[context-governance] popover-rect ' + JSON.stringify({
+              placement: layout.placement,
+              intended: { left: layout.left, top: layout.top, width: layout.width, height: layout.height },
+              measured: { left: Math.round(rect.left), top: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height) },
+              corrected: corrected === null ? null : { left: corrected.left, top: corrected.top },
+              portaled: true,
+            }));
+          } catch { /* 诊断失败不影响定位 */ }
+          if (corrected !== null) setLayout(corrected);
+        } catch { /* 量不到就保持第一趟结果 */ }
+      }, [layout, open]);
       if (!open) return null;
       const model = bubbleView(view ?? null, { lastAction });
+      // B6：portal 后 wrapper 负责定位（fixed 相对视口），只让面板吃指针事件。
       const popoverStyle = layout === null
         ? { ...S.dialog, visibility: 'hidden' }
         : {
-          ...S.dialog,
           position: 'fixed',
           left: `${layout.left}px`,
           top: `${layout.top}px`,
           width: `${layout.width}px`,
           maxHeight: `${layout.height}px`,
+          // wrapper 透明、且不吃指针：对话区在它下面仍然可见/可滚/可点（B6 第二条判据）。
+          pointerEvents: 'none',
+          background: 'transparent',
+          boxSizing: 'border-box',
+          // 层级用 10000 量级：盖住 composer，但不压住宿主 modal/menu/toast（审核口径）。
+          zIndex: 10000,
+        };
+      const panelStyle = layout === null
+        ? { ...S.dialog, visibility: 'hidden' }
+        : {
+          ...S.dialog,
+          // 面板自身接住点击/输入；高度受 wrapper 限制，超出内部滚动。
+          pointerEvents: 'auto',
+          width: '100%',
+          maxHeight: '100%',
           overflowY: 'auto',
+          boxSizing: 'border-box',
         };
       // C11③：主入口保存写本会话（A2）；无会话标识时明确不可保存，绝不退化写全局。
       const canSaveSession = model.canSave && sessionId !== null;
@@ -747,8 +860,9 @@ window.__ModuleLoader__.load({
         store.set(next ? { snapshot: next } : {});
       };
       const retry = () => { fetchSnapshot(globalThis.fetch, { sessionId }).then((snapshot) => { if (snapshot) store.set({ snapshot }); }); };
-      return h('div', {
-        role: 'dialog', 'aria-modal': 'true', 'aria-label': model.title, ref: dialogRef, style: popoverStyle,
+      const dialogNode = h('div', {
+        role: 'dialog', 'aria-modal': 'true', 'aria-label': model.title,
+        'data-cg-panel': '1', ref: dialogRef, style: panelStyle,
         tabIndex: -1,
         onKeyDown: (event) => { if (event?.key === 'Escape') { event.stopPropagation?.(); close(); } },
         onBlur: (event) => { const next = event?.relatedTarget; if (next !== null && next !== undefined && !event.currentTarget?.contains?.(next)) close(); },
@@ -791,6 +905,19 @@ window.__ModuleLoader__.load({
           h('button', { type: 'button', className: 'cg-at-settings-link', style: S.button, onClick: () => { try { ctx?.openSettings?.(); } catch { /* ignore */ } } }, labels.openSettings),
         ),
       );
+      // B6：portal 到 body 后 fixed 的包含块才是视口。只 portal **这一个面板节点**（不搬入口组件）。
+      // 拿不到 react-dom → **不渲染 + warn**（宁可不开，也绝不退回 slot 里开在错位置）。
+      const wrapper = h('div', {
+        'data-cg-popover': '1',
+        'data-cg-portaled': '1',
+        style: popoverStyle,
+      }, dialogNode);
+      const portaled = portalToBody(wrapper);
+      if (portaled === null) {
+        warnPortalMissingOnce();
+        return null;
+      }
+      return portaled;
     };
 
     /** 设置页卡片：**只写全局 plugin 层**（C11③/C28），与气泡的会话级写入明确分开。 */
@@ -919,6 +1046,7 @@ window.__ModuleLoader__.load({
       writeLayerTextFor,
       displaySourceFor,
       computePopoverRect,
+      correctPopoverRect,
       compactBubbleLines,
       renderBubbleDetail,
       stateAfterReset,

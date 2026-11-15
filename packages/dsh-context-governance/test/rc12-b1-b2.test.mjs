@@ -29,9 +29,14 @@ async function loadClient() {
     useEffect: () => {},
     useRef: () => ({ current: null }),
   };
+  // B6：气泡会 portal 到 document.body，测试提供 react-dom stub（createPortal 返回可断言的结构）。
+  const reactDomStub = { createPortal: (node, container) => ({ __portal: true, node, container }) };
+  const previousDocument = globalThis.document;
+  globalThis.document = previousDocument ?? { body: { __kind: 'body' } };
   return captured[0].factory((name) => {
-    assert.equal(name, 'react');
-    return reactStub;
+    if (name === 'react') return reactStub;
+    if (name === 'react-dom') return reactDomStub;
+    return {};
   });
 }
 
@@ -114,6 +119,37 @@ test('C40：定位函数三档视口——向上默认/翻下/贴边/不遮输�
   const flip = layout({ x: 400, y: 60, width: 80, height: 26 }, { x: 100, y: 620, width: 600, height: 36 }, { width: 900, height: 700 });
   assert.equal(flip.placement, 'down', '上方不足必须翻下');
   assert.equal(flip.top >= 620 + 36 + 4, true, '下弹顶边必须 ≥ 输入框底 + 4');
+});
+
+test('B6：定位第二趟校正——宿主偏移/包含块偏差被反补，并夹紧在视口内', async () => {
+  const client = await loadClient();
+  const viewport = { width: 900, height: 594 };
+  const intended = { left: 400, top: 300, width: 320, height: 150, placement: 'up' };
+  // 已对齐：差值 ≤1px 不动作（避免抖动）
+  assert.equal(client.correctPopoverRect({
+    intended, measured: { left: 400.4, top: 300.6, width: 320, height: 150 }, viewport,
+  }), null);
+  // 宿主原点被叠加（真机 rc.13：面板跑去右下角）→ 反补差值：写 100/180，叠加宿主 +300/+120 后正好落回 400/300
+  const shifted = client.correctPopoverRect({
+    intended, measured: { left: 700, top: 420, width: 320, height: 150 }, viewport,
+  });
+  assert.equal(shifted.left, 100, '横向必须反补 (700-400)=300');
+  assert.equal(shifted.top, 180, '纵向必须反补 (420-300)=120');
+  // 反补后越界 → 夹紧到 8px 边距内
+  const clamped = client.correctPopoverRect({
+    intended: { left: 880, top: 580, width: 320, height: 150, placement: 'up' },
+    measured: { left: 880, top: 580, width: 320, height: 150 },
+    viewport,
+  });
+  assert.equal(clamped === null, true, '完全对齐时无动作');
+  const bad = client.correctPopoverRect({
+    intended: { left: 850, top: 560, width: 320, height: 150, placement: 'up' },
+    measured: { left: 900, top: 600, width: 320, height: 150 },
+    viewport,
+  });
+  assert.equal(bad.left + 320 <= 900 - 8, true, '右侧必须留 8px');
+  assert.equal(bad.top + 150 <= 594 - 8, true, '下方必须留 8px');
+  assert.equal(bad.left >= 8 && bad.top >= 8, true, '左上必须留 8px');
 });
 
 test('B2：reset 成功后状态必须回落到全局口径（值/来源/写层），输入框不留旧值', async () => {
