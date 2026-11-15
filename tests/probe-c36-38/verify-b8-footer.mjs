@@ -121,6 +121,18 @@ check('B9-geometry-clamped-and-no-composer-overlap',
   && rect.top + rect.height <= 594 - 8 && rect.left + rect.width <= 900 - 8
   && !(overlapX && overlapY),
   `rect=${JSON.stringify(rect)}（高 ≤260、四边 ≥8、不压 composer）`);
+// ③-b 低内容场景（本次漏掉的场景）：内容区 CSS 保底 96 时，高度必须**以下限 228 出图**，
+// 否则面板 172 装不下 96+88+44 → wrapper overflow:hidden 会把 footer 裁掉（B8 复发）。
+const floorHeight = client.computePopoverHeight({ bodyScroll: 40, footerHeight: 88, chrome: 44 });
+const floorNeed = 96 + 88 + 44;
+check('B9-low-content-floor', floorHeight >= floorNeed && floorHeight <= 260,
+  `height=${floorHeight}（内容少时也必须 ≥ ${floorNeed}，否则 footer 被裁；且 ≤260）`);
+const tallHeight = client.computePopoverHeight({ bodyScroll: 900, footerHeight: 88, chrome: 44 });
+check('B9-high-content-capped', tallHeight === 260, `height=${tallHeight}（内容超高封顶 260，内容区滚动）`);
+check('B9-footer-inside-panel',
+  // 低内容/高内容两种情形，footer 底边都不得越过面板底边（算术等价：panelH ≥ 96+88+44 或内容滚动）
+  floorHeight >= 96 + 88 + 44 && tallHeight >= 96 + 88 + 44,
+  `footer.bottom ≤ panel.bottom 等价条件（两情形均 ≥ ${96 + 88 + 44}）`);
 check('B9-layout-budget', 96 + 88 + 44 <= 260,
   '96(内容) + 88(footer) + 44(chrome) = 228 ≤ 260，两排操作区与内容区可共存');
 

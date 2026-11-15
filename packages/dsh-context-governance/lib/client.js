@@ -506,7 +506,21 @@ window.__ModuleLoader__.load({
         ...(entry === 'global' && sessionCustomized ? [labels.overrideNote ?? LABELS.zh.overrideNote] : []),
       ].join('\n');
     };
+    /**
+     * B9（rc.16）：气泡高度 = 实测内容 + 实测 chrome，并**带下限**。
+     *
+     * rc.15 的坑：`desired` 只有上限 `min(260, …)` 没有下限；而内容区 CSS `minHeight:96` 是硬保底 →
+     * 内容很少时 `desired=172 < 96+88+44=228`，面板装不下 → wrapper `overflow:hidden` 把 footer 裁掉
+     * （B8 在"内容少"场景复发）。下限必须把**内容区最小高度**算进去：`floor = 96 + footer + chrome`。
+     */
+    const computePopoverHeight = ({ bodyScroll = 0, footerHeight = 0, chrome = 44, minContent = 96, maxHeight = 260 } = {}) => {
+      const content = Math.max(Number(bodyScroll) || 0, minContent);
+      const wanted = Math.ceil(content + (Number(footerHeight) || 0) + (Number(chrome) || 0));
+      // 下限 = 内容区最小高度 + footer + chrome；上限 260。两者冲突时（视口极矮）宁可内容区滚动。
+      return Math.min(maxHeight, wanted);
+    };
     /** C40 §2：**主视图**（气泡）= 至多三行短句，禁技术字段；细节走 `renderBubbleDetail`。 */
+
     const renderBubbleText = (snapshot = {}, labels = LABELS.zh, options = {}) => (
       compactBubbleLines(snapshot, options).join('\n')
     );
@@ -834,7 +848,8 @@ window.__ModuleLoader__.load({
                 + px(cs.rowGap === 'normal' ? cs.gap : cs.rowGap);
             }
           } catch { /* 拿不到 computed 就用兜底 */ }
-          const desired = Math.min(260, Math.ceil(bodyScroll + footerHeight + chrome));
+          // B9：走带**下限**的统一算法（内容区 96 保底 + footer + chrome），避免内容少时裁掉 footer。
+          const desired = computePopoverHeight({ bodyScroll, footerHeight, chrome });
           if (Math.abs(desired - layout.height) <= 1) return;
           const chip = chipRectRef.current;
           const viewport = viewportRef.current;
@@ -1114,6 +1129,7 @@ window.__ModuleLoader__.load({
       writeLayerTextFor,
       displaySourceFor,
       computePopoverRect,
+      computePopoverHeight,
       correctPopoverRect,
       compactBubbleLines,
       renderBubbleDetail,
