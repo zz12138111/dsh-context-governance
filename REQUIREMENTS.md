@@ -1,4 +1,5 @@
 # DSH 插件开发 · 需求
+> **窗口证据（R1 配套，写死）**：`/cg` 命令存在 + `/cg status` 原文 + **`dsh plugin list`（或 GUI 插件清单）原文/截图**三方留档——GUI 下插件被跳过是**无声**的，没有清单证据就不算"加载过"。
 
 > 由「需求」会话维护；用户直接提需求也可以。一条需求一个编号 `REQ-YYYYMMDD-NN`。
 > 每条要能让开发直接开工：目标 / 边界 / 验收标准 / 依赖 / 优先级。
@@ -414,7 +415,7 @@
 |---|---|---|---|---|
 | `compact.at` | 真实占窗口比例到多少就压 | `0.60` | `0.20` ~ dynamic native | 是 |
 | `compact.early` | 允许提前压 | `true` | bool | 是 |
-| `compact.early.armed` | 允许**真实执行**提前压（0.2.4 启用方案；项目层出现不生效） | `true`（来源 `default`） | bool | **否（用 `/cg compact arm\|disarm`）** |
+| `compact.early.armed` | 允许**真实执行**提前压（0.2.4 启用方案；项目模板出现不生效） | `true`（来源 `default`） | bool | **否（用 `/cg compact arm\|disarm`）** |
 | `compact.cooldownMin` | 两次压缩最小间隔 | `10` 分钟 | ≥1 | 是 |
 | `compact.minDeltaTokens` | 距上次压缩至少新增 token | `20000` | ≥0 | 是 |
 | `compact.estimateSafety` | 估算放大系数（专家项） | `1.35` | `1.0–1.6` | **否**（仅配置） |
@@ -442,7 +443,7 @@
 | B5 | 会话层可设键 | **实现实采** `SESSION_KEYS`（`policy.js:26`）：`compact.at` / `compact.early` / `compact.cooldownMin` / `compact.minDeltaTokens` / `cost.remainingTurns` / `header.enabled`；`cg-status.js:290` 对非 `SESSION_KEYS` 按「未知键」拒绝。M2 参数表另写 `reinject.maxChars`/`maxLines` 为「是」，但**实现未支持**（不在 `SESSION_KEYS`）；`compact.estimateSafety` / `compact.lowThresholdAck` 仅配置文件 | 已录（按实现实采更正） |
 | C5 | profile 打标入口 | **已定（需求侧判定 D7）**：入口形态**由实现定**（命令 / 会话元数据 / 配置键均可），需求只约束效果——按会话隔离、`/cg status` 显示本会话 profile 与来源、设置立即生效（草案 `R-PROFILE-2`，草案未生效、用户可推翻） | **已定（需求侧）** |
 | D4 | 配置级关闭 | `compact.early.armed=false`（加载后全局）；与会话级（A5）、策略级（`compact.early=false`）构成三层（见补定义 E5） | 已录 |
-| E1 | `compact.early.armed` 参数 | 默认 `true`、来源 `default`；项目层出现一律不生效（忽略 + `policy-invalid`，不清空整层）（`docs/1.0-状态定义-v1.md:39,65`） | 已录（参数表已加行） |
+| E1 | `compact.early.armed` 参数 | 默认 `true`、来源 `default`；项目模板出现一律不生效（忽略 + `policy-invalid`，不清空整层）（`docs/1.0-状态定义-v1.md:39,65`） | 已录（参数表已加行） |
 | E2 | 「本项目」判定 | **已定（2026-10-26 用户拍板 B：全局纳管；2026-11-15 撤回 3A）**：**每个会话按自身 cwd/分组判定项目默认**（不再有「单一本项目」/「外部会话」）；`.git` **不决定是否受治**；cwd 不可用 → `root-unresolved`，**仍受治并审计**。根来源沿用 D9=A | **已定（每会话根）** |
 | E4 | 默认值调整规则 | **已定（用户 2026-10-26 拍 A）**：任何**内置默认值**变更须记 **`DECISIONS` 编号 + Release notes 一句话**；适用面见下「默认值变更规则」 | **已定** |
 
@@ -451,8 +452,9 @@
 1. **R-SCOPE（平台级会话覆盖；用户 2026-10-26 拍板 B，2026-11-15 撤回 3A 豁免）**
    - **插件纳管所有可观测会话**：存在 session id 即纳入**治理**（压缩策略、保护/回注、审计与成本账本）；**cwd 是否为 `.git` 仓库不影响受治**；记忆按归属写入（见 root 规则）；**不存在「外部会话」概念**（`foreign-session` 枚举删除）。
    - **未纳管/降级仅限以下情形（均须可观测）**：①无 session id（审计 `no-session-id`）；②cwd 不可读/不可写/离线 → **降级但仍受治**：压缩与审计照常，记忆/分组标 `root-unresolved`（审计事件 `root-unresolved{sessionId,cwd,reason}`，每会话每 cycle ≥1 条、同 cycle 去重，不参与 `compaction-loss`）；**A2 每会话压缩比照常保存/重启保留（键=session id，不依赖 root）**；③显式关闭（`out-of-scope`，用户/配置，不干预+审计）；④宿主能力缺失（`observe-only` 降级：仍纳入、只观不干预、仍写压缩事实/成本）。
-   - **层级与来源审计**：取值顺序 **A1（运行时）> A2（会话持久）> cwd（项目）> plugin（全局）**；`/cg status` 与审计事件 `policy-resolved` 必须带 `source`（`session:A1`/`session:A2`/`project`/`plugin`）与最终 `at`；多层命中时以该字段可核。
+   - **层级与来源审计**：取值顺序 **A1（运行时）> A2（会话持久）> 项目模板（可选，`.cg-policy.json`）> plugin（全局）**；`/cg status` 与审计事件 `policy-resolved` 必须带 `source`（`session:A1`/`session:A2`/`project`/`plugin`）与最终 `at`；多层命中时以该字段可核。
    - **A2 落盘**：键=完整 session id，值含 `at`/`source`/`updatedAt`/`version`；文件在 `~/.dsh/context-governance/` 下（由开发定，不进项目根）；重启读回、不清空。
+   - **项目模板（D，2026-11-15 用户批）**：默认**没有项目层**；仅当 `<root>/.cg-policy.json` 存在且**显式写了该字段**才生效，**不得**任何隐性回退读取；`/cg status` 只读显示「项目模板 `<值>`（来源 `.cg-policy.json`）」，无文件显示「无项目模板」；会话 A1/A2 永远优先；文件带 schema 版本，校验失败 `policy-invalid(source=project)` 且**不生效**；创建/清除用显式入口并审计 `project-template-set`/`project-template-cleared`。
    - **不得存在「被压缩但无保护、无回注、无成本」的纳管会话**。
    - 凡观测到真实压缩（含宿主原生压缩），成本账本必须有对应记录；取不到数值写 `null` 并标 `unknown`，**不得整行缺失**；该类记录**只含压缩事实与用量**。
 2. **R-AUDIT（审计枚举）**：`early-forced.compaction` 只能取**本次触发**的事实结果，枚举 `committed` / `skipped` / `failed` / `unknown`；**无 fresh report 时必须写 `unknown`**，不得沿用上一轮报告、不得用默认值补位；`unknown` 不得被 `/cg status` 或账本渲染为成功。
@@ -467,7 +469,7 @@
 
 - **适用面（「默认值」= 插件内置层的默认，不是用户自己配的值）**：`compact.at` / `compact.early` / `compact.early.armed` / `compact.cooldownMin` / `compact.minDeltaTokens` / `compact.estimateSafety` / `compact.lowThresholdAck` / `cost.remainingTurns` / `header.enabled` / `logFile` / `projectRoot` / `memoryRoot` 等内置默认值。
 - **变更要求**：① 记 **`DECISIONS` 编号**（开发账本）；② **Release notes 写一句用户可见变化**（改了什么、影响谁）。**不记录不得改默认**。
-- **不适用**：用户自己设置的配置值（会话 / 插件配置 / 项目层）不需要记 `DECISIONS`。
+- **不适用**：用户自己设置的配置值（会话 / 插件配置 / 项目模板）不需要记 `DECISIONS`。
 
 **多根通用性（用户 2026-10-26 拍板；收敛 23 条通用性缺口）**
 
@@ -476,7 +478,7 @@
 3. **跨根查询（A）**：`mem_query` **默认只查本会话根**；**跨根查询 1.0 不做**（后续能力，**明确不做**，不留空）。
 4. **根限额（A）**：**不设硬上限**；根数超阈值（默认 16）**只告警、不拒绝**。
 5. **窗口口径**：`#lastSession` 取**本会话所属根内**最近会话，**跨根不混用**；**无窗口事件的会话（headless / CLI）→ `native=unknown`，不提前压**。
-6. **项目层配置**：**每个纳管根各自读取** `<root>/.cg-policy.json`，互不影响。
+6. **项目模板配置（可选）**：**每个纳管根各自读取** `<root>/.cg-policy.json`（仅显式存在时生效、默认没有），互不影响；无效文件不生效。
 7. **聚合维度**：记忆/账本聚合使用**根标识（路径 hash）**；`project` 字段**仅作展示名**、不用于区分（避免同名目录撞名）。
 8. **header**：按**当前会话根**取记忆；子会话按第 2 条（不写记忆、不注入）。
 9. **根判定（2026-11-15 改）**：root 仅用于记忆/审计归属与项目默认值分组——cwd **realpath** 归一并大小写归一；**不要求 `.git`**；符号链接按 realpath；UNC 可用则纳管；**空 cwd 的非子会话 → `root-unresolved`（仍受治、审计，不静默）**。
@@ -513,7 +515,7 @@
 
 1. **发布物 0 绝对路径**：发布物（包 / 配置 / 文档 / 示例）**不得包含本机绝对路径**；`projectRoot` / `memoryRoot` / `logFile` 在包内必须为**空或相对值**。
 2. **`/cg status` 显示本会话根与来源 + 全部纳管根视图**：多根模型下显示**本会话**的项目根与来源（`config` / `persisted` / `inferred`）；**无根时显示 `project-root: unresolved (root-unresolved)`**；同时提供**全部纳管根视图**（根列表 + 各根记忆条数 / 审计末行，见「多根通用性」第 10 条）。
-3. **D9 决策记录**：发布包默认 `projectRoot` 为**空**；首次需要时按会话 cwd 的 **realpath 归一**建立分组根（**不要求 `.git`**），首见持久化，**重启沿用、不重推**；该结论须写入 **Release notes 与安装文档**。
+3. **D9 决策记录**：发布包默认 `projectRoot` 为**空**；首次需要时按会话 cwd 的 **realpath 归一**建立分组根（**不要求 `.git`**），首见持久化，**重启沿用、不重推**；`.cg-policy.json` 属**项目模板**（只影响压缩阈值，不参与根判定）；该结论须写入 **Release notes 与安装文档**。
 4. **P2 关闭**：D9=A 下不存在「未配置启动引导」需求（未配置即默认形态），原 P2 卡**随本决定关闭**。
 
 ### 会话特点与偏好
@@ -543,18 +545,18 @@
 
 **任一失败都要先报用户与 00，再改范围，不得自行降级。**
 
-### 项目层安全口径（2026-10-25 定，P2 潜在问题）
+### 项目模板安全口径（显式、可选；2026-10-25 定，2026-11-15 改）
 
-项目文件 `<root>/.cg-policy.json` 是**仓库可控输入，按不可信处理**；**每个纳管根各自读取自己的文件，互不影响**（见「多根通用性」第 6 条）：
+项目模板文件 `<root>/.cg-policy.json` 是**仓库可控输入，按不可信处理**；**默认没有该层**，仅当文件存在且**显式写了该字段**才生效，**不得**隐性回退读取；**每个纳管根各自读取自己的文件，互不影响**（见「多根通用性」第 6 条）：
 
-- **P-A：禁止项目层设置 `compact.lowThresholdAck`**——出现即拒绝整层（该确认只允许在会话层由用户本人显式操作）；
-- **P-A：`compact.estimateSafety` 不开放给项目层**——仅插件配置文件可设，项目层出现即拒（单列，不进项目白名单）；
-- **P-C：项目层 `compact.at` 下限 `0.45`**——低于即拒绝该层；上限仍为动态 `native`；
-- **拒绝语义**：**整层拒绝**（不逐键降级）+ `policy-invalid` 审计（`source=project`、拒绝键、原因），并回退到下一层生效；
-  - **例外（`compact.early.armed`，2026-10-26 审核 §4.6 定论）**：项目层出现该键（无论 `true`/`false`）**只忽略该键** + `policy-invalid`，**不清空整层**、同层其它合法键照常生效；既不能开也不能关。理由：避免恶意仓库用一个越权键使整层合法配置失效（拒绝服务）。
+- **P-A：禁止项目模板设置 `compact.lowThresholdAck`**——出现即拒绝整层（该确认只允许在会话层由用户本人显式操作）；
+- **P-A：`compact.estimateSafety` 不开放给项目模板**——仅插件配置文件可设，模板出现即拒（单列，不进模板白名单）；
+- **P-C：项目模板 `compact.at` 下限 `0.45`**——低于即拒绝该模板层；上限仍为动态 `native`；模板文件必须带 schema 版本，缺/错版本同样不生效；
+- **拒绝语义**：**模板整层不生效**（不逐键降级）+ `policy-invalid(source=project)` 审计（拒绝键、原因），回退到 plugin 层生效；**不执行文件里的任何内容**；
+  - **例外（`compact.early.armed`，2026-10-26 审核 §4.6 定论）**：项目模板出现该键（无论 `true`/`false`）**只忽略该键** + `policy-invalid`，**不清空整层**、同层其它合法键照常生效；既不能开也不能关。理由：避免恶意仓库用一个越权键使整层合法配置失效（拒绝服务）。
 - **可见性**：`/cg status` 必须显示“被拒的层与原因”，不能只写 audit（用户只看 status）；
-- **不采用 B**：不加 `policy.allowProjectLayer` 开关，安全口径默认生效、不依赖用户手动开启；
-- 恶意项目文件不得造成：阈值低于 0.45、自盖 `<0.30` 确认、静默降级。
+- **不采用开关式豁免**：模板必须显式创建（默认没有），不依赖开关；安全口径默认生效；
+- 恶意模板文件不得造成：阈值低于 0.45、自盖 `<0.30` 确认、静默降级或隐性生效。
 
 ### 窗口 W 的选取与校验口径（G4 结论，`DEC-20261025-65`）
 
@@ -672,7 +674,7 @@
 | **C2** | 写操作不得越出工作区 | `realpath` 解析后不在工作区根下 | 拒绝，提示真实路径 |
 | **C3** | git 危险动作 | `push --force`、`filter-branch`、改 remote、tag 发布 | 直接拒绝 |
 
-- **白名单**：内置约 25 项（构建产物/测试覆盖/缓存虚拟环境/日志/编辑器杂项）+ 项目**不可**追加；追加只允许**插件配置/会话层**，且**只做并集（Union）**、禁止删除/覆盖内置项；项目层出现 `checks.whitelist` → **整层拒绝** + `policy-invalid`。
+- **白名单**：内置约 25 项（构建产物/测试覆盖/缓存虚拟环境/日志/编辑器杂项）+ 项目**不可**追加；追加只允许**插件配置/会话层**，且**只做并集（Union）**、禁止删除/覆盖内置项；项目模板出现 `checks.whitelist` → **整模板不生效** + `policy-invalid`。
 - 配置只引用检查项，不写脚本；交互复用宿主权限/审批。
 - **门禁 G-M3-1**：pre-execute 能否拦截/否决；**不能 → 不提供该功能**。
 
@@ -841,12 +843,12 @@
 - **状态**：**1.1 候选 · 待排期 · 无 owner**（2026-11-14 用户定：与 DSH 宿主升级**合入 1.1.0**；不属 1.0.x）。
 - **要解决的两个体验问题**（不是“一定要滑块”）：
   1. **不直观**：看阈值只能靠 `/cg status` 或翻审计，用户不知道 `0.65` 意味着什么；
-  2. **调节麻烦**：只能敲 `/cg set compact.at=…`，还要记取值下限、项目层/会话层、重启失效等约束。
+  2. **调节麻烦**：只能敲 `/cg set compact.at=…`，还要记取值下限、项目模板/会话层、重启失效等约束。
 - **形态不限定为 UI 控件**：**数字输入优先**（设置页里的数字字段即可），**滑块不是目标**；宿主将来给 range 控件再升级。
 - **必须一起讨论/落进条目的内容**：
   1. **展示当前生效值 + 来源层**（`builtin`/`profile`/`plugin`/`project`/`session:A1`/`session:A2`），并**按层区分生命期**：A1=「本会话·临时（重启失效）」；A2=「本会话·已保存（重启保留）」；project/plugin/profile/builtin=「保存后生效、重启仍有效」；**不得用一句常量盖所有来源**（见 C32）。
   2. **量纲提示**：`0.65` = **用掉窗口 65% 触发压缩**，**不是“窗口 65%”**——避免与 WorkBuddy 的 `context_window`（窗口申请值）混淆；
-  3. **安全边界不因 UI 放开**：`<0.30` 需 `lowThresholdAck`、**项目层下限 0.45**、**项目层禁 `armed`**、**A1 重启失效、A2 重启保留**；
+  3. **安全边界不因 UI 放开**：`<0.30` 需 `lowThresholdAck`、**项目模板下限 0.45**、**项目模板禁 `armed`**、**A1 重启失效、A2 重启保留**；
   4. **改动落在哪一层**（会话 / 项目 / 配置）要**可选且可见**，不能只改一个说不清哪层生效的值。
 - **依赖/现状**：DSH 有官方设置面（`ctx.settings` + Schemastery `Volatile` 自动表单；实例 `dsh-context-compressor`）；当前插件**无 `Config` schema、无 `dsh.client`**（`src/index.js:9` 注释「Schemastery 表单留到 T3」）。
 - **参考（结论已按“数字输入优先”收敛）**：`analysis/req-20261025-12/WorkBuddy-上下文长度-对比与UI滑块-建议-20261027.md`。
@@ -1094,7 +1096,7 @@ C 的初步证据：启动后本项目根 `audit.jsonl` 只有 `capability@ready
 > **入口形态定稿 = A（2026-11-14 00 定；用户唯一约束「要友好、别藏在设置页」）**：调查见 `analysis/req-20261114-02/D2-入口形态调查-20261114.md`（证据 `d2-evidence2/`）。
 > - **主入口**：`conversation.composer.dock`（**输入框下方统计行**，现有 `activity`/`usage` 两条即是）注册一个条目，显示 **`压 65%`** 形态的当前有效百分比。
 > - **展开**：点击 → `conversation.input.overlay` 气泡（以输入框为锚），内容 = ①百分比数字输入（预填当前值）②当前生效值 ③来源层 ④生效时点 ⑤"打开设置页"兜底链接。
-> - **写入**：`configForms.get('dsh-context-governance').set('policy.at', ratio)`（plugin 层，配置 reload 后生效）；**拒绝理由必须与 `/cg set` 同源**（下限 20%、`<30%` 需 `lowThresholdAck`、项目层 45%、`native−0.02` 上限）；保存成功后气泡与 chip 同步刷新。
+> - **写入**：`configForms.get('dsh-context-governance').set('policy.at', ratio)`（plugin 层，配置 reload 后生效）；**拒绝理由必须与 `/cg set` 同源**（下限 20%、`<30%` 需 `lowThresholdAck`、项目模板 45%、`native−0.02` 上限）；保存成功后气泡与 chip 同步刷新。
 > - **兜底**：`20bf20d` 的 `settings.section` **保留不废**（同一份数据、同一写入口）。
 > - **禁止**：不改 host 侧、不加新路由、不引打包器/依赖、不动 `package.json.files` 语义（除 A 已有内容）；**只改 `lib/client.js` + 测试/文档**。
 > - **降级鲁棒**：快照取不到或 slot 不存在时，chip 显示 `压 —`、控制台不抛错、设置页仍可用。
@@ -1111,7 +1113,7 @@ C 的初步证据：启动后本项目根 `audit.jsonl` 只有 `capability@ready
 - **形态**：**数字输入框优先，不做滑块**（宿主将来给 range 控件再升级）；只暴露 **`compact.at`** 一个参数（其它键仍走 `/cg set` / 配置文件，本单不扩面板）。
 - **量纲**：**UI 以百分比呈现（0–100）**——填 `55` = 窗口用掉 **55%** 就触发压缩；内部仍存比例 `0.55`（0–1），**换算只在 UI 层**，写入后各层/日志/审计里仍是 `0.55`。UI 上必须有量纲提示，防止被读成"窗口缩到 55%"。
 - **必须显示**：**当前生效值 + 来源层**（`builtin`/`profile`/`plugin`/`project`/`session`），并标明**「本会话有效」**还是**「重启后失效」**（会话级 `/cg set` 只存进程内存，见 `src/commands/cg-status.js:407` 一带）。
-- **校验复用现有规则，UI 不得另立口径**：绝对下限 `AT_MIN=0.20`；`<0.30` 需配置文件 `compact.lowThresholdAck=true`；项目层下限 `PROJECT_AT_MIN=0.45`；上限 = 动态 `native − 0.02`（`native` 不可计算时拒绝）；越界必须给**与 `/cg set` 一致的人话原因**，不许静默改值。
+- **校验复用现有规则，UI 不得另立口径**：绝对下限 `AT_MIN=0.20`；`<0.30` 需配置文件 `compact.lowThresholdAck=true`；项目模板下限 `PROJECT_AT_MIN=0.45`；上限 = 动态 `native − 0.02`（`native` 不可计算时拒绝）；越界必须给**与 `/cg set` 一致的人话原因**，不许静默改值。
 - **层可见/可选（2026-11-15 用户裁定 B 后定稿）**：**主路径 = 本会话（持久会话层，重启后保留）**；设置页保留「保存为全局默认（plugin 层，影响所有会话）」并显式标注"全局"。**两个"会话级"必须分开写死、不得混用**：
   - **A1 运行时会话层** = `/cg set` 写入，进程内存，**重启失效**；
   - **A2 持久会话层** = UI「保存」写入，**按会话独立落盘，重启后仍保留**；
@@ -1132,7 +1134,7 @@ C 的初步证据：启动后本项目根 `audit.jsonl` 只有 `capability@ready
 | U1 | 打开 | 点 chip 打开气泡；**焦点自动落在输入框并全选当前值**；气泡**不得遮挡输入框**（向上/侧向避让） |
 | U2 | 层级与排版 | 自上而下：**标题**（"压缩触发阈值"，14px/600）→ **当前生效值**（20px/600，如 `60%`）→ **元信息三行**（12px，弱色：来源层 / 生命周期 / 写入层）→ **输入行**（数字框 + 右侧 `%` 单位）→ **错误行（占位常驻）** → **操作行**（主按钮"保存" + 次按钮"恢复默认 60%"）。块间距 8px、块内 4px，圆角统一 |
 | U3 | 输入 | 只收数字；**用户不用输 `%`**；支持直接键入/退格/全选替换；全角数字归一化为半角；粘贴含 `%`/空格自动清洗；**不得出现 spinner 以外的手写步进控件** |
-| U4 | 即时反馈 | 键入时不弹错；**失焦或点保存时校验**；非法值（空/非数字/<20/超 native−0.02/项目层 <45）→ **输入框红边 + 错误行一行红字**，文案与 `/cg set` 同源；**非法值不得发保存请求** |
+| U4 | 即时反馈 | 键入时不弹错；**失焦或点保存时校验**；非法值（空/非数字/<20/超 native−0.02/项目模板 <45）→ **输入框红边 + 错误行一行红字**，文案与 `/cg set` 同源；**非法值不得发保存请求** |
 | U5 | 保存反馈 | 成功：按钮短暂变"已保存"（≥1.5s）+ **chip 与气泡数值立即随动**；失败：错误行显示原因，**保留用户输入**不清空 |
 | U6 | 恢复默认 | "恢复默认"的默认值**必须由宿主提供**（快照增加 `defaultAt`，来自 `POLICY_DEFAULTS['compact.at']`），**禁止客户端写死**；只有当快照缺该字段时才 fallback `0.60` 并记录 warn。恢复默认**只填值不直接保存**；填后仍需点"保存" |
 | U7 | 关闭 | `Esc` 关闭、**再次点 chip** 关闭、**点气泡外部**关闭。**"外部"包含空白背景区**——实现必须用 `document/window` 级 `pointerdown`（capture）判定点击是否在气泡内，**不得只靠 `onBlur` + `relatedTarget`**（点纯背景时 `relatedTarget=null`，会漏关）；关闭后不保留未保存值（重开回到当前生效值） |
@@ -1176,26 +1178,27 @@ C 的初步证据：启动后本项目根 `audit.jsonl` 只有 `capability@ready
 | **R5** | 双插件共存不重复触发 | C | 真机窗口回归（`dsh-context@0.84.1` + 本插件同时在场） | 一次压缩只产生**一轮**保护写入/回注（按审计行计数：同 cycle 不出现双份 `memory-store-open`/`header-injected`）；升级前后各取一次基线对比 |
 | **R6** | 单写者锁不误判 | C | 同 G 根多会话并发 | `memory-store-readonly writer-lock:<pid>` **属设计内**（只读不写、不抢锁），**不得记缺陷**；真机能写回那次须成功 |
 | **B1** | 标题可读性主观 | B | 用户看真机窗口输出 | 用户判断（不计 A，不当阻断项） |
-| **C8** | D2 显示生效值+来源层+生命周期 | A | 渲染/组件单测 + 文案断言 | 界面必须同时给出：①**当前生效值**（百分比与比例可换算）②**来源层**（`builtin`/`profile`/`plugin`/`project`/`session:A1`/`session:A2`）③**生命周期按层**：`session:A1`→「本会话·临时（重启失效）」；`session:A2`→「本会话·已保存（重启保留）」；`project`→「项目默认」；`plugin`→「全局（影响所有会话）」；`profile`/`builtin` 按持久层文案。**用户可读标签唯一映射、不得混用别名；命令输出采用「键名 + 中文」并列（如 `session:A2`（本会话·已保存（重启保留）））**，全文写死这一种。 |
-| **C9** | D2 百分比换算与边界 | A | 单测（UI 层换算函数 + 校验） | `55 → 0.55`、`20 → 0.20` 通过；`19` 被拒；`<30` 且无 `lowThresholdAck` 被拒；项目层写 `<45` 被拒；`> native−0.02` 被拒；拒绝文案与 `/cg set` 一致 |
+| **C8** | D2 显示生效值+来源层+生命周期 | A | 渲染/组件单测 + 文案断言 | 界面必须同时给出：①**当前生效值**（百分比与比例可换算）②**来源层**（`builtin`/`profile`/`plugin`/`project`/`session:A1`/`session:A2`）③**生命周期按层**：`session:A1`→「本会话·临时（重启失效）」；`session:A2`→「本会话·已保存（重启保留）」；`project`→「项目模板（可选）」；`plugin`→「全局（影响所有会话）」；`profile`/`builtin` 按持久层文案。**用户可读标签唯一映射、不得混用别名；命令输出采用「键名 + 中文」并列（如 `session:A2`（本会话·已保存（重启保留）））**，全文写死这一种。 |
+| **C9** | D2 百分比换算与边界 | A | 单测（UI 层换算函数 + 校验） | `55 → 0.55`、`20 → 0.20` 通过；`19` 被拒；`<30` 且无 `lowThresholdAck` 被拒；项目模板写 `<45` 被拒；`> native−0.02` 被拒；拒绝文案与 `/cg set` 一致 |
 | **C10** | D2 不绕过安全边界 | A | 单测 + 写入口审查 | UI 写入必须经现有 `validateLayer` 同一路径；`compact.estimateSafety`/`compact.lowThresholdAck`/`armed` **在 UI 中不可写**；不存在"UI 特批"分支 |
 | **C24** | A2 持久会话层：写入与读回（2026-11-15 用户裁定 B 后重写） | A | 单测 + `/cg status` 核 | UI 保存写 **A2（持久会话层）**，落盘后该会话显示 `compact.at=<新值> (source=session:A2)`；**plugin 层/全局值不变**；另一会话读回**不受影响**；**重启后本会话仍为该值** |
 | **C25** | 会话隔离（跨重启） | A+C | 两会话 A/B + 重启前后 | A 改值只影响 A；**B 的读数在重启前后都不变**；不得出现"改 A 全家变"；重启后 A/B 各保留各自的值 |
 | **C26** | 持久化与生命周期（用户裁定 B） | A+C | 重启前后对比 | **重启后各会话各自保留**（不是回全局）；UI 文案与实际一致（持久会话层=「本会话已自定义，重启仍保留」；运行时会话层=「本会话有效，重启后失效」） |
 | **C27** | A1/A2 与 `/cg set` 的优先级 | C | 真机命令行互操作 | A1（`/cg set`，运行时）在**当前进程内**覆盖 A2；`/cg set reset` 回落到 A2；**UI 保存写 A2 并清除该会话 A1**，使改动立即可见；两条路径后写覆盖先写 |
 | **C28** | 全局入口保留且标注 | A | 文案 + 写入层断言 | 设置页「保存为全局」仍写 plugin 层，文案显式「全局（影响所有会话）」；且必须提示"**已自定义本会话不受全局修改影响**" |
-| **C29** | 清除会话自定义 | A | 单测 + 快照 | UI 提供「恢复全局设置」（清 A2 与 A1 该会话记录）→ 该会话回落到 plugin/project 值；**不得残留孤儿记录** |
+| **C29** | 清除会话自定义 | A | 单测 + 快照 | UI 提供「恢复全局设置」（清 A2 与 A1 该会话记录）→ 该会话回落到项目模板（若存在）或 plugin 值；**不得残留孤儿记录** |
 | **C30** | A2 存储生命周期（防无限累积） | A | 单测（假存储）+ 审计 | 清理条件**两项同时满足**才可清：①`updatedAt` 超 90 天；②该 session 在宿主侧不再活跃（实现须写明判定来源并写审计）。**显式 pin 的永不清；正在用于 C36 的两会话重启前后必须存活**。清理写 `a2-evicted{sessionId,key,at,reason,lastSeenAt}`，`/cg status` 可见最近清理条数/keep 数；记录数不得无界增长；存储不得含凭据/正文；未知 `v`/损坏文件按"无 A2"处理并 audit，不抛错。 |
 | **C31** | A2 写入接口安全（2026-11-15 新增，批 A2 设计后补） | A | 单测（假 req）+ 代码审查 | ①**仅 loopback**（127.0.0.1/::1/::ffff:127.0.0.1）；②**仅 POST + JSON**、body ≤ 4KB；③**同源校验必做**：`Origin`（或 `Sec-Fetch-Site: same-origin`）非法/缺失 → **403**，不得当可选；④`sessionId` 白名单 `^[A-Za-z0-9._-]{1,128}$`（防穿越），非法 400；⑤值必须过 `validateLayer`（`armed` 等不可写）；⑥`cache-control: no-store`，**不新增公网监听**、不加 CORS 通配 |
-| **C32** | 层标签的用户可见映射（2026-11-15 新增） | A | 文案断言 | 内部键可以不同，但 UI 文案必须唯一映射：**A1 →「本会话·临时（重启失效）」**、**A2 →「本会话·已保存（重启保留）」**、**`project` →「项目默认」**、**全局 →「全局（影响所有会话）」**；同一界面不得出现两种叫法混用；`/cg status` 等命令输出按 C8 的「键名 + 中文」并列格式（C8/C24 判据按此文案） |
+| **C32** | 层标签的用户可见映射（2026-11-15 新增） | A | 文案断言 | 内部键可以不同，但 UI 文案必须唯一映射：**A1 →「本会话·临时（重启失效）」**、**A2 →「本会话·已保存（重启保留）」**、**`project` →「项目模板（可选）」**、**全局 →「全局（影响所有会话）」**；同一界面不得出现两种叫法混用；`/cg status` 等命令输出按 C8 的「键名 + 中文」并列格式（C8/C24 判据按此文案） |
 | **C33** | **插件补写 `system/message` 的 payload 合法性**（2026-11-15 新增；根因 D-MGMT-021 防回归） | A | 单测（四态 payload）+ 代码审查 | 任何由本插件补写 `system/message` 的路径，payload **必须**带宿主合法的 `turn`/`step`（`protection.js:417-421` 现只传 `{message}`，调用点 `runtime.js:2290-2296`）；**推不出合法值时必须跳过并留审计（`protection-write-skipped(reason=…)`），禁止伪造/猜 turn**；**回归必须覆盖四态**：① `{message}`（缺 turn/step）→ 拒 ② `{turn,step,message}` → 通过 ③ `turn:null` → 拒（marker 允许 `number\|null` 不适用于该事件）④ 缺 `step` → 拒；且坏事件**不得被 try/catch 吞成静默重试**（必须可诊断：审计/日志含原因） |
 | **C34** | ~~`system-prompt` 压缩事务内不兜底重建：pending 延迟判定 + 分型 loss~~（**2026-11-15 已作废**；用户批方案 A：rules 重建删除，system 规则不再产生 skip/pending） | — | — | 作废依据：用户批 A（删 rules 重建、只留 `latestUser`）；原 v3b 判据历史留档于 `analysis/dsh-021-turn-cursor/保护面重建-真伪判定-20261115.md` §8、口径对比稿 |
 | **C35** | **压缩后指令/目录一致性（宿主自愈验收，取代 C34）**（2026-11-15 用户批） | A | 新用例：压缩时零 rules 副本 + 下个 pre-step 证据；**真实压缩判定待重启后复验** | ①压缩后**不得**写 rules 副本（无 `source.form=surface-rebuild` 的 rules；仅 `latestUser` 一条可重建），不写 `baseline:true/baselineIdentity`；②`rule-injection` 审计为 `skip(reason=host-self-heal)`，压缩时**不得**计 fail/写 `compaction-loss(rule-injection)`；③**事件级判定 + digest 观察（2026-11-15 真机后回归，三处同字）**：窗口（`compaction/end` → 首个 `turn/start` → 该 `turn/end`）内出现该 kind 的**非治理新节点**（`type∈{user/message,system/message}`、`seq>compaction`、`plugin!=='context-governance'`、`form!=='surface-rebuild'`）⇒ **pass**；窗口结束仍无 ⇒ **fail + `compaction-loss(rule-injection, unacceptable)`**；**digest 仅观察**：baseline `source.changes[]` 有 `path`+`digest` 时按 `sha1(raw content)` 复算记录，不一致记 `self-heal-suspect` warn、读盘失败/字段缺失记 `self-heal-unverified` warn，**均不判 fail**（真机 cycle `76f00aed` 曾每轮假 15 条 `baseline-stale`——**`baseline-stale` 是历史假 fail 事件名，不是现行判据**；故 digest 不进判定）；skill-catalog 事件级即 pass；旧修订版由 `seq>`+非治理+窗口三重排除；digest 观察字段照记（`hashMatch`）；④本轮不重启，真实压缩判定标“待重启后复验”；⑤证据字段：`seq/kind/digest/form/plugin` |
-| **C36** | **平台级会话覆盖（2026-11-15 用户批 A，撤回 3A 豁免）** | A | 真机：两个指定无 `.git` 工作区各建会话 + 不同压缩比重启保留 | ①**无 `.git` 也受治**：在 `D:\DS-PROJECT\娱乐管理`、`D:\DS-PROJECT\绝地潜兵2工具开发` 各建会话（在该目录启动 DSH / 新建会话，cwd=该目录）→ 有治理审计、压缩策略、保护/回注；②**每会话压缩比**：两会话分别设 **0.55 / 0.65**（`/cg set` 或 UI）→ 重启 DSH 后各自保留，`/cg status` 显示各自 `at` 且 `source=A2`；③**层级取值**：`A1 > A2 > cwd > plugin`，`/cg status` 与 `policy-resolved` 审计带 `source`（`session:A1`/`session:A2`/`project`/`plugin`）与最终值，多层命中时以此可核；④**A2 落盘**：键=完整 session id、值含 `at/source/updatedAt/version`，位置在 `~/.dsh/context-governance/` 下（不写项目根），重启可读回；⑤**`root-unresolved` 不静默**：cwd 不可读/不可写/空 cwd → 审计 `root-unresolved{sessionId,cwd,reason}`，**每会话每 cycle 至少 1 条**（同 cycle 去重），**不参与 `compaction-loss` 分型**；⑥**负向**：显式关闭（`out-of-scope`）不干预但留审计；`observe-only` 属降级：**仍纳入**、只观不干预、仍写压缩事实/成本；⑦**证据边界**：现有两轮实测均在含 `.git` 根下采集，不覆盖无 `.git` 会话，本条必须真机补；⑧子会话仍不写记忆（沿用多根 #2）；⑫**A2 不依赖 root**：`root-unresolved`/无根会话仍可保存每会话压缩比并重启保留（键=session id，仅项目记忆不落）；⑨**observe-only 仍写压缩事实/成本**（只是不干预/不主动压；真实压缩必须有成本行，取不到值写 null/unknown，不得因 observe-only 缺行）；⑩**`source` 字面固定**：`session:A1` / `session:A2` / `project` / `plugin`（大小写敏感；禁 `session/A2`、`A2`、`persisted` 等别名），`/cg status` 与 `policy-resolved.source` 同一枚举；⑪**CP1「保护/回注」须有真实压缩证据**：一次真实压缩（手动 `/compact` 或阈值触发）后的 `protection-write`/`reinjection` 审计才算 pass；无真实压缩只判"已纳管"，不得判保护/回注 pass。 |
-| **C11** | D2 层与生效提示（2026-11-15 修订） | A | 文案断言 | 界面必须同时写明：①**写的是哪一层**——主入口 = **A2 持久会话层（本会话，重启保留）**；设置页 = **plugin 全局层（影响所有会话）**；②**生效时点**（A1 运行时=重启失效；A2/plugin=重启保留）。**缺①或缺②即判不过** |
+| **C36** | **平台级会话覆盖（2026-11-15 用户批 A，撤回 3A 豁免）** | A | 真机：两个指定无 `.git` 工作区各建会话 + 不同压缩比重启保留 | ①**无 `.git` 也受治**：在 `D:\DS-PROJECT\娱乐管理`、`D:\DS-PROJECT\绝地潜兵2工具开发` 各建会话（在该目录启动 DSH / 新建会话，cwd=该目录）→ 有治理审计、压缩策略、保护/回注；②**每会话压缩比**：两会话分别设 **0.55 / 0.65**（`/cg set` 或 UI）→ 重启 DSH 后各自保留，`/cg status` 显示各自 `at` 且 `source=A2`；③**层级取值**：`A1 > A2 > 项目模板（可选，`.cg-policy.json`） > plugin`，`/cg status` 与 `policy-resolved` 审计带 `source`（`session:A1`/`session:A2`/`project`/`plugin`）与最终值，多层命中时以此可核；④**A2 落盘**：键=完整 session id、值含 `at/source/updatedAt/version`，位置在 `~/.dsh/context-governance/` 下（不写项目根），重启可读回；⑤**`root-unresolved` 不静默**：cwd 不可读/不可写/空 cwd → 审计 `root-unresolved{sessionId,cwd,reason}`，**每会话每 cycle 至少 1 条**（同 cycle 去重），**不参与 `compaction-loss` 分型**；⑥**负向**：显式关闭（`out-of-scope`）不干预但留审计；`observe-only` 属降级：**仍纳入**、只观不干预、仍写压缩事实/成本；⑦**证据边界**：现有两轮实测均在含 `.git` 根下采集，不覆盖无 `.git` 会话，本条必须真机补；⑧子会话仍不写记忆（沿用多根 #2）；⑫**A2 不依赖 root**：`root-unresolved`/无根会话仍可保存每会话压缩比并重启保留（键=session id，仅项目记忆不落）；⑬**项目模板两态**：无 `.cg-policy.json` → 取 plugin 默认（`source=plugin`）；有且显式写了该字段 → `/cg status` 显示「项目模板 `<值>`」与 `source=project`；会话 A1/A2 覆盖模板；删文件后即不再生效；⑨**observe-only 仍写压缩事实/成本**（只是不干预/不主动压；真实压缩必须有成本行，取不到值写 null/unknown，不得因 observe-only 缺行）；⑩**`source` 字面固定**：`session:A1` / `session:A2` / `project` / `plugin`（大小写敏感；禁 `session/A2`、`A2`、`persisted` 等别名），`/cg status` 与 `policy-resolved.source` 同一枚举；⑪**CP1「保护/回注」须有真实压缩证据**：一次真实压缩（手动 `/compact` 或阈值触发）后的 `protection-write`/`reinjection` 审计才算 pass；无真实压缩只判"已纳管"，不得判保护/回注 pass。 |
+| **C37** | **项目模板显式性（D，2026-11-15 用户批）** | A | 单测 + `/cg status` + 真机 | ①**无 `.cg-policy.json`** → 新会话取 plugin 默认，`/cg status` 显示「无项目模板」且 `source=plugin`；②**有文件且显式写字段** → `/cg status` 只读显示「项目模板 `<值>`（来源 `.cg-policy.json`）」且 `source=project`；③**会话 A1/A2 永远覆盖模板**（与 C27 一致）；④**删文件后立即不再生效**（后续解析回落 plugin，不缓存旧模板）；⑤**非法/缺版本/越界文件不生效** + `policy-invalid(source=project)` 审计，不执行任何内容；⑥**显式创建/清除**入口存在（命令或设置页），写审计 `project-template-set`/`project-template-cleared`；⑦存量 `G:\DS-HARNESS\.cg-policy.json` 视为显式模板，本会话仍 0.45 但必须可见。 |
+| **C11** | D2 层与生效提示（2026-11-15 修订） | A | 文案断言 | 界面必须同时写明：①**写的是哪一层**——主入口 = **A2 持久会话层（本会话，重启保留）**；设置页 = **plugin 全局层（影响所有会话）**；②**生效时点**（A1 运行时=重启失效；A2=重启保留；项目模板（可选）/plugin=重启仍有效；无项目模板时明示"无项目模板"）。**缺①或缺②即判不过** |
 | **C12** | A 主入口（输入框下条目） | A | 注册形状单测 + 渲染文本 | `conversation.composer.dock` 注册项形状正确（唯一 id、order、返回 React 节点）；渲染文本为 `压 NN%`，**数值与快照 `at` 一致**；快照失败时渲染 `压 —` 且不抛错 |
 | **C13** | A 气泡三行信息 | A | 渲染文本断言 | 气泡含「当前生效 / 来源层 / 生效时点」三行，值取自快照 `{at, source, effectiveAt}`，与 `/cg status` 口径一致；含"打开设置页"兜底链接 |
-| **C14** | A 保存路径与拒绝 | A | 纯函数 + 单测 | 保存调 `configForms.get('dsh-context-governance').set('policy.at', ratio)`；`55→0.55`；越界（<20、<30 未 ack、项目层 <45、>native−0.02）**拒绝理由与 `/cg set` 同源**；成功后 chip/气泡刷新 |
+| **C14** | A 保存路径与拒绝 | A | 纯函数 + 单测 | 保存调 `configForms.get('dsh-context-governance').set('policy.at', ratio)`；`55→0.55`；越界（<20、<30 未 ack、项目模板 <45、>native−0.02）**拒绝理由与 `/cg set` 同源**；成功后 chip/气泡刷新 |
 | **C15** | A 降级鲁棒 | A | 单测 | slot 缺失/快照 4xx/`configForms` 不可用时：不抛错、chip 退化、设置页仍可用（不得整卡崩） |
 | **C16** | **浏览器半侧加载契约**（2026-11-14 新增） | A | 静态断言 + 模拟宿主 | ①`dsh.client` 字段与宿主 roster 校验器**逐字段**对得上（`platform`/`inject`/`immediately`/`external` 以宿主 `dsh-client-modules` 的校验为准，先查宿主再写，不许猜）；②bundle 导出形状符合 Cordis 客户端插件约定（`apply`+`inject`）；③**静态断言**：`apply` 内引用的服务 ⊆ 导出 `inject` ∪ `dsh.client.inject`（避免"用了却没注入"） |
 | **C17** | **槽位注入契约（限缩到槽位级）**（2026-11-14 新增，2026-11-15 收窄） | A | **功能级假 ctx**（静态断言仅作补充）+ 代码审查 | ①客户端三处入口**必须**走宿主官方约定 **`ctx.slots.inject(<slotName>, () => ctx.slots.register({...}, Comp))`**——**直接 `ctx.slots.register` 不算**（证据：`dsh-client-ui-settings/README.zh.md:34`、`dsh-client-ui-plugin-manager/README.zh.md:90`；已装 `dsh-context`/`skills-manager` 均如此）；②host 侧 `ctx.webServer` **必须** `ctx.inject(['webServer'], …)` 后再 `register`（证据：宿主 `dsh-client-modules/lib/index.js:570`、已装 `computer-use`）；③**槽位名迟到**（slot 声明后到）→ 注册最终成功；④**服务整体缺席**（如 `slots` 不存在）→ 只要求 **`warn` 可见 + 不崩 + 不静默**（**不要求重试/等待**：服务级等待是宿主 `inject` 契约的职责）；⑤**验证方式硬性要求**：路由注册顺序必须**功能级假 ctx 断言**（回调前 0 注册、回调后 1 条 exact 路由）——**只做静态 grep 不算过**；为此允许把注册逻辑收成可导出函数，但**生产路径必须调用同一函数**（禁止测试专用实现） |
@@ -1212,7 +1215,7 @@ C 的初步证据：启动后本项目根 `audit.jsonl` 只有 `capability@ready
   - 「`engines` 与矩阵同区间；`0.2.2-rc.3` 判 in、`0.2.2-rc.1` 判 out、`0.3.0-rc.1` 判 out。」
   - 「`0.2.2-rc.3` 真机上插件加载后 `/cg status` host=`0.2.2-rc.3`、矩阵 in、非 `observe-only`。」
   - 「两次真实压缩后：无『（指针见正文）』、无『有批次标记』、用户消息标题 ≤87 字；5a/5b/5c 全过并附 `title`/`detailLen` 清单。」
-  - 「设置页能填压缩百分比（`55 → 0.55`），显示**当前生效值 + 来源层**与「本会话有效/重启后失效」；越界（`<20`、`<30` 未 ack、项目层 `<45`、`> native−0.02`）被拒并给与 `/cg set` 一致的原因。」
+  - 「设置页能填压缩百分比（`55 → 0.55`），显示**当前生效值 + 来源层**与「本会话有效/重启后失效」；越界（`<20`、`<30` 未 ack、项目模板 `<45`、`> native−0.02`）被拒并给与 `/cg set` 一致的原因。」
   - 「UI 里改不动 `estimateSafety`/`lowThresholdAck`/`armed`，且写入与 `/cg set` 走同一校验路径（无 UI 特批）。」
 
 ### 五、交付序
