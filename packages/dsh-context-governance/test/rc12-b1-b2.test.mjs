@@ -68,6 +68,20 @@ test('B1：A1 与非 A1 都不允许出现「重启失效」+「重启保留」�
   assert.match(client.renderBubbleText({ at: 0.5, source: 'session' }), /本会话有效，重启后失效/);
 });
 
+test('B4：client 载入 + 渲染打开态气泡不抛（运行时未声明标识符门）', async () => {
+  const client = await loadClient();
+  const state = { snapshot: { at: 0.45, source: 'session:A1', defaultAt: 0.45 }, open: true };
+  const store = { subscribe: () => () => {}, set: () => {}, get: () => state };
+  const Bubble = client.createBubble(state, store, { get: () => undefined });
+  assert.equal(typeof Bubble, 'function');
+  // 打开态渲染：`ref: dialogRef` 与外点监听的 `dialogRef.current` 都会被执行到——
+  // 声明缺失时这里抛 ReferenceError（`node --check` 抓不到）。
+  const tree = Bubble({ session: { id: 'session-b4' } });
+  assert.ok(tree !== null && tree !== undefined, '气泡必须渲染出节点');
+  const flat = JSON.stringify(tree);
+  assert.match(flat, /当前生效|55%|45%/, '渲染内容应含生效值文本');
+});
+
 test('B2：reset 成功后状态必须回落到全局口径（值/来源/写层），输入框不留旧值', async () => {
   const client = await loadClient();
   const next = { at: 0.58, source: 'plugin' };

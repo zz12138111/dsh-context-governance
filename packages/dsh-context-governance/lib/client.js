@@ -523,6 +523,7 @@ window.__ModuleLoader__.load({
       // B2（rc.12）：记录最近一次动作——'reset' → 写层说"已清除覆盖"；'save' → 回会话口径。
       const [lastAction, setLastAction] = react.useState(null);
       const inputRef = react.useRef(null);
+      const dialogRef = react.useRef(null);
       react.useEffect(() => store.subscribe((next) => { setView(next.snapshot); setOpen(next.open); }), [store]);
       // U1/U7：打开即聚焦并全选；重开回到当前生效值（不保留草稿）。
       react.useEffect(() => {
