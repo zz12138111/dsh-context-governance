@@ -303,3 +303,35 @@
 - 选择：`memoryRoot` 默认 `.dsh/memory` → `memory/governance`；`diagnostics.logFile` 默认空 → `<home>/context-governance/logs/governance.log`；logFile 只允许用户级或该根 `memory/governance`，旧 `<root>/logs/` 拒载；状态/审计/记忆/诊断的实际写入路径均做 realpath containment。
 - 影响：安装/升级后诊断默认产生用户级文件；旧 `<root>/logs/` 配置需迁移（本机已迁移，旧文件保留）；P4 Release 说明必须列这两项默认变更。
 - 关联：`src/index.js`、`src/roots/paths.js`、`src/diagnostics.js`、`docs/P1-交付说明.md`、`README.md`；状态：active。
+
+## DEC-DSH-20261111-01 [scope] 1.0.2 六条候选暂缓（用户裁定）
+
+- 背景：`REQUIREMENTS.md:616-623` 六条候选（containment 断言、多进程覆盖、措辞红线、R6 分列、桌面真机样本、同会话 status 原文）长期未排期；`STATUS.md` 的「待决策」行被看门狗推到用户手机。
+- 决定：用户 2026-11-11 裁定「暂不动作，现有算是关闭，后续进展周末再看」；本版不启动 1.0.2 任何实现，`REQUIREMENTS.md:616-623` 保持未排期。
+- 回滚：需重启该议题时，把 STATUS 该行改回「待决策」并补新参照/时间点即可（候选条款本身未动）。
+- 状态：有效
+- 关联 ART：无
+- 批准人：用户（经 00 IM 转发原话）
+- 记：DSH-Worker
+
+## DEC-PLUGIN-20261115-41 [process] 发布前置必须写"用户批准"，禁止把"上线后验"当前提
+- 背景：D2/1.1.0 多轮把"装上后再验"当作默认路径，用户 2026-11-15 明确"根因没找到不要上线到我们这个环境"。
+- 决定：凡方案/设计/需求单里出现"上线/发布/安装到本机"，前置条件必须显式写"用户批准"与"根因/验收已书面确认"，不得默认"上线后再验证"；验证只许临时 profile/临时会话，用户 profile 与 00 会话不动。
+- 状态：有效；关联：`AGENTS.md` 红线 1。
+- 批准人：用户（经需求转述原话）
+
+## DEC-PLUGIN-20261115-42 [tech] D-MGMT-021 根因定稿：治理 P3 重建缺 turn/step（撤销"核心侧"旧结论）
+- 事实（只读 asar 0.2.2-rc.3 + 真实 v4 编码器对照实验，`analysis/dsh-021-turn-cursor/README.md`）：`compaction/start|end` 由 `@deepseek-ai/dsh-compaction-basic` 的 `compactSurfaceRegion` 写（`src/region.ts:210/237/245`）；`turn:null` 由 `compactNow`（`src/index.ts:431`）的 manual 入口决定，治理 early-auto 正走此入口（`src/compress/early.js:80`）。`dsh-context-zip` 只重定向+换 summarizer，不写 marker；核心 `dsh-compaction` 仅抽象服务。
+- 真凶：1.1.0 的 P3 重建（`09130f6`，1.0.3 无）在 `compaction/end` 后补写 `system/message` 只传 `{ message }`（`src/compress/protection.js:420-424`，调用点 `src/compress/runtime.js:2287-2294`），缺宿主必填 `turn`/`step`；落盘编码 `dsh-session-format-v3-to-v4/src/codec.ts:51→:70→system-message.ts:40→dsh-session-format/src/json.ts:23-25` 抛 `system/message turn must be a non-negative safe integer`。
+- 对照实验：A(缺字段) 抛同款错；B(带 turn/step) 通过；D(turn:null) 抛。证据 `analysis/dsh-021-turn-cursor/probe-021-output.txt`。
+- 修复点：治理插件——payload 补合法 turn/step，推不到就跳过重建不伪造；回归 = payload 形状单测 + 临时 profile "压缩后再发消息"对照。
+- 状态：有效（待 00/需求批修复范围后实施）
+
+## DEC-PLUGIN-20261115-43 [tech] UI 写层：主入口写本会话 A2，设置页写 plugin；写入复用 /cg set 命令链
+- 背景：C11③ 原实现三个入口共用一个 `saveAttempt`（`configForms.set('policy.at')`），全部写 plugin 全局层，用户改完以为改的是本会话；需求 2026-11-15 升级为 RC 阻塞，并明确"不接受隐藏/警示/降级"。
+- 事实（只读安装目录 slot 契约，`app.asar` 内经 Host 文件读工具）：`conversation.composer.dock`（`slot-catalog.ts:931`）与 `conversation.input.overlay`（`:1685`）均 `scope: 'session'`，标准 props 含 `sessionId: SessionId`（`:974`/`:1731` 起同段）→ 浏览器侧可定位会话，不属"被宿主卡住"。
+- 决定：①chip/气泡保存 → `POST /context-governance/session-policy`（`src/session-policy-route.js`，只收 POST、sessionId 白名单、at∈[0,1]、跨源 403、体 4 KiB 上限、入口缺失 503、拒绝 409）；②服务端 `sessionWriteRef` 把写**交给 `/cg set compact.at=<at>` 同一条命令链**（校验/审计/A1+A2 双写全复用，禁止另写一套），成功后 `rememberSessionPolicy()` 刷快照；③设置页保留 `configForms`（plugin）+「保存为全局」文案 + 「已自定义本会话不受全局修改影响」提示；④无 sessionId 时按钮禁用并显式提示"不会退化为全局写入"。
+- 标签（C32）：`src/ui-labels.js` 为唯一表，`lib/client.js` 内联同表并由 `test/d2-a2-ui.test.mjs` 逐项比对；`/cg status`、`/cg policy show` 在既有 `source=` 后并列 `层=<中文>`，不改既有口径与顺序。
+- 验：`node --test "test/*.test.mjs"` = 623/623（+7）；测试探针 `verify-ui-labels` 12/12（RC-BLOCKING 0）；审核 CP0 0 缺失、623/623 自跑、确认"真复用无旁路"。
+- 回滚：撤 `session-policy-route.js` 挂载 + client 回到 `saveAttempt`（单点：`src/index.js` 的 `mountSessionPolicyRoute` 与 `lib/client.js` 的 `saveSessionAt` 调用处）。
+- 状态：有效（rc.5 出包对象 `3aeeab8`；真机项待用户批装机后复验）
