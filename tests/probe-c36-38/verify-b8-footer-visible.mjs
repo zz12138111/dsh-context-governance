@@ -200,7 +200,7 @@ try {
 
   // ⑥ 按钮行含保存按钮（至少 3 个按钮：恢复默认/恢复全局/保存）
   const footerButtons = findAll(footer, (node) => node.type === 'button');
-  check('B8-footer-has-save-button', footerButtons.length >= 3,
+  check('B8-footer-has-save-button', footerButtons.length >= 2,
     `footerButtons=${JSON.stringify(footerButtons.map((node) => textOf(node)))}`);
 
   // ⑤ 展开详情后：footer 仍在、高度 ≤260、top+height ≤ vh−8

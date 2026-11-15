@@ -145,10 +145,13 @@ try {
   await handler(req, res);
   check('C29-ui-entry-same-chain', postsSameRoute && status === 200 && routeSessionId === sid && writeCalled === false,
     `postsSameRoute=${postsSameRoute} status=${status} routeSessionId=${routeSessionId} writeCalled=${writeCalled} payload=${payload.slice(0, 80)}`);
-  const keepsDraftRestore = /restore:\s*'恢复默认'/.test(client) && /const restoreDefault = \(\) => \{ setDraft\(/.test(client);
+  // B14（2026-11-15）：删除「恢复默认 60%」后，本断言不再依赖该控件是否存在（旧 `keepsDraftRestore` 恒 false）。
+  // 保留 C29 本意：①提示给的是可点入口而不是只让用户敲命令；②文案不得宣称"一键回内置默认"（能力已变）。
   const notePointsToEntry = !/清除用 \/cg set reset/.test(client) || /恢复全局设置/.test(client);
-  check('C29-ui-wording-not-misleading', keepsDraftRestore && notePointsToEntry,
-    `恢复默认仍是草稿=${keepsDraftRestore} 提示不再只给命令=${notePointsToEntry}`);
+  const noBuiltinDefaultPromise = !/一键回内置默认|一键恢复默认值|恢复默认值/.test(client);
+  check('C29-ui-wording-not-misleading', notePointsToEntry && noBuiltinDefaultPromise,
+    `提示不再只给命令=${notePointsToEntry} 无「一键回内置默认」承诺=${noBuiltinDefaultPromise}`
+    + '（B14：恢复默认按钮已删，本断言不再检查该控件）');
 } catch (error) {
   check('C27-C29-window', false, `抛错：${String(error?.stack ?? error).slice(0, 400)}`);
 } finally {
