@@ -49,6 +49,7 @@ try {
   };
   const listeners = { pointerdown: new Set(), keydown: new Set(), focus: new Set() };
   const fakeDocument = {
+    body: { appendChild() {} },
     documentElement: { clientWidth: 1200, clientHeight: 800 },
     querySelector: () => null,
     addEventListener: (type, fn) => { if (listeners[type]) listeners[type].add(fn); },
@@ -62,6 +63,8 @@ try {
     removeEventListener: (type, fn) => { if (listeners[type]) listeners[type].delete(fn); },
   };
   const sandbox = { window: fakeWindow, document: fakeDocument, innerWidth: 1200, innerHeight: 800, console, setTimeout, clearTimeout, fetch: fakeFetch };
+  // B6（rc.14）：气泡 portal 到 document.body；vm 里必须提供 react-dom，否则"不渲染 + warn"会让门假红。
+  sandbox.require = (name) => (name === 'react-dom' ? { createPortal: (node, container) => ({ type: 'portal', props: { container }, children: [node], __portalContainer: container }) } : {});
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
   vm.runInContext(src, sandbox);
@@ -112,7 +115,12 @@ try {
     useCallback(fn) { return fn; },
     Component: class Base { constructor(props) { this.props = props; } },
   };
-  const client = typeof spec?.factory === 'function' ? spec.factory((name) => (name === 'react' ? react : {})) : null;
+  // B6（rc.14）：气泡 portal 到 document.body；`require` 是 factory 的参数，必须在这里放行 react-dom，
+  // 否则 portal 不可用 → 不渲染 + warn（组件行为正确，但门会假红）。
+  const fakeReactDom = { createPortal: (node, container) => ({ type: 'portal', props: { container }, children: [node], __portalContainer: container }) };
+  const client = typeof spec?.factory === 'function'
+    ? spec.factory((name) => (name === 'react' ? react : (name === 'react-dom' ? fakeReactDom : {})))
+    : null;
   check('B5-client-loadable', typeof client?.createChip === 'function' && typeof client?.createBubble === 'function',
     `createChip=${typeof client?.createChip} createBubble=${typeof client?.createBubble}`);
 

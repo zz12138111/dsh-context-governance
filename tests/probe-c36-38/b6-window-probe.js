@@ -1,0 +1,134 @@
+/**
+ * 测试角色 · B6 真机窗口门（审核规格 `B6-取证与门规格-20261115.md` §3.2，2026-11-15）。
+ *
+ * 用法（DevTools Console，两段式）：
+ *   1. **关闭气泡**时执行一次 → 记对话区基线（`window.__B6_BASE`）；
+ *   2. **打开气泡**后再执行一次 → 输出 `B6WINDOW {…}`，含 5 条几何 + 3 条可用性，逐条 true/false。
+ *   关闭动作（Esc/外点/再点 chip）由人工点按后重跑脚本：面板应移除、`document.activeElement` 命中 chip。
+ *
+ * 判据（§3.2）：
+ *   几何：①|panel.centerX−chip.centerX|≤8 ②上弹 panel.bottom≤chip.top−4 或下弹 panel.top≥chip.bottom+4
+ *        ③四边≥8 ④panel.w≤min(360,vw−16) 且 panel.h≤260 ⑤与输入框交集 0
+ *   可用性：⑥开气泡前后对话区 rect 偏差 ≤2px ⑦elementsFromPoint(对话区中心) 栈里不得出现我方元素
+ *        ⑧对话区可滚（scrollHeight>clientHeight 时 scrollTop 能变）
+ *   关闭：⑨panel 不在 DOM、⑩焦点回 chip
+ *
+ * 说明：本脚本**只读**，不改页面；对话区选择器用候选自动探测（宿主结构变化时可 `window.__B6_CHAT_SELECTOR` 覆盖）。
+ * 真因：宿主 `.composerSeat{will-change:transform}` 劫持 fixed 的 containing block；portal 到 body 后此处几何才应全绿。
+ */
+(() => {
+  const round = (n) => Math.round(Number(n) * 10) / 10;
+  const rect = (el) => {
+    if (!el) return null;
+    try {
+      const b = el.getBoundingClientRect();
+      return { left: round(b.left), top: round(b.top), right: round(b.right), bottom: round(b.bottom), width: round(b.width), height: round(b.height) };
+    } catch { return null; }
+  };
+  const overlap = (a, b) => a !== null && b !== null
+    && !(a.right <= b.left || a.left >= b.right || a.bottom <= b.top || a.top >= b.bottom);
+
+  const out = {
+    ts: new Date().toISOString(),
+    viewport: { vw: innerWidth, vh: innerHeight, dpr: devicePixelRatio },
+    mode: null,
+    checks: {},
+    problems: [],
+  };
+  const chip = document.querySelector('[data-cg-chip]');
+  const panel = document.querySelector('[data-cg-popover]');
+  const chatSelectors = [window.__B6_CHAT_SELECTOR, '[data-conversation]', '[data-message-list]', '[role="log"]', 'main', '.conversation'].filter(Boolean);
+  let chat = null;
+  for (const selector of chatSelectors) {
+    try {
+      const el = document.querySelector(selector);
+      if (el && el.getBoundingClientRect().height > 200) { chat = el; out.chatSelector = selector; break; }
+    } catch { /* 非法选择器忽略 */ }
+  }
+  const input = document.querySelector('[data-cg-composer]') ?? document.querySelector('textarea');
+
+  if (panel === null) {
+    out.mode = 'closed';
+    window.__B6_BASE = { chat: rect(chat), ts: out.ts };
+    out.chat = rect(chat);
+    out.baselineSaved = true;
+    out.checks.closed-panel-absent = true;
+    out.checks.closed-focus-on-chip = document.activeElement === chip;
+    console.log('B6WINDOW ' + JSON.stringify(out));
+    return out;
+  }
+
+  out.mode = 'open';
+  const p = rect(panel);
+  const c = rect(chip);
+  const i = rect(input);
+  out.panel = p;
+  out.chip = c;
+  out.input = i;
+  // portal 后：面板的直接父节点应是 body（或 body 下的 portal 容器）
+  out.panelParentTag = panel.parentElement?.tagName?.toLowerCase?.() ?? null;
+  out.portalParentIsBody = panel.parentElement === document.body;
+  out.portaledAttr = panel.getAttribute('data-cg-portaled');
+
+  const centerX = p !== null && c !== null ? Math.abs((p.left + p.width / 2) - (c.left + c.width / 2)) : null;
+  out.checks.geo-centerX = centerX !== null && centerX <= 8;
+  out.checks.geo-vertical-side = p !== null && c !== null && (p.bottom <= c.top - 4 || p.top >= c.bottom + 4);
+  out.checks.geo-edges = p !== null && p.left >= 8 && p.top >= 8 && p.right <= innerWidth - 8 && p.bottom <= innerHeight - 8;
+  out.checks.geo-size = p !== null && p.width <= Math.min(360, innerWidth - 16) && p.height <= 260;
+  out.checks.geo-no-input-overlap = i === null ? null : !overlap(p, i);
+
+  // 可用性：对话区仍在（rect 与基线偏差 ≤2）且未被遮挡、可滚
+  const base = window.__B6_BASE ?? null;
+  const chatNow = rect(chat);
+  out.chat = chatNow;
+  out.chatBaseline = base?.chat ?? null;
+  out.checks.chat-stable = chatNow !== null && base?.chat !== null && base?.chat !== undefined
+    ? Math.abs(chatNow.height - base.chat.height) <= 2 && Math.abs(chatNow.width - base.chat.width) <= 2
+    : null;
+
+  if (chatNow !== null) {
+    const cx = Math.round(chatNow.left + chatNow.width / 2);
+    const cy = Math.round(chatNow.top + Math.min(chatNow.height / 2, 300));
+    const stack = document.elementsFromPoint(cx, cy) ?? [];
+    out.stackTop = stack.slice(0, 6).map((el) => ({
+      tag: el.tagName?.toLowerCase?.() ?? null,
+      ours: el.hasAttribute?.('data-cg-popover') === true || el.hasAttribute?.('data-cg-chip') === true,
+      rect: rect(el),
+    }));
+    const oursInStack = stack.some((el) => el.hasAttribute?.('data-cg-popover') === true || el.hasAttribute?.('data-cg-chip') === true);
+    // 不透明全屏层：覆盖 ≥80% 视口且背景不透明
+    const opaqueFullLayer = stack.some((el) => {
+      const r = rect(el);
+      if (r === null) return false;
+      const covers = r.width * r.height >= innerWidth * innerHeight * 0.8;
+      if (!covers) return false;
+      try {
+        const bg = getComputedStyle(el).backgroundColor ?? '';
+        const m = /rgba?\(([^)]+)\)/.exec(bg);
+        const alpha = m === null ? 1 : (m[1].split(',').length >= 4 ? Number(m[1].split(',')[3]) : 1);
+        return alpha > 0.5;
+      } catch { return false; }
+    });
+    out.checks.chat-no-our-element = !oursInStack;
+    out.checks.chat-no-opaque-full-layer = !opaqueFullLayer;
+    let scrollable = null;
+    if (chat !== null && chat.scrollHeight > chat.clientHeight + 4) {
+      try {
+        const before = chat.scrollTop;
+        chat.scrollTop = before + 1;
+        scrollable = chat.scrollTop !== before;
+        chat.scrollTop = before;
+      } catch { scrollable = false; }
+    }
+    out.checks.chat-scrollable = scrollable; // null = 本页无需滚动
+  } else {
+    out.problems.push('对话区未找到：可用 window.__B6_CHAT_SELECTOR="选择器" 指定后重跑');
+  }
+
+  for (const [key, value] of Object.entries(out.checks)) {
+    if (value === false) out.problems.push(key);
+  }
+  out.pass = out.problems.length === 0;
+  console.log('B6WINDOW ' + JSON.stringify(out));
+  return out;
+})()

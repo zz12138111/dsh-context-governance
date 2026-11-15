@@ -50,6 +50,7 @@ try {
   };
   const listeners = { pointerdown: new Set(), keydown: new Set(), focus: new Set() };
   const fakeDocument = {
+    body: { appendChild() {} },
     documentElement: { clientWidth: 1200, clientHeight: 800 },
     querySelector: () => null,
     addEventListener: (type, fn) => { if (listeners[type]) listeners[type].add(fn); },
@@ -63,6 +64,8 @@ try {
     removeEventListener: (type, fn) => { if (listeners[type]) listeners[type].delete(fn); },
   };
   const sandbox = { window: fakeWindow, document: fakeDocument, innerWidth: 1200, innerHeight: 800, console, setTimeout, clearTimeout, fetch: fakeFetch };
+  // B6（rc.14）：气泡 portal 到 document.body；vm 里必须提供 react-dom，否则"不渲染 + warn"会让门假红。
+  sandbox.require = (name) => (name === 'react-dom' ? { createPortal: (node, container) => ({ type: 'portal', props: { container }, children: [node], __portalContainer: container }) } : {});
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
   vm.runInContext(src, sandbox);
@@ -113,7 +116,11 @@ try {
     useCallback(fn) { return fn; },
     Component: class Base { constructor(props) { this.props = props; } },
   };
-  const client = typeof spec?.factory === 'function' ? spec.factory((name) => (name === 'react' ? react : {})) : null;
+  // B6（rc.14）：气泡 portal 到 document.body；`require` 是 factory 的参数，必须在这里放行 react-dom。
+  const fakeReactDom = { createPortal: (node, container) => ({ type: 'portal', props: { container }, children: [node], __portalContainer: container }) };
+  const client = typeof spec?.factory === 'function'
+    ? spec.factory((name) => (name === 'react' ? react : (name === 'react-dom' ? fakeReactDom : {})))
+    : null;
 
   function mount(Component) {
     const inst = {
@@ -248,6 +255,18 @@ try {
     check('C40-state-switch-open-close-stable', stable && dialog !== undefined,
       `hookCounts(closed,open,closed,open)=${JSON.stringify(counts)} errors=${JSON.stringify(errors)} dialog=${dialog !== undefined}`
       + `（只比相等、不写死绝对值；不等＝模拟 React #310 "Rendered more hooks than during the previous render"）`);
+
+    // B6 复发防线（审核要求制度化）：portal 目标必须是 document.body、只搬单个面板；
+    // 若实现退回"原位 fixed"（不 portal 或 portal 到 slot 容器），这条必须红。
+    const portalNode = findAll(bubble.last.tree ?? null, (node) => node.type === 'portal')[0];
+    const portalChildren = (portalNode?.children ?? []).filter((node) => node !== null && node !== undefined);
+    const portalSinglePanel = portalNode !== undefined
+      && portalNode.__portalContainer === fakeDocument.body
+      && portalChildren.length === 1
+      && portalChildren[0]?.props?.['data-cg-popover'] === '1';
+    check('C40-portal-to-body-single-panel', portalSinglePanel,
+      `portal=${portalNode !== undefined} containerIsBody=${portalNode !== undefined && portalNode.__portalContainer === fakeDocument.body} children=${portalChildren.length}`
+      + `（B6 防线：必须 createPortal 到 document.body 且只搬单个面板；退回原位 fixed 即红）`);
   }
 
   console.log('INFO C40-real-machine :: 三档截图（宽>1200 / 窄≈800 / 矮<700 触发向下翻转）+ 关闭动作（点外部/Esc/再点 chip）需真机取数');

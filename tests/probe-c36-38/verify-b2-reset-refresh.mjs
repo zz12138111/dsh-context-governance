@@ -54,7 +54,24 @@ try {
     resetCalled = true;
     return { ok: true, json: async () => ({ ok: true, reset: true, source: 'plugin' }) };
   };
-  const sandbox = { window: { __ModuleLoader__: { load: (value) => { spec = value; } } }, console, setTimeout, clearTimeout, fetch: fakeFetch };
+  const fakeDocument = {
+    body: { appendChild() {} },
+    documentElement: { clientWidth: 1200, clientHeight: 800 },
+    querySelector: () => null,
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  const sandbox = {
+    window: { __ModuleLoader__: { load: (value) => { spec = value; } }, innerWidth: 1200, innerHeight: 800, addEventListener() {}, removeEventListener() {} },
+    document: fakeDocument,
+    innerWidth: 1200,
+    innerHeight: 800,
+    console,
+    setTimeout,
+    clearTimeout,
+    fetch: fakeFetch,
+  };
+  sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
   vm.runInContext(src, sandbox);
 
@@ -105,7 +122,12 @@ try {
     useMemo(fn) { return fn(); },
     useCallback(fn) { return fn; },
   };
-  const client = typeof spec?.factory === 'function' ? spec.factory((name) => (name === 'react' ? react : {})) : null;
+  // B6（rc.14）：气泡 portal 到 document.body；`require` 是 factory 参数，必须放行 react-dom，
+  // 否则"不渲染 + warn"会让本门假红（这是 stub 缺件，不是实现退化）。
+  const fakeReactDom = { createPortal: (node, container) => ({ type: 'portal', props: { container }, children: [node], __portalContainer: container }) };
+  const client = typeof spec?.factory === 'function'
+    ? spec.factory((name) => (name === 'react' ? react : (name === 'react-dom' ? fakeReactDom : {})))
+    : null;
   check('B2-client-loadable', typeof client?.createBubble === 'function' && typeof client?.createSettingsCard === 'function',
     `createBubble=${typeof client?.createBubble}`);
 
