@@ -1768,7 +1768,12 @@ let policyState = buildPolicyState(mergePluginPolicy(config), {
       store,
       getGuard: (session) => (guardPool === null ? guard : guardPool.guardForSession(session)),
       audit: primaryAudit,
-      getAuditForSession: (sessionId) => (guardPool === null ? primaryAudit : guardPool.auditForSessionId(sessionId)),
+      // P3-c（rc.12）：命令面写审计（`policy-set` 等）**也必须按会话根路由**——
+      // 旧实现只在根 guard 已打开时拿到该根审计，否则 `?? audit` 回落主根，
+      // 于是同一 G 根会话的 UI 保存落 D 根、reset 落 G 根（真机 04:39/04:41）。
+      getAuditForSession: (sessionId) => (typeof sessionId === 'string' && sessionId !== ''
+        ? auditForSessionRoot({ id: sessionId, header: { id: sessionId } })
+        : primaryAudit),
       rootAudit,
       policy: policyState,
       getPolicyForSession: (sessionId) => {

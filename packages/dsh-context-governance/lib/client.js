@@ -37,9 +37,17 @@ window.__ModuleLoader__.load({
     const FALLBACK_DEFAULT_AT = 0.6;
     const LABELS = {
       zh: {
-        sectionLabel: '上下文治理', title: '压缩触发阈值', current: '当前生效', source: '来源层', when: '生效时点',
+        sectionLabel: '上下文治理', title: '压缩触发阈值', current: '当前生效', source: '来源层', when: '生效时点', note: '备注',
         writeLayer: '本次修改写入：全局（plugin 层，影响所有会话）',
         writeLayerSession: '本次修改写入：本会话（session:A2，重启保留）',
+        // B1（rc.12 · 用户拍板「必须修」）：A1 生效不得与"重启失效"并列——主标签按**已保存**口径，
+        // 附注交代"当前进程内即时生效；重启后从已保存值读回"，写入层与主标签同口径。
+        writeLayerSessionA1: '本次修改写入：本会话（已落 A2，重启保留；当前进程内即时生效）',
+        writeLayerSessionIdle: '本次修改写入：本会话（保存后即时生效并落 A2，重启保留）',
+        // B1 不变式：写入层一旦说「重启保留」，生命周期就必须是「已保存」；纯 session 层不落此坑。
+        writeLayerSessionVolatile: '本次修改写入：本会话（保存后即时生效并落 A2，重启后从 A2 读回）',
+        // B2（rc.12）：reset 成功后写入层必须换口径，不能还挂着上一次的 A2 完成时文案。
+        writeLayerReset: (layer = '全局/项目层') => `本次修改写入：已清除本会话覆盖（A1+A2），当前生效来自${layer}`,
         writeLayerGlobal: '本次修改写入：全局（plugin 层，影响所有会话）',
         overrideNote: '本会话已自定义，全局修改不影响本会话（清除用 /cg set reset）',
         noSession: '无会话标识：会话级保存不可用（不会退化为全局写入）',
@@ -48,9 +56,12 @@ window.__ModuleLoader__.load({
         openSettings: '打开设置页', chipUnknown: '压 —', chip: (t) => `压 ${t}`,
       },
       en: {
-        sectionLabel: 'Context governance', title: 'Compaction threshold', current: 'Effective', source: 'Source layer', when: 'Takes effect',
+        sectionLabel: 'Context governance', title: 'Compaction threshold', current: 'Effective', source: 'Source layer', when: 'Takes effect', note: 'Note',
         writeLayer: 'Writes to: global (plugin layer, affects all sessions)',
         writeLayerSession: 'Writes to: this session (session:A2, survives restart)',
+        writeLayerSessionA1: 'Writes to: this session (already persisted to A2, survives restart; immediate in this process)',
+        writeLayerSessionIdle: 'Writes to: this session (takes effect immediately and persists to A2, survives restart)',
+        writeLayerReset: (layer = 'global/project layer') => `Writes to: session override cleared (A1+A2); current value comes from ${layer}`,
         writeLayerGlobal: 'Writes to: global (plugin layer, affects all sessions)',
         overrideNote: 'This session is customized; global changes do not affect it (clear with /cg set reset)',
         noSession: 'No session id: session-level save unavailable (never falls back to global)',
@@ -108,10 +119,51 @@ window.__ModuleLoader__.load({
       if (key === 'session' || key === 'session:A1') return '本会话有效，重启后失效';
       return '保存后生效、重启仍有效';
     };
-    /** C11①/C11③：写层文案按入口区分——主入口写本会话（A2），设置页写全局（plugin）。 */
-    const writeLayerTextFor = (entry = 'session') => (entry === 'global'
-      ? LABELS.zh.writeLayerGlobal
-      : LABELS.zh.writeLayerSession);
+    /**
+     * B1（rc.12 · 用户拍板必须修）：**展示层来源**。
+     *
+     * 保存链路同时写 A1（进程内即时值）与 A2（落盘值），宿主解析时优先报 `session:A1`；
+     * 于是气泡出现「来源层·临时（重启失效）」与「写入层·A2（重启保留）」并列，用户读成保存无效。
+     * 展示口径改为：A1 一律按**已保存**（`session:A2`）呈现，另以附注交代"当前进程内即时生效"，
+     * 原始键仍留在附注里（`source=session:A1`）供诊断；生效时点行同步成"已保存，重启保留"。
+     * 断言这层不变式：**任何"已保存/重启保留"标签旁边不得出现"重启后失效"**。
+     */
+    const displaySourceFor = (source) => {
+      const key = String(source ?? 'unknown');
+      if (key === 'session:A1') {
+        return {
+          labelKey: 'session:A2',
+          note: '当前进程内即时生效（原始层 source=session:A1）；重启后从已保存值读回',
+        };
+      }
+      return { labelKey: key, note: null };
+    };
+    /** C11①/C11③：写层文案按入口区分——主入口写本会话（A1 即时 + A2 落盘），设置页写全局（plugin）。 */
+    const writeLayerTextFor = (entry = 'session', { source = null, lastAction = null } = {}) => {
+      if (lastAction === 'reset') {
+        const layer = String(source ?? '') === 'unknown' ? '全局/项目层' : layerLabel(source);
+        return LABELS.zh.writeLayerReset(layer);
+      }
+      if (entry === 'global') return LABELS.zh.writeLayerGlobal;
+      const key = String(source ?? '');
+      // B1：A1 生效时按"已保存"口径说（禁止与"重启后失效"并列）；其它来源保持原口径。
+      if (key === 'session:A1') return LABELS.zh.writeLayerSessionA1;
+      // 纯 `session` 层（保守口径：只保证进程内）不再声称"重启保留"，避免与生命周期行打架。
+      if (key === 'session') return LABELS.zh.writeLayerSessionVolatile;
+      return LABELS.zh.writeLayerSession;
+    };
+    /** reset 成功后需要回填的 UI 状态：输入框跟随生效值、写层换口径（B2，单测直接断言它）。 */
+    const stateAfterReset = (snapshot = null) => ({
+      lastAction: 'reset',
+      draft: Number.isFinite(snapshot?.at) ? String(Math.round(snapshot.at * 100)) : null,
+      source: typeof snapshot?.source === 'string' ? snapshot.source : null,
+    });
+    /** 保存成功后：写层回到"本会话"口径（清掉 reset 残留）。 */
+    const stateAfterSave = (snapshot = null) => ({
+      lastAction: 'save',
+      draft: Number.isFinite(snapshot?.at) ? String(Math.round(snapshot.at * 100)) : null,
+      source: typeof snapshot?.source === 'string' ? snapshot.source : null,
+    });
     /** 兼容旧导出名：默认按主入口（会话级）口径。 */
     const WRITE_LAYER = LABELS.zh.writeLayerSession;
 
@@ -265,16 +317,19 @@ window.__ModuleLoader__.load({
     };
 
     /** U2 结构 / U8 不可用态：气泡与设置页共用同一视图模型。 */
-    const bubbleView = (snapshot) => {
+    const bubbleView = (snapshot, { lastAction = null } = {}) => {
       const ready = snapshot !== null && snapshot !== undefined;
+      const display = displaySourceFor(ready ? snapshot.source : null);
       return {
         ready,
         title: LABELS.zh.title,
         percentText: ready ? toPercentText(snapshot.at) : '—',
         fields: [
-          `${LABELS.zh.source}：${ready ? `${layerLabel(snapshot.source)} (source=${snapshot.source ?? 'unknown'})` : '—'}`,
-          `${LABELS.zh.when}：${ready ? effectiveTextFor(snapshot.source) : '—'}`,
-          writeLayerTextFor('session'),
+          `${LABELS.zh.source}：${ready ? `${layerLabel(display.labelKey)} (source=${display.labelKey})` : '—'}`,
+          `${LABELS.zh.when}：${ready ? effectiveTextFor(display.labelKey) : '—'}`,
+          // B1：A1 生效时补一行附注，交代"进程内即时 / 重启读回"，原始键留在附注里。
+          ...(ready && display.note !== null ? [`备注：${display.note}`] : []),
+          writeLayerTextFor('session', { source: ready ? snapshot.source : null, lastAction }),
         ],
         canSave: ready,
         statusText: ready ? '' : LABELS.zh.loading,
@@ -301,14 +356,17 @@ window.__ModuleLoader__.load({
      * @param {object} labels
      * @param {{entry?: 'session'|'global'}} options
      */
-    const renderBubbleText = (snapshot = {}, labels = LABELS.zh, { entry = 'session' } = {}) => {
-      const source = snapshot.source ?? 'unknown';
+    const renderBubbleText = (snapshot = {}, labels = LABELS.zh, { entry = 'session', lastAction = null } = {}) => {
+      const rawSource = snapshot.source;
+      const display = displaySourceFor(rawSource ?? 'unknown');
+      const source = display.labelKey;
       const sessionCustomized = /^session(:|$)/.test(String(source));
       return [
         `${labels.current}: ${toPercentText(snapshot.at)}`,
         `${labels.source}: ${layerLabel(source)} (source=${source})`,
         `${labels.when}: ${effectiveTextFor(source)}`,
-        writeLayerTextFor(entry),
+        ...(display.note !== null ? [`${labels.note ?? '备注'}: ${display.note}`] : []),
+        writeLayerTextFor(entry, { source: rawSource ?? null, lastAction }),
         ...(entry === 'global' && sessionCustomized ? [labels.overrideNote ?? LABELS.zh.overrideNote] : []),
       ].join('\n');
     };
@@ -462,12 +520,13 @@ window.__ModuleLoader__.load({
       const [error, setError] = react.useState('');
       const [saving, setSaving] = react.useState(false);
       const [saved, setSaved] = react.useState(false);
+      // B2（rc.12）：记录最近一次动作——'reset' → 写层说"已清除覆盖"；'save' → 回会话口径。
+      const [lastAction, setLastAction] = react.useState(null);
       const inputRef = react.useRef(null);
-      const dialogRef = react.useRef(null);
       react.useEffect(() => store.subscribe((next) => { setView(next.snapshot); setOpen(next.open); }), [store]);
       // U1/U7：打开即聚焦并全选；重开回到当前生效值（不保留草稿）。
       react.useEffect(() => {
-        if (!open) { setDraft(''); setError(''); setSaved(false); return; }
+        if (!open) { setDraft(''); setError(''); setSaved(false); setLastAction(null); return; }
         setDraft(Number.isFinite(view?.at) ? String(Math.round(view.at * 100)) : '');
         setError('');
         setSaved(false);
@@ -498,7 +557,7 @@ window.__ModuleLoader__.load({
       }, [open, ctx, store]);
       const close = () => { if (closeDecision('escape')) store.set({ open: false }); };
       if (!open) return null;
-      const model = bubbleView(view ?? null);
+      const model = bubbleView(view ?? null, { lastAction });
       // C11③：主入口保存写本会话（A2）；无会话标识时明确不可保存，绝不退化写全局。
       const canSaveSession = model.canSave && sessionId !== null;
       const save = async () => {
@@ -510,6 +569,10 @@ window.__ModuleLoader__.load({
         setSaved(true);
         setTimeout(() => setSaved(false), 1500);
         const next = await fetchSnapshot(globalThis.fetch, { sessionId });
+        // B1/B2：保存成功也走同一刷新路径——输入框跟随生效值、写层回会话口径。
+        const state2 = stateAfterSave(next);
+        if (state2.draft !== null) setDraft(state2.draft);
+        setLastAction('save');
         store.set(next ? { snapshot: next } : {});
       };
       const onBlurField = () => {
@@ -523,6 +586,11 @@ window.__ModuleLoader__.load({
         if (result.ok !== true) { setError(result.error); return; }
         setError('');
         const next = await fetchSnapshot(globalThis.fetch, { sessionId });
+        // B2（rc.12）：成功后必须同步刷新值/来源层/生命周期/写入层——不能只换快照、留着旧输入与旧写层。
+        const state2 = stateAfterReset(next);
+        if (state2.draft !== null) setDraft(state2.draft);
+        setLastAction('reset');
+        setSaved(false);
         store.set(next ? { snapshot: next } : {});
       };
       const retry = () => { fetchSnapshot(globalThis.fetch, { sessionId }).then((snapshot) => { if (snapshot) store.set({ snapshot }); }); };
@@ -534,7 +602,7 @@ window.__ModuleLoader__.load({
       },
         h('div', { style: S.title }, model.title),
         h('div', { style: S.big, 'data-role': 'current-percent' }, model.percentText),
-        ...renderBubbleText(view ?? {}, labels, { entry: 'session' }).split('\n').slice(1).map((line, index) => h('div', { key: index, style: S.metaLine }, line)),
+        ...renderBubbleText(view ?? {}, labels, { entry: 'session', lastAction }).split('\n').slice(1).map((line, index) => h('div', { key: index, style: S.metaLine }, line)),
         sessionId === null ? h('div', { style: S.error }, labels.noSession ?? LABELS.zh.noSession) : null,
         h('div', { style: S.row },
           h('input', {
@@ -692,6 +760,9 @@ window.__ModuleLoader__.load({
       LAYER_LABELS,
       layerLabel,
       writeLayerTextFor,
+      displaySourceFor,
+      stateAfterReset,
+      stateAfterSave,
       saveSessionAt,
       resetSessionAt,
       postSessionAt,

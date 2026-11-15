@@ -3,6 +3,8 @@
  */
 
 import assert from 'node:assert/strict';
+import fsSync from 'node:fs';
+import os from 'node:os';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
@@ -12,6 +14,16 @@ import { CompressionGuard } from '../src/compress/runtime.js';
 import { apply, buildPolicyState, resolveConfig } from '../src/index.js';
 import { profileLayer, resolvePolicy, validateLayer } from '../src/policy.js';
 import { tempDir } from './helpers.mjs';
+
+/**
+ * 测试隔离（rc.12）：`apply` 会把本机真实 `~/.dsh/context-governance/plugin-policy.json`
+ * 的持久值当作 plugin 层默认（设计如此）。真机在设置页保存过 0.60 之后，本文件 ①b
+ * 期望的 `0.58 source=plugin` 就会被 0.60 顶掉——用例必须在**隔离 home** 下跑，
+ * 否则「机器上用过设置页」就会让全量单测变红（2026-11-15 实测）。
+ */
+const ISOLATED_HOME = fsSync.mkdtempSync(path.join(os.tmpdir(), 'cg-m2-home-'));
+process.env.USERPROFILE = ISOLATED_HOME;
+process.env.HOME = ISOLATED_HOME;
 
 const SESSION = 'session-m2-000000000000001';
 /** 1a：测试通过工厂注入会话标识（生产默认读 agent.session.id）。 */
