@@ -33,7 +33,7 @@ import { registerMemoryHeader } from './memory/header.js';
 import { openSessionMemory } from './memory/session-store.js';
 import { SCOPE_SKIP, resolveScope } from './scope.js';
 import { MEM_QUERY_NAME, MEM_WRITE_NAME, registerMemoryTools } from './tools/mem-tools.js';
-import { createSnapshotHandler, createSnapshotPolicyResolver, mergeSettingsAt, policySnapshot, readVolatileAt } from './settings-policy.js';
+import { createSnapshotHandler, createSnapshotPolicyResolver, mergeSettingsAt, policySnapshot, readVolatileAt, resolvePluginAt } from './settings-policy.js';
 import { mountSessionPolicyRoute, mountPluginPolicyRoute } from './session-policy-route.js';
 import { createPluginPolicyStore, pluginPolicyFile } from './plugin-policy.js';
 
@@ -305,6 +305,9 @@ export function resolveConfig(raw = {}) {
       reservedTokens: policy.reservedTokens,
       projectFile: String(policy.projectFile ?? '.cg-policy.json').trim() || '.cg-policy.json',
       values: policy.values,
+      // C11②：保留设置页 volatile 字段（`.volatile()` 数字或引用），否则 apply 侧永远读不到
+      // 表单值，只能靠持久文件兜底——那会把「volatile 有值优先」这条契约变成死分支。
+      ...(policy.at === undefined ? {} : { at: policy.at }),
     },
   };
 }
@@ -935,16 +938,14 @@ const getPluginPolicyStore = () => {
   return pluginPolicyStoreSingleton.value;
 };
 const mergePluginPolicy = (configInput) => {
-  const volatileAt = readVolatileAt(configInput);
   const store = getPluginPolicyStore();
-  if (Number.isFinite(volatileAt)) {
-    // 设置页保存过：落盘保证重启后仍有效（值没变不重复写/不刷审计）。
-    try { store?.writeAtIfChanged?.(volatileAt); } catch { /* 落盘失败不改变本次生效值 */ }
-    return mergeSettingsAt(configInput, volatileAt);
-  }
   const persisted = store?.read?.() ?? null;
-  if (persisted === null || !Number.isFinite(persisted.at)) return configInput;
-  return mergeSettingsAt(configInput, persisted.at);
+  const at = resolvePluginAt(configInput, {
+    persistedAt: persisted === null ? null : persisted.at,
+    // 设置页保存过（volatile 有值）→ 幂等落盘，保证重启后仍有效；值没变不重复写/不刷审计。
+    persist: (value) => { store?.writeAtIfChanged?.(value); },
+  });
+  return Number.isFinite(at) ? mergeSettingsAt(configInput, at) : configInput;
 };
 let policyState = buildPolicyState(mergePluginPolicy(config), {
   a2Store,

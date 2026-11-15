@@ -43,6 +43,25 @@ export function readVolatileAt(config) {
 }
 
 /**
+ * C11②：plugin 层生效值的选择（纯函数，便于单测）。
+ * - 设置页 volatile 有合法值 → 以它为准（并通过 `persist` 回调落盘，保证重启后仍有效）；
+ * - volatile 为空（宿主未恢复表单）→ 用持久文件值；
+ * - 两者都没有 → null（沿用配置默认）。
+ * @param {object} config
+ * @param {{persistedAt?: number|null, persist?: (at:number)=>void}} options
+ * @returns {number|null}
+ */
+export function resolvePluginAt(config, { persistedAt = null, persist = null } = {}) {
+  const volatileAt = readVolatileAt(config);
+  if (Number.isFinite(volatileAt)) {
+    if (typeof persist === 'function') {
+      try { persist(volatileAt); } catch { /* 落盘失败不改变本次生效值 */ }
+    }
+    return volatileAt;
+  }
+  return Number.isFinite(persistedAt) ? Number(persistedAt) : null;
+}
+/**
  * 把设置页字段合并进 plugin 层 values（不改原对象）。
  * `policy.at` 缺省/非法时原样返回 config（不影响既有配置行为）。
  */

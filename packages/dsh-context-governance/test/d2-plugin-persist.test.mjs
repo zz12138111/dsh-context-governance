@@ -266,3 +266,36 @@ test('C11② client：设置页保存走 plugin 写路由（不只写宿主 vola
   assert.match(rejected.error, /persist-failed/);
   assert.equal(formWrites.length, 1, '落盘失败不得假装成功去写宿主表单');
 });
+
+test('C11② volatile 优先且能落盘：resolveConfig 不再丢 policy.at', async () => {
+  const { resolvePluginAt, readVolatileAt } = await import('../src/settings-policy.js');
+
+  // resolveConfig 必须把 volatile 字段带到 apply 侧，否则「volatile 有值优先」是死分支。
+  const withAt = resolveConfig({ policy: { at: 0.55 } });
+  assert.equal(withAt.policy.at, 0.55);
+  assert.equal(readVolatileAt(withAt), 0.55);
+  const withoutAt = resolveConfig({});
+  assert.equal('at' in withoutAt.policy, false);
+  assert.equal(readVolatileAt(withoutAt), null);
+
+  // volatile 优先 + 触发落盘回调。
+  const persisted = [];
+  assert.equal(resolvePluginAt(withAt, { persistedAt: 0.7, persist: (at) => persisted.push(at) }), 0.55);
+  assert.deepEqual(persisted, [0.55], 'volatile 有值必须落盘（重启后仍有效）');
+
+  // volatile 为空 → 用持久值（重启后的路径）。
+  assert.equal(resolvePluginAt(withoutAt, { persistedAt: 0.7 }), 0.7);
+  assert.equal(resolvePluginAt(withoutAt, { persistedAt: null }), null);
+
+  // volatile 引用（.get()）也认；非法 volatile 不影持久值。
+  assert.equal(readVolatileAt({ policy: { at: { get: () => 0.62 } } }), 0.62);
+  assert.equal(resolvePluginAt({ policy: { at: 'x' } }, { persistedAt: 0.66 }), 0.66);
+
+  // apply 侧：volatile 0.55 → plugin 层生效值 0.55、source=plugin。
+  const state = buildPolicyState(mergeSettingsAt(withAt), {
+    readFile: () => { throw new Error('no project file'); },
+    onPolicyResolved: () => {},
+  });
+  assert.equal(state.resolve(null).values['compact.at'], 0.55);
+  assert.equal(state.resolve(null).sources['compact.at'], 'plugin');
+});
