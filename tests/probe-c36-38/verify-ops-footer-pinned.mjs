@@ -326,15 +326,21 @@ try {
     const itemHeight = (item) => (item.kind === 'input' ? 32 : item.kind === 'button' ? 30 : 14);
     const rowHeight = (row) => Math.max(...row.items.map(itemHeight));
     const totalHeight = rows.reduce((sum, row, index) => sum + rowHeight(row) + (index === 0 ? 0 : ROW_GAP), 0);
-    const footerMaxHeight = Number(footerNode?.props?.style?.maxHeight ?? 88);
+    // B11：footer **不得有 maxHeight/overflow:hidden**（审核提交条件）。没有 maxHeight 就不存在"裁"，
+    // 不能像旧版那样把缺失的 maxHeight fallback 成 88，否则会把"已修好"误判成"裁 88"。
+    const footerMaxHeight = footerNode?.props?.style?.maxHeight;
+    const footerClientHeight = footerMaxHeight === undefined || footerMaxHeight === null
+      ? totalHeight
+      : Number(footerMaxHeight);
+    const clipped = footerMaxHeight !== undefined && footerMaxHeight !== null && totalHeight > footerClientHeight + 1;
     const allItems = rows.flatMap((row) => row.items);
     const buttons = allItems.filter((item) => item.kind === 'button');
     const inputItem = allItems.find((item) => item.kind === 'input');
     const inputSameRowAsButton = rows.some((row) => row.items.some((item) => item.kind === 'input') && row.items.some((item) => item.kind === 'button'));
     const rowsDump = rows.map((row) => `${row.width}:[${row.items.map((item) => `${item.kind}${item.kind === 'button' ? `(${item.text})` : ''}=${Math.round(item.width)}`).join(', ')}]`);
     return {
-      contentW, rows, rowsDump, totalHeight, footerMaxHeight, buttons, inputItem, inputSameRowAsButton,
-      overflowHeight: totalHeight > footerMaxHeight + 1,
+      contentW, rows, rowsDump, totalHeight, footerMaxHeight, footerClientHeight, buttons, inputItem, inputSameRowAsButton,
+      overflowHeight: clipped,
       overflowWidth: rows.some((row) => row.width > contentW + 1),
     };
   };
@@ -355,17 +361,24 @@ try {
     check(`OPS-input-width-cap${tag}`, band.inputItem !== undefined && band.inputItem.width <= 72,
       `inputWidth=${band.inputItem === undefined ? 'missing' : Math.round(band.inputItem.width)}（期望 ≤72，目标 56）`);
     check(`OPS-footer-no-overflow${tag}`, !band.overflowHeight && !band.overflowWidth,
-      `footerHeight=${band.totalHeight} maxHeight=${band.footerMaxHeight} rows=${JSON.stringify(band.rowsDump)}（越界⇒按钮被裁）`);
+      `footerHeight=${band.totalHeight} footerClientHeight=${band.footerClientHeight} rows=${JSON.stringify(band.rowsDump)}（越界⇒按钮被裁）`);
     check(`OPS-footer-all-items-in-panel${tag}`, !band.overflowHeight && insidePanel && insideViewport,
-      `totalHeight=${band.totalHeight} maxHeight=${band.footerMaxHeight} footer=[${footerTop},${footerBottom}] panel=[${panelTop},${panelBottom}] viewportH=${VIEWPORT.height}（全部控件须在面板与视口内）`);
+      `totalHeight=${band.totalHeight} footerClientHeight=${band.footerClientHeight} footer=[${footerTop},${footerBottom}] panel=[${panelTop},${panelBottom}] viewportH=${VIEWPORT.height}（全部控件须在面板与视口内）`);
     check(`OPS-input-same-row-as-button${tag}`, band.inputSameRowAsButton,
       `rows=${JSON.stringify(band.rowsDump)}（输入框必须与至少一个按钮同行）`);
   }
-  // 不许用 overflow:hidden 兜底：3 排（>maxHeight）必须靠提高上限或改布局解决，不能"裁掉但仍算过"
+  // 不许用 overflow:hidden 兜底：footer 一旦有 maxHeight，3 排/极端档就会被裁，不能"裁掉但仍算过"
   const mainBand = bands.find((band) => band.width === 320) ?? bands[1];
-  check('OPS-footer-not-clipped-by-maxheight', mainBand.totalHeight <= mainBand.footerMaxHeight + 1,
-    `contentHeight=${mainBand.totalHeight} footerClientHeight≈${mainBand.footerMaxHeight}`
-    + `（contentHeight>clientHeight ⇒ 被 hidden 裁；允许提高 maxHeight 到 ≥contentHeight，不允许裁掉还过）`);
+  check('OPS-footer-not-clipped-by-maxheight', !mainBand.overflowHeight,
+    `contentHeight=${mainBand.totalHeight} footerClientHeight=${mainBand.footerClientHeight}`
+    + `（有 maxHeight 且内容超出 ⇒ 被 hidden 裁；要求 footer 不设 maxHeight 或 clientHeight ≥ contentHeight）`);
+  // 显式：footer 不得同时使用 maxHeight + overflow:hidden 做兜底（审核提交条件）
+  const footerInline = footerNode?.props?.style ?? {};
+  const clipStyle = footerInline.maxHeight !== undefined && footerInline.maxHeight !== null
+    && String(footerInline.overflow ?? '') === 'hidden';
+  check('OPS-footer-no-clip-style', !clipStyle,
+    `footer.maxHeight=${JSON.stringify(footerInline.maxHeight)} footer.overflow=${JSON.stringify(footerInline.overflow)}`
+    + `（不得用 maxHeight+overflow:hidden 兜底；footer 高度应随内容/换行自适应）`);
 
   // B11 极端档（审核要求）：每个控件独占一行（footer ≈184）。最坏情况下控件**不可裁**优先于"内容区保底"，
   // 允许 body 滚动、允许提高 footer maxHeight，但 5 个控件必须在 panel 内且不被 hidden 裁掉。
@@ -376,8 +389,8 @@ try {
   check('OPS-footer-extreme-all-items-in-panel',
     extreme.buttons.length === 4 && extreme.rows.length >= 5 && extremeInsidePanel && extremeInsideViewport,
     `rows=${extreme.rows.length} footerHeight=${extreme.totalHeight} footerBottom=${extremeFooterBottom} panelBottom=${panelBottom} viewportH=${VIEWPORT.height}（5 控件必须全部在面板与视口内）`);
-  check('OPS-footer-extreme-no-overflow', !extreme.overflowWidth && extreme.totalHeight <= extreme.footerMaxHeight + 1,
-    `contentHeight=${extreme.totalHeight} footerClientHeight≈${extreme.footerMaxHeight} rows=${JSON.stringify(extreme.rowsDump)}（不许被 hidden 裁；可提高 maxHeight，body 滚动是合法结果）`);
+  check('OPS-footer-extreme-no-overflow', !extreme.overflowWidth && !extreme.overflowHeight,
+    `contentHeight=${extreme.totalHeight} footerClientHeight=${extreme.footerClientHeight} rows=${JSON.stringify(extreme.rowsDump)}（不许被 hidden 裁；可提高 clientHeight，body 滚动是合法结果）`);
   check('OPS-footer-extreme-body-scroll-allowed', String(body?.props?.style?.overflowY ?? '') === 'auto',
     `body.overflowY=${JSON.stringify(body?.props?.style?.overflowY)}（控件不可裁 > 内容区保底：body 滚动合法）`);
   check('OPS-panel-height-le-260', wrapperHeightPx !== null && wrapperHeightPx <= 260,
