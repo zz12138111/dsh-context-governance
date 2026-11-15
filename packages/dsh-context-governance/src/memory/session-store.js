@@ -69,6 +69,9 @@ export function parsePointerBlock(text) {
       lineText: fields['line-text'] ?? '',
       summary: fields.summary ?? '',
       title: fields.title ?? '',
+      // P2：type/status 必须随块持久化，否则重开后索引行变 `undefined · undefined`。
+      type: fields.type ?? 'fact',
+      status: fields.status ?? 'proposed',
     });
   }
   return pointers;
@@ -113,6 +116,8 @@ export function serializePointers(entries) {
     `line-text: ${entry.lineText}`,
     `summary: ${entry.summary}`,
     `title: ${entry.title}`,
+    `type: ${entry.type ?? 'fact'}`,
+    `status: ${entry.status ?? 'proposed'}`,
     '',
   ].join('\n')).join('\n');
 }

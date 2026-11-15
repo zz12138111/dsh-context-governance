@@ -101,3 +101,44 @@ test('C38 ④：header 只出短行、有上限、超限截断并审计，不复
     await fs.rm(work, { recursive: true, force: true, maxRetries: 5 });
   }
 });
+
+/**
+ * P2（rc.11）：type/status 随指针块持久化。
+ * 缺陷：serializePointers 只写 target/line-text/summary/title，parsePointerBlock 也只回这四个字段
+ *   → 重开后 type/status 丢成 undefined，索引行变 `undefined · undefined`。
+ */
+test('C38 P2：type/status 随块持久化——同 open 追加 / 重开读回 / 重开再追加三条往返', async () => {
+  const home = await tempDir('cg-c38-p2-');
+  const work = await tempDir('cg-c38-p2-body-');
+  try {
+    const file = await bodyFile(work, ['第一行', '第二行']);
+    const indexFile = path.join(home, 'context-governance', 'sessions', 'session-pppp4444', 'MEMORY.md');
+
+    // ① 同一次 open 追加：索引行立即显示 status · type。
+    const first = openSessionMemory({ home, sessionId: 'session-pppp4444' });
+    first.append({ type: 'fact', title: 'A', target: `${file}:1` });
+    first.append({ type: 'criterion', title: 'B', target: `${file}:2` });
+    const sameOpen = await fs.readFile(indexFile, 'utf8');
+    assert.match(sameOpen, /proposed · fact · A/);
+    assert.match(sameOpen, /proposed · criterion · B/);
+
+    // ② 重开（新实例）：type/status 必须从指针块读回，不能是 undefined。
+    const reopened = openSessionMemory({ home, sessionId: 'session-pppp4444' });
+    const byTitle = Object.fromEntries(reopened.query().map((entry) => [entry.title, entry]));
+    assert.equal(byTitle.A.type, 'fact');
+    assert.equal(byTitle.A.status, 'proposed');
+    assert.equal(byTitle.B.type, 'criterion');
+    assert.equal(byTitle.B.status, 'proposed');
+
+    // ③ 重开后再追加：旧条目的 type/status 不被索引重写冲掉。
+    reopened.append({ type: 'anchor', title: 'C', target: `${file}:1` });
+    const afterAppend = await fs.readFile(indexFile, 'utf8');
+    assert.equal(afterAppend.includes('undefined'), false, `索引出现 undefined：${afterAppend}`);
+    assert.match(afterAppend, /proposed · fact · A/);
+    assert.match(afterAppend, /proposed · criterion · B/);
+    assert.match(afterAppend, /proposed · anchor · C/);
+  } finally {
+    await fs.rm(home, { recursive: true, force: true, maxRetries: 5 });
+    await fs.rm(work, { recursive: true, force: true, maxRetries: 5 });
+  }
+});
