@@ -117,6 +117,39 @@ test('P3-a/P3-b：header-injected 的 pointers 能落盘，两行 header 审计�
   }
 });
 
+test('P5 via：**经 mount** 的两个路由都真的收到 csrfToken（防"handler 有参、mount 漏传"）', async () => {
+  const { mountPluginPolicyRoute, mountSessionPolicyRoute } = await import('../src/session-policy-route.js');
+  const captured = [];
+  const ctx = {
+    webServer: { register: (definition) => { captured.push(definition); return () => {}; } },
+    effect: () => () => {},
+  };
+
+  // plugin 路由：rc.11 前 mount 漏传 csrfToken → 这里会 403。
+  assert.equal(mountPluginPolicyRoute(ctx, {
+    csrfToken: TOKEN,
+    writePluginAt: () => ({ ok: true }),
+  }), true);
+  const pluginDef = captured.find((item) => item.path === '/context-governance/plugin-policy');
+  assert.ok(pluginDef, 'plugin 路由必须挂上');
+  const pluginRes = makeRes();
+  await pluginDef.handler(makeReq({ at: 0.5 }, { 'x-context-governance-csrf': TOKEN }), pluginRes);
+  assert.equal(pluginRes.status, 200, `plugin mount 必须把 csrfToken 传下去（实际 ${pluginRes.status} ${pluginRes.body}）`);
+  assert.equal(JSON.parse(pluginRes.body).via, 'token');
+
+  // session 路由：同一口径（原本就对，防回归）。
+  assert.equal(mountSessionPolicyRoute(ctx, {
+    csrfToken: TOKEN,
+    writeSessionAt: async () => ({ ok: true }),
+  }), true);
+  const sessionDef = captured.find((item) => item.path === '/context-governance/session-policy');
+  assert.ok(sessionDef, 'session 路由必须挂上');
+  const sessionRes = makeRes();
+  await sessionDef.handler(makeReq({ sessionId: 'session-mount', at: 0.5 }, { 'x-context-governance-csrf': TOKEN }), sessionRes);
+  assert.equal(sessionRes.status, 200, `session mount 必须把 csrfToken 传下去（实际 ${sessionRes.status} ${sessionRes.body}）`);
+  assert.equal(JSON.parse(sessionRes.body).via, 'token');
+});
+
 test('P6：无 session id 的 resolveSessionRoot 不抛，返回 no-root/no-session-id 并留审计', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cg-nosid-'));
   try {

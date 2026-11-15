@@ -337,7 +337,7 @@ export function createPluginPolicyHandler({ writePluginAt, onError = null, maxBy
 export function mountPluginPolicyRoute(ctx, { writePluginAt, onError = null, path = PLUGIN_POLICY_PATH, csrfToken = null } = {}) {
   return mountWriteRoute(ctx, {
     path,
-    handler: createPluginPolicyHandler({ writePluginAt, onError }),
+    handler: createPluginPolicyHandler({ writePluginAt, onError, csrfToken }),
     label: 'context-governance: plugin-policy route',
   });
 }
