@@ -28,6 +28,8 @@ export const AUDIT_FIELD_WHITELIST = Object.freeze({
   sessionShortId: 'id',
   root: 'text',
   rootId: 'text',
+  /** C36 ⑤：root-unresolved 的会话 cwd（可诊断用，不含正文）。 */
+  cwd: 'text',
   rootCount: 'number',
   managed: 'boolean',
   fromVersion: 'number',
@@ -268,6 +270,9 @@ export const AUDIT_EVENTS = Object.freeze([
   // P3：每根 guard 生命周期/路由错误。
   'root-guard-created',
   'root-guard-disposed',
+  /** C36 ⑤：会话无可用根（空/不可读/不可写 cwd）——仍受治，根归属标 root-unresolved。 */
+  'session-governed',
+  'root-unresolved',
   'root-guard-error',
   'root-guard-limit-warn',
   // P2 预留：mem_* 根路由拒绝 / 每根 store 池。

@@ -31,7 +31,7 @@ function guardWrite(allowedBase, target) {
 
 // 兼容出口：2a 的调用方/测试仍从 root-state 导入这些纯函数。
 export { normalizeRootPath, samePath, isWithin, safeProfileName };
-export { inferRootFromCwd } from './roots/identity.js';
+export { inferCwdRoot, inferRootFromCwd } from './roots/identity.js';
 
 /** 解析持久化身份（只读，不写盘）。 */
 export function resolvePersistenceIdentity(ctx) {

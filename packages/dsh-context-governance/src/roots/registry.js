@@ -14,6 +14,7 @@ import path from 'node:path';
 import {
   ROOT_ID_HEX_LENGTHS,
   cwdWithinRoot,
+  inferCwdRoot,
   inferRootFromCwd,
   normalizeRootPath,
   rootIdOf,
@@ -212,6 +213,12 @@ export class RootRegistry {
    * 根判定（v3 冻结）：configRoot 非空 → cwd 在其下即归 configRoot（强制合并，嵌套
    * `.git` 不另立根）；configRoot 外/默认空根 → 最近 `.git` 多根。
    */
+  /** C36 ①：cwd 自身作为根（realpath 归一，不要求 `.git`）；不可用返回 null。 */
+  #cwdRootFor(cwd) {
+    if (typeof cwd !== 'string' || cwd.trim() === '') return null;
+    return inferCwdRoot(cwd, { exclude: this.#home });
+  }
+
   #rootForCwd(cwd) {
     if (this.#configRoot !== null && cwdWithinRoot(cwd, this.#configRoot)) return this.#configRoot;
     return inferRootFromCwd(cwd, { exclude: this.#home });
@@ -449,7 +456,13 @@ export class RootRegistry {
     if (cwd === '') {
       return { status: 'no-root', entry: null, source: null, isSubagent, cwd, reason: 'cwd-missing' };
     }
-    const root = this.#rootForCwd(cwd);
+    let root = this.#rootForCwd(cwd);
+    // C36 ①：`.git` 不再是治理闸门——无 git 祖先时用 cwd realpath 作记忆/审计归属根。
+    let viaCwdRoot = false;
+    if (root === null) {
+      root = this.#cwdRootFor(cwd);
+      viaCwdRoot = root !== null;
+    }
     if (root === null) {
       return { status: 'no-root', entry: null, source: null, isSubagent, cwd, reason: 'no-git-ancestor' };
     }
@@ -458,7 +471,8 @@ export class RootRegistry {
       return { status: 'no-root', entry: null, source: null, isSubagent, cwd, reason: 'root-invalid' };
     }
     this.#pin(sid, ensured.entry, ensured.source);
-    const managed = this.#isManaged(ensured.entry);
+    // C36 ①：cwd 归属根即便不是主根也纳管（会话作用域，`.git` 不再是闸门）。
+    const managed = viaCwdRoot || this.#isManaged(ensured.entry);
     if (!managed) this.#noteUnmanaged(ensured.entry);
     return {
       status: managed ? 'managed' : 'unmanaged',

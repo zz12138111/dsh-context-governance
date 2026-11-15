@@ -186,9 +186,8 @@ test('P2/T14 apply 接线：A/B 根各自读写、跨根 text 拒绝、project �
     }
     const crossText = await query.execute({ text: 'other-root' }, exec({ id: 's-own', cwd: primary }));
     assert.equal(crossText.count, 0, '跨根 text 查询不得命中');
-    const noRoot = path.join(base, 'nogit');
-    await fs.mkdir(noRoot, { recursive: true });
-    await assert.rejects(query.execute({}, exec({ id: 's-noroot', cwd: noRoot })), /\[NO_ROOT\]/);
+    // C36 起：无 .git 的 cwd 也纳管；只有 cwd 缺失/不可用时才是 NO_ROOT。
+    await assert.rejects(query.execute({}, exec({ id: 's-noroot' })), /\[NO_ROOT\]/);
     const own = await query.execute({}, exec({ id: 's-own', cwd: primary }));
     assert.equal(own.count, 1);
     assert.equal(own.entries[0].title, 'own-root');

@@ -49,6 +49,10 @@ export class RootGuardPool {
   #closed = false;
   #timer = null;
   #warnedLimit = false;
+  /** C36 ⑤：root-unresolved 审计去重（sessionId → 最近一次 cycle 键）。 */
+  #unresolvedSeen = new Map();
+  /** C36：每会话首个事件写一条 session-governed 根审计（dedupe by sessionId）。 */
+  #governedSeen = new Set();
 
   constructor({
     ctx,
@@ -94,6 +98,53 @@ export class RootGuardPool {
   get startWaitMs() { return this.#startWaitMs; }
   get idleMs() { return this.#idleMs; }
   get size() { return this.#guards.size; }
+
+  /**
+   * C36 ⑤：无根/不可用 cwd 的会话不静默——写 `root-unresolved` 根审计，
+   * 每会话每 cycle 至少 1 条（同 cycle 去重），不参与 `compaction-loss` 分型。
+   */
+  /**
+   * C36：会话首次进入治理时写一条 `session-governed`（证明“有 session id 即受治”；
+   * 与 `root-unresolved` 互补：一个证明纳管，一个证明无根但不静默）。
+   */
+  #noteGoverned(session, resolved) {
+    const sessionId = sessionIdOf(session);
+    if (sessionId === null || sessionId === undefined || sessionId === '') return;
+    if (this.#governedSeen.has(sessionId)) return;
+    this.#governedSeen.add(sessionId);
+    if (this.#governedSeen.size > 2000) {
+      const first = this.#governedSeen.values().next().value;
+      if (first !== undefined) this.#governedSeen.delete(first);
+    }
+    this.#auditRoot('session-governed', {
+      sessionId,
+      root: resolved.entry?.root ?? null,
+      rootId: resolved.entry?.rootId ?? null,
+      source: resolved.source ?? null,
+      subagent: resolved.isSubagent === true,
+    });
+  }
+
+  #noteUnresolved(session, resolved, event) {
+    const sessionId = sessionIdOf(session);
+    if (sessionId === null || sessionId === undefined || sessionId === '') return;
+    const derived = event?.data?.compactionId
+      ?? (event?.data?.turn !== undefined ? `turn:${event.data.turn}` : null);
+    const previous = this.#unresolvedSeen.get(sessionId) ?? null;
+    const cycle = derived ?? previous ?? 'session';
+    if (previous === cycle) return;
+    this.#unresolvedSeen.set(sessionId, cycle);
+    if (this.#unresolvedSeen.size > 500) {
+      const first = this.#unresolvedSeen.keys().next().value;
+      if (first !== undefined) this.#unresolvedSeen.delete(first);
+    }
+    this.#auditRoot('root-unresolved', {
+      sessionId,
+      cwd: resolved.cwd ?? '',
+      reason: resolved.reason ?? (resolved.entry === null ? 'no-root' : 'unmanaged-root'),
+      cycle,
+    });
+  }
 
   #auditRoot(event, details) {
     try {
@@ -173,7 +224,11 @@ export class RootGuardPool {
       this.#enqueue(resolved.entry.rootId, () => this.dispose(resolved.entry.rootId, 'fail-closed'));
       return;
     }
-    if (resolved.status !== 'managed' || resolved.entry === null) return;
+    if (resolved.status !== 'managed' || resolved.entry === null) {
+      this.#noteUnresolved(session, resolved, event);
+      return;
+    }
+    this.#noteGoverned(session, resolved);
     const entry = resolved.entry;
     if (entry.state !== 'active') {
       this.#enqueue(entry.rootId, () => this.dispose(entry.rootId, 'fail-closed'));

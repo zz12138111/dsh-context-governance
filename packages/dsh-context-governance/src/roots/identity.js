@@ -161,3 +161,42 @@ export function inferRootFromCwd(cwd, options = {}) {
   }
   return null;
 }
+
+/**
+ * C36 ①：无 .git 会话的根归属——cwd realpath 归一即为根（不要求 .git）。
+ *
+ * cwd 存在且可读 → realpath(cwd) 归一后作为记忆/审计归属与项目默认值分组；
+ * 不存在/不可读 → null（调用方标 root-unresolved，压缩与审计仍按会话管）。
+ *
+ * @param {string} cwd
+ * @param {{exclude?: string|null}} [options]
+ * @returns {string|null}
+ */
+export function inferCwdRoot(cwd, options = {}) {
+  if (typeof cwd !== 'string' || cwd.trim() === '') return null;
+  const exclude = typeof options?.exclude === 'string' && options.exclude.trim() !== ''
+    ? options.exclude.trim()
+    : null;
+  let resolved;
+  try {
+    resolved = stripLongPathPrefix(path.resolve(stripLongPathPrefix(cwd.trim())));
+  } catch {
+    return null;
+  }
+  let real;
+  try {
+    if (!fs.existsSync(resolved)) return null;
+    real = stripLongPathPrefix(fs.realpathSync.native(resolved));
+  } catch {
+    return null;
+  }
+  try {
+    fs.accessSync(real, fs.constants.R_OK);
+  } catch {
+    return null;
+  }
+  const root = normalizeRootPath(real);
+  if (root === null) return null;
+  if (exclude !== null && isWithin(exclude, root)) return null;
+  return root;
+}

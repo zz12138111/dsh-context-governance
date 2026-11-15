@@ -124,14 +124,16 @@ test('P1/T7 registry：cwd 空/无 .git 祖先 → no-root，不登记、不写 
   const clock = { value: new Date('2026-10-26T10:00:00Z') };
   const audit = [];
   const reg = makeRegistry({ stateFile: file, clock, rootAudit: audit });
+  // C36 ①：.git 不再是闸门——无 git 祖先的 cwd realpath 即为根归属。
   const byCwd = reg.resolveSessionRoot(session('x', noRoot));
-  assert.equal(byCwd.status, 'no-root');
-  assert.equal(byCwd.reason, 'no-git-ancestor');
+  assert.equal(byCwd.status, 'managed');
+  assert.equal(byCwd.entry.root, fs.realpathSync.native(noRoot));
+  assert.equal(byCwd.source, 'inferred');
+  assert.ok(fs.existsSync(file), 'cwd 根也会登记进 state');
+  // 空 cwd 仍按 no-root（root-unresolved 由 RootGuardPool 记审计）。
   const byEmpty = reg.resolveSessionRoot({ header: { id: 'y' } });
   assert.equal(byEmpty.status, 'no-root');
   assert.equal(byEmpty.reason, 'cwd-missing');
-  assert.equal(fs.existsSync(file), false);
-  assert.equal(audit.length, 0);
 });
 
 test('P1/T18 registry：不扫盘——只登记 state 里/会话出现的根', async () => {
