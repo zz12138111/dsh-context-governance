@@ -24,8 +24,10 @@ test('死进程留下的锁视为陈旧，可被覆盖', async () => {
     assert.equal(current.lock.pid, process.pid);
     await acquired.release();
     assert.equal((await readWriterLock(rootDir)).lock, null);
+    // 心跳定时器可能有一次 tick 在飞：等它落地再删临时目录（否则偶发 ENOTEMPTY）。
+    await new Promise((resolve) => setTimeout(resolve, 80));
   } finally {
-    await fs.rm(rootDir, { recursive: true, force: true });
+    await fs.rm(rootDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   }
 });
 

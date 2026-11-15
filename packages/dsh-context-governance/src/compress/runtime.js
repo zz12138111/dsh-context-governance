@@ -2132,7 +2132,15 @@ export class CompressionGuard {
       .then((result) => {
         if (state !== undefined) state.protectionMaterialized = result;
         // D-MGMT-023：moved 只数真正落盘的条；dedupedIds 单列，供“ids 与落盘逐条对账”。
-        const expectedIds = Array.isArray(state?.protectionWriteIds) ? state.protectionWriteIds : [];
+        // 兜底：early 等通道的 state 可能没带 protectionWriteIds（审核 N3 必补项），
+        // 统一从 state.entries 派生（排除 deduped），保证 requested 永不为“假的 0”。
+        let expectedIds = Array.isArray(state?.protectionWriteIds)
+          ? state.protectionWriteIds
+          : null;
+        if (expectedIds === null) {
+          const pool = Array.isArray(state?.entries) ? state.entries : [];
+          expectedIds = pool.filter((entry) => entry?.deduped !== true).map((entry) => entry.id);
+        }
         const writtenIds = Array.isArray(result?.ids) ? result.ids : [];
         const moved = result?.moved ?? writtenIds.length;
         this.#auditEvent('protection-materialized', {
@@ -2564,6 +2572,9 @@ export class CompressionGuard {
                 protectionMeta: early.meta,
                 protectionWrite: 'early-prewrite',
                 protectionCycleKey: early.cycleKey,
+                // D-MGMT-023：early 通道也要参与 ids 与落盘对账。
+                protectionWriteIds: early.entries.filter((entry) => entry.deduped !== true).map((entry) => entry.id),
+                protectionDedupedIds: early.entries.filter((entry) => entry.deduped === true).map((entry) => entry.id),
                 reinjectionScheduled: false,
                 report: null,
                 prunes: [],
@@ -2746,6 +2757,9 @@ export class CompressionGuard {
                 protectionMeta: early.meta,
                 protectionWrite: 'early-prewrite',
                 protectionCycleKey: early.cycleKey,
+                // D-MGMT-023：early 通道也要参与 ids 与落盘对账。
+                protectionWriteIds: early.entries.filter((entry) => entry.deduped !== true).map((entry) => entry.id),
+                protectionDedupedIds: early.entries.filter((entry) => entry.deduped === true).map((entry) => entry.id),
                 reinjectionScheduled: false,
                 report: null,
                 prunes: [],

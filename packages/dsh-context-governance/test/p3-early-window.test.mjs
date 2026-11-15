@@ -332,3 +332,39 @@ test('B2d：start 永不出现，终态归档 orphan，status=unknown，不得�
   }
 });
 
+test('D-MGMT-023 ②：early-prewrite 通道对账——requested>0，人为丢 1 条必出 protection-entry-missing', async () => {
+  const f = await makeFixture(10_000);
+  try {
+    await f.wiring.check(f.built.session);
+    assert.equal(f.store.protectionPending, 1, '预写 journal 必须存在');
+    const original = f.store.materializeProtection.bind(f.store);
+    f.store.materializeProtection = async (key) => {
+      const result = await original(key);
+      if (!Array.isArray(result?.ids) || result.ids.length === 0) return result;
+      return { ...result, moved: result.moved - 1, ids: result.ids.slice(1) };
+    };
+    f.guard.handleEvent(f.built.session, f.built.events.find((item) => item.type === 'compaction/start'));
+    f.guard.handleEvent(f.built.session, f.built.summaryEvent);
+    f.guard.handleEvent(f.built.session, f.built.events.find((item) => item.type === 'user/message' && item.data.source.kind === 'compact-checkpoint'));
+    f.built.session.surface.nodes = f.built.postSurface;
+    f.guard.handleEvent(f.built.session, f.built.events.find((item) => item.type === 'compaction/end'));
+    // 轮询等 materialize 落审计（全量并发跑时固定 wait 会偶发过早）。
+    const deadline = Date.now() + 2000;
+    let rows = [];
+    while (Date.now() < deadline) {
+      await f.guard.flush().catch(() => {});
+      await wait(10);
+      rows = await readRows(f.audit);
+      if (rows.some((row) => row.event === 'protection-materialized')) break;
+    }
+    const materialized = rows.find((row) => row.event === 'protection-materialized');
+    assert.ok(materialized, '必须有 protection-materialized');
+    assert.ok(materialized.requested > 0, 'early 通道 requested 不得为 0（兜底派生必须生效）');
+    const missing = rows.find((row) => row.event === 'protection-entry-missing');
+    assert.ok(missing, '人为丢 1 条必须写 protection-entry-missing');
+    assert.equal(missing.missing, 1);
+    assert.equal(missing.requested, materialized.requested);
+  } finally {
+    await f.cleanup();
+  }
+});

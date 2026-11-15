@@ -635,7 +635,7 @@ export class MemoryStore {
         }
         if (this.#entries.has(entry.id)) continue;
         // 兼容旧 journal（无 deduped 标记，1.0.3 之前写下的）：仍按同标题去重兜底，
-        // 但这类旧条目会进 `skippedIds`，由运行时对账审计暴露，不再冒充 moved。
+        // 但这类旧条目会进 `dedupedIds`，由运行时对账审计暴露，不再冒充 moved。
         if (this.#findRecentByTitle(entry.title, { pending: false }) !== null) {
           deduped.push(entry.id);
           continue;
@@ -1122,7 +1122,3 @@ export class MemoryStore {
 }
 
 export { formatPointer, MemoryContractError, MemoryFormatError };
-
-
-
-
