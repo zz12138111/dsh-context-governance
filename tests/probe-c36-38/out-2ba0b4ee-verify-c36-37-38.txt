@@ -2,8 +2,8 @@ ref=2ba0b4e
 sha=2ba0b4ee3f1dbebadf4e91ba22d94ed810fa71f9
 
 PASS C36-1-governed-on-first-event-no-compaction :: session-governed=1 (首个事件=user/message，无压缩)
-PASS C36-1-governed-fields :: fields={"sessionId":"session-iso-a1","cwd":"C:\\Users\\19091\\AppData\\Local\\Temp\\cg-iso-XmT7j2\\nogit-cwd","root":"C:\\Users\\19091\\AppData\\Local\\Temp\\cg-iso-XmT7j2\\nogit-cwd","rootId":"bc83532b77c5ffc5","source":"inferred","subagent":false}
-PASS C36-1-governed-root-realpath :: root=C:\Users\19091\AppData\Local\Temp\cg-iso-XmT7j2\nogit-cwd
+PASS C36-1-governed-fields :: fields={"sessionId":"session-iso-a1","cwd":"C:\\Users\\19091\\AppData\\Local\\Temp\\cg-iso-RoKVPz\\nogit-cwd","root":"C:\\Users\\19091\\AppData\\Local\\Temp\\cg-iso-RoKVPz\\nogit-cwd","rootId":"c644e15fd19bfeb6","source":"inferred","subagent":false}
+PASS C36-1-governed-root-realpath :: root=C:\Users\19091\AppData\Local\Temp\cg-iso-RoKVPz\nogit-cwd
 PASS C36-1-governed-deduped-per-session :: rows=1
 PASS C36-5-unresolved-once-per-cycle :: rows=1 detail={"sessionId":"session-iso-u1","cwd":"","reason":"cwd-missing","cycle":"turn:1"}
 PASS C36-5-unresolved-fields :: cycle=turn:1 reason=cwd-missing
@@ -15,7 +15,7 @@ PASS C36-3-policy-resolved-audit :: rows=[{"sessionId":"session-iso-a2","at":0.5
 PASS C36-3-policy-resolved-deduped :: rows(session-iso-a2)=1
 PASS C36-3-a2-evicted-with-sessionIds :: evicted={"count":1,"reason":"max-entries","sessionIds":["session-iso-e1"]}
 PASS C36-3-a1-over-a2 :: at=0.62 source=session:A1
-PASS C36-3-a1-persists-to-a2 :: disk={"version":1,"sessions":{"session-iso-a2":{"at":0.62,"source":"session:A2","updatedAt":"2026-11-15T02:53:59.522Z","version":1}}}
+PASS C36-3-a1-persists-to-a2 :: disk={"version":1,"sessions":{"session-iso-a2":{"at":0.62,"source":"session:A2","updatedAt":"2026-11-15T02:58:25.514Z","version":1}}}
 PASS C36-3-restart-source-a2 :: at=0.62 source=session:A2
 PASS C36-3-clear-falls-back :: source=builtin disk={"version":1,"sessions":{}}
 PASS C36-3-plugin-source-literal :: source=plugin at=0.52
@@ -24,7 +24,7 @@ PASS C36-3-profile-policyresolved-literal :: rows=[{"sessionId":"session-iso-pro
 PASS C36-3-profile-status-literal :: line="policy: compact.at=0.45 (source=profile=batch) native=0.6785 (config-fallback) early=on (default; unvalidated) 层=配置 profile=batch"
 PASS C37-state1-no-file-not-project :: source=builtin at=0.6
 PASS C37-no-hidden-fallback :: source=builtin
-PASS C37-create-command-audited :: text=context-governance project-template audit={"path":"C:\\Users\\19091\\AppData\\Local\\Temp\\cg-iso-XmT7j2\\proj-template\\.cg-policy.json","keys":["compact.at"]}
+PASS C37-create-command-audited :: text=context-governance project-template audit={"path":"C:\\Users\\19091\\AppData\\Local\\Temp\\cg-iso-RoKVPz\\proj-template\\.cg-policy.json","keys":["compact.at"]}
 PASS C37-status-visible :: statusHas=true
 PASS C37-show-command-chinese :: show=["context-governance project-template","项目模板 {\"compact.at\":0.5}（来源 .cg-policy.json）"]
 PASS C37-state2-explicit-file-project :: at=0.5 source=project
@@ -33,9 +33,9 @@ PASS C37-a2-over-project :: at=0.57 source=session:A2
 PASS C37-state4-bad-json-inactive :: source=builtin invalid=[{"source":"project","key":"*","reason":"invalid-json"}]
 PASS C37-state5-missing-version-inactive :: source=builtin invalid=[{"source":"project","key":"*","reason":"unknown-version"}]
 PASS C37-state3-deleted-inactive :: source=builtin
-PASS C37-clear-command-audited :: audit={"path":"C:\\Users\\19091\\AppData\\Local\\Temp\\cg-iso-XmT7j2\\proj-template\\.cg-policy.json"}
-PASS C38-1-pointer-id-and-resolve :: id=MEM-isoaaaa1-20261115-0001 target=C:\Users\19091\AppData\Local\Temp\cg-iso-XmT7j2\body\body1.md:2
-PASS C38-3-no-root-still-has-store :: dir=C:\Users\19091\AppData\Local\Temp\cg-iso-XmT7j2\home\context-governance\sessions\session-isoaaaa-1111-2222-3333-444455556666
+PASS C37-clear-command-audited :: audit={"path":"C:\\Users\\19091\\AppData\\Local\\Temp\\cg-iso-RoKVPz\\proj-template\\.cg-policy.json"}
+PASS C38-1-pointer-id-and-resolve :: id=MEM-isoaaaa1-20261115-0001 target=C:\Users\19091\AppData\Local\Temp\cg-iso-RoKVPz\body\body1.md:2
+PASS C38-3-no-root-still-has-store :: dir=C:\Users\19091\AppData\Local\Temp\cg-iso-RoKVPz\home\context-governance\sessions\session-isoaaaa-1111-2222-3333-444455556666
 PASS C38-1-two-sessions-isolated :: bAll=0 bById=0
 PASS C38-2-restart-keeps-pointers :: reloaded=MEM-isoaaaa1-20261115-0001
 PASS C38-5-miss-body-deleted :: miss=true reason=body-missing
@@ -57,4 +57,4 @@ PASS C38-7-from-role-origin-untouched :: bytesEqual=true
 PASS C38-7-from-role-audited :: audit=["memory-imported-role"]
 PASS C38-7-no-source-errors :: result={"ok":false,"reason":"no-source-session"} audit=["memory-import-no-source"]
 
-C36/C37/C38 TOTAL 54/54 PASS  WARN=1  (sandbox=C:\Users\19091\AppData\Local\Temp\cg-iso-XmT7j2)
+C36/C37/C38 TOTAL 54/54 PASS  WARN=1  (sandbox=C:\Users\19091\AppData\Local\Temp\cg-iso-RoKVPz)

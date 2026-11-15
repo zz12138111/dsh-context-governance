@@ -1,0 +1,12 @@
+ref=2ba0b4e
+sha=2ba0b4ee3f1dbebadf4e91ba22d94ed810fa71f9
+
+PASS C36-rebuild-precondition-a2 :: before=session:A2 at=0.62
+FAIL C36-rebuild-precondition-a2-rootB :: beforeB=builtin at=0.60
+PASS C36-rebuild-1-a2-kept :: after=session:A2 at=0.62
+FAIL C36-rebuild-4-multiroot-a2-kept :: afterB=builtin at=0.60
+FAIL C36-rebuild-2-a1-kept :: beforeA1=session:A1(0.50) afterA1=session:A2(0.50)
+FAIL C36-rebuild-3-plugin-save-a2-not-downgraded :: afterPlugin=plugin at=0.58
+
+C36 层级/重建 TOTAL 2/6 PASS
+FAILED: C36-rebuild-precondition-a2-rootB, C36-rebuild-4-multiroot-a2-kept, C36-rebuild-2-a1-kept, C36-rebuild-3-plugin-save-a2-not-downgraded
