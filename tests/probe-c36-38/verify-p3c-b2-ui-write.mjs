@@ -130,6 +130,12 @@ try {
   check('B2-snapshot-after-reset-falls-back-plugin',
     snapAfterReset.body?.source === 'plugin' && snapAfterReset.body?.at === 0.58,
     `body=${JSON.stringify(snapAfterReset.body)}（期望 {at:0.58, source:'plugin'}，不得仍 session:A2）`);
+
+  // B2 前端：reset 成功后必须"立刻可读"——重取快照并写回 store（否则 chip/气泡/输入框会留旧值）
+  const clientSource = fs.readFileSync(path.resolve(import.meta.dirname, '..', '..', 'packages', 'dsh-context-governance', 'lib', 'client.js'), 'utf8');
+  const resetRefetch = /resetSessionAt\([\s\S]{0,400}?fetchSnapshot\([\s\S]{0,600}?store\.set\(/.test(clientSource);
+  check('B2-reset-refetches-snapshot-and-updates-store', resetRefetch,
+    `resetToGlobal 重取+写回=${resetRefetch}（否则 reset 后 UI 留旧 A2/45）`);
   // plugin 层保存：plugin-policy-persisted 无会话根 → 落主根（已知口径）
   const pluginSave = await call(writePlugin, fakeReq('POST', '/context-governance/plugin-policy', { at: 0.6 }));
   await sleep(60);
