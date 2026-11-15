@@ -875,9 +875,11 @@ export async function apply(ctx, rawConfig = {}) {
 // C39：用户级基座统一由 profileContext 推导（env 只作 fallback）；老位置由 session-store 兼容读取。
 const userData = userDataDir(userHome);
 const a2File = userData === null ? '' : path.join(userData, 'session-policy.json');
-// C39 P3：基座不可得 → 显式不建不写（绝不拼相对路径写进进程 cwd），并留审计与 status 可见。
-if (userData === null) {
-  try { rootAudit?.append?.('user-store-unavailable', { reason: 'profileContext-or-env-missing' }); } catch { /* 审计失败不阻断装载 */ }
+// C39 P3：基座不可得 → 显式不建不写（绝不拼相对路径写进进程 cwd）。
+// 审计落点在主审计（根内 `memory/governance/audit.jsonl`）——用户级不可用时根审计是唯一可落点，
+// 由下面 `primaryAudit` 建好后统一写一次（`rootAudit` 在身份不可得时本身就是 null）。
+const userStoreUnavailable = userData === null;
+if (userStoreUnavailable) {
   ctx.logger?.warn?.('[context-governance] user-level store unavailable (no profileContext.home / USERPROFILE / HOME); user-level writes disabled');
 }
 // C36：A2/policy-resolved 事件写根审计（用户级，只读根审计也能落）。
@@ -999,6 +1001,14 @@ let policyState = buildPolicyState(mergePluginPolicy(config), {
       maxBytes: config.audit.maxBytes,
       allowedBase: store.rootDir,
     });
+    // C39 P3：用户级基座不可得时，根审计是唯一可落点 → 在这里写一次（进程内只写一次）。
+    if (userStoreUnavailable === true) {
+      try {
+        if (rootAudit?.append?.('user-store-unavailable', { reason: 'profileContext-or-env-missing' }) !== true) {
+          primaryAudit.append('user-store-unavailable', { reason: 'profileContext-or-env-missing' });
+        }
+      } catch { /* 审计失败不阻断装载 */ }
+    }
     const pool = registry === null
       ? null
       : new RootStorePool({

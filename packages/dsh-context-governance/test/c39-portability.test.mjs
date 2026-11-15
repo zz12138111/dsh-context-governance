@@ -203,6 +203,13 @@ test('C39 ③/P3：无 profileContext 且无 USERPROFILE/HOME → fail-closed：
     assert.equal(fs.existsSync(path.join(process.cwd(), 'context-governance')), false, '进程 cwd 不得出现用户级目录');
     assert.equal(fs.existsSync(path.join(os.tmpdir(), 'context-governance')), false, 'tmp 不得出现用户级目录');
     assert.equal(captured.warns.some((line) => /user-level store unavailable/.test(line)), true, '必须留下可见 warn');
+    // C39 P3：用户级不可用时审计落根内 audit.jsonl（唯一可落点），且进程内只写一行。
+    const rootAuditFile = path.join(root, 'memory', 'governance', 'audit.jsonl');
+    assert.equal(fs.existsSync(rootAuditFile), true, '根审计文件必须存在');
+    const auditLines = fs.readFileSync(rootAuditFile, 'utf8')
+      .split(/\r?\n/)
+      .filter((line) => line.includes('user-store-unavailable'));
+    assert.equal(auditLines.length, 1, `user-store-unavailable 必须恰 1 行，实际 ${auditLines.length}`);
   } finally {
     if (savedProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = savedProfile;
     if (savedHome === undefined) delete process.env.HOME; else process.env.HOME = savedHome;
