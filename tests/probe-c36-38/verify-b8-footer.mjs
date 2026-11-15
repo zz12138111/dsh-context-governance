@@ -33,11 +33,23 @@ check('B9-footer-has-input-and-4-buttons',
   `footer@${footerAt} 之内 input@${inputAt} save@${saveAt} reset@${resetAt} restore@${restoreAt} settings@${settingsAt}`);
 check('B9-detail-toggle-stays-in-body', detailToggleAt > 0 && detailToggleAt < footerAt,
   `detail-toggle@${detailToggleAt} < footer@${footerAt}`);
-check('B9-footer-two-rows',
-  /'data-cg-footer-row':\s*'input'/.test(src) && /'data-cg-footer-row':\s*'actions'/.test(src),
-  'footer 分两排：输入行 + 按钮行');
-check('B9-footer-max-height-88', /popoverFooter:\s*\{[^}]*maxHeight:\s*88/.test(src), 'footer ≤88px');
-check('B9-body-min-height-96', /popoverBody:\s*\{[^}]*minHeight:\s*96/.test(src), '内容区保底 96px');
+check('B11-footer-wrap-allowed',
+  /popoverFooter:[^}]*flexWrap: 'wrap'/.test(src),
+  'B11：允许换排（wrap），不是固定的两排结构');
+check('B11-footer-never-clips',
+  /popoverFooter:[^}]*flexWrap: 'wrap'/.test(src)
+  && !/popoverFooter:[^}]*overflow: 'hidden'/.test(src)
+  && !/popoverFooter:[^}]*maxHeight/.test(src),
+  'B11：footer 不得用 overflow:hidden / maxHeight 兜底裁控件；换排即可');
+check('B11-footer-input-narrow',
+  /popoverFooterInput:[^}]*width: 56/.test(src)
+  && /popoverFooterInput:[^}]*flex: '0 0 56px'/.test(src)
+  && /popoverFooterButton:[^}]*flex: '0 0 auto'/.test(src)
+  && /popoverFooterButton:[^}]*whiteSpace: 'nowrap'/.test(src),
+  'B11：输入框固定 56px 不增长；按钮 0 0 auto + nowrap（不压缩不折行）');
+check('B11-body-floor-dynamic',
+  /computeBodyFloor/.test(src) && /minHeight: bodyMin/.test(src) && !/popoverBody:\s*\{[^}]*minHeight:\s*96/.test(src),
+  '内容区保底必须动态（computeBodyFloor → bodyMin），不得写死 96（否则 footer 变大时顶穿面板）');
 check('B9-wrapper-fixed-height',
   /height:\s*`\$\{layout\.height\}px`/.test(src) && /overflow:\s*'hidden'/.test(src),
   'wrapper px 高度 + overflow:hidden');
@@ -134,6 +146,15 @@ const diffRect = client.samePopoverRect(
   { left: 10, top: 20, width: 320, height: 228, placement: 'up' },
   { left: 40, top: 60, width: 320, height: 228, placement: 'up' },
 );
+const extremeFooter = 5 * 30 + 4 * 8; // 5 排（每控件独占一行）≈182
+const extremeHeight = client.computePopoverHeight({ bodyScroll: 0, footerHeight: extremeFooter, chrome: 44 });
+const extremeFloor = client.computeBodyFloor({ footerHeight: extremeFooter, chrome: 44 });
+check('OPS-footer-extreme-narrow-no-clip',
+  extremeHeight === 260 && extremeFooter + 44 + extremeFloor <= 260 && extremeFloor === 260 - extremeFooter - 44,
+  `footer=${extremeFooter} bodyFloor=${extremeFloor} height=${extremeHeight}（footer 完整、面板不溢出、内容区让位滚动）`);
+check('B11-normal-footer-floor-96', client.computeBodyFloor({ footerHeight: 88, chrome: 44 }) === 96,
+  '常规 footer(88) 时内容区保底仍为 96');
+
 check('B10-same-rect-semantics', sameRect === true && diffRect === false,
   `same=${sameRect} diff=${diffRect}（≤1px 视为同一个）`);
 

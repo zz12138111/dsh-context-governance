@@ -507,17 +507,23 @@ window.__ModuleLoader__.load({
       ].join('\n');
     };
     /**
-     * B9（rc.16）：气泡高度 = 实测内容 + 实测 chrome，并**带下限**。
+     * B11（rc.17）硬优先级：**控件不可裁 > 内容区保底**。
      *
-     * rc.15 的坑：`desired` 只有上限 `min(260, …)` 没有下限；而内容区 CSS `minHeight:96` 是硬保底 →
-     * 内容很少时 `desired=172 < 96+88+44=228`，面板装不下 → wrapper `overflow:hidden` 把 footer 裁掉
-     * （B8 在"内容少"场景复发）。下限必须把**内容区最小高度**算进去：`floor = 96 + footer + chrome`。
+     * 极端窄面板下 footer 可能到 5 排（≈182px）。若内容区仍死守 96，则 96+182+44=322 > 260 → 溢出被裁。
+     * 规则：内容区保底随 footer 增大而让位——
+     *   `available = 260 − footer − chrome`；`bodyFloor = min(96, max(0, available))`；
+     *   `height = min(260, max(bodyScroll, bodyFloor) + footer + chrome)`。
+     * 结果：footer 永远完整、面板永不溢出、内容区负责滚动。
      */
+    const computeBodyFloor = ({ footerHeight = 0, chrome = 44, maxHeight = 260, minContent = 96 } = {}) => (
+      Math.min(minContent, Math.max(0, maxHeight - (Number(footerHeight) || 0) - (Number(chrome) || 0)))
+    );
     const computePopoverHeight = ({ bodyScroll = 0, footerHeight = 0, chrome = 44, minContent = 96, maxHeight = 260 } = {}) => {
-      const content = Math.max(Number(bodyScroll) || 0, minContent);
-      const wanted = Math.ceil(content + (Number(footerHeight) || 0) + (Number(chrome) || 0));
-      // 下限 = 内容区最小高度 + footer + chrome；上限 260。两者冲突时（视口极矮）宁可内容区滚动。
-      return Math.min(maxHeight, wanted);
+      const footer = Number(footerHeight) || 0;
+      const framed = Number(chrome) || 0;
+      const bodyFloor = computeBodyFloor({ footerHeight: footer, chrome: framed, maxHeight, minContent });
+      const content = Math.max(Number(bodyScroll) || 0, bodyFloor);
+      return Math.min(maxHeight, Math.ceil(content + footer + framed));
     };
     /**
      * B10（rc.16）：校正环保护——两个矩形"够近"就视为同一个，返回 true 让调用方保留旧对象
@@ -601,10 +607,15 @@ window.__ModuleLoader__.load({
       metaLine: { fontSize: 12, color: 'var(--dsh-fg-secondary, #bdbdbd)' },
       // B8：内容区独立滚动（minHeight:0 是 flex 子项能滚动的前提），footer 不参与滚动。
       // B9：内容区至少保留 96px（低于此优先压内容区滚动，绝不再压 footer）。
-      popoverBody: { display: 'flex', flexDirection: 'column', gap: 10, flex: '1 1 auto', minHeight: 96, overflowY: 'auto' },
+      // B11：内容区保底**不写死**——由 computeBodyFloor 按 footer 实际高度动态给（footer 越大让位越多）。
+      popoverBody: { display: 'flex', flexDirection: 'column', gap: 10, flex: '1 1 auto', minHeight: 0, overflowY: 'auto' },
       // B9：操作区两排（输入行 + 按钮行），总高 ≤88px，常驻不滚。
-      popoverFooter: { display: 'flex', flexDirection: 'column', gap: 8, flex: '0 0 auto', flexShrink: 0, maxHeight: 88, overflow: 'hidden' },
-      popoverFooterRow: { display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 },
+      // B11：单行优先——窄输入框放最左，四按钮各自 flexShrink:0（**按钮永不被裁**，不够就换行）。
+      // B11（审核裁决 A）：**不设 maxHeight / overflow:hidden**——宁可 footer 高一点也不能裁控件。
+      // 最坏 3 排 ≈106px，面板预算 96 + 106 + 44 = 246 ≤ 260 仍成立；高度由实测 effect 吸收。
+      popoverFooter: { display: 'flex', flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end', gap: 8, flex: '0 0 auto', flexShrink: 0 },
+      popoverFooterInput: { width: 56, minWidth: 56, flex: '0 0 56px', padding: '6px 8px', fontSize: 14, borderRadius: 8, border: '1px solid var(--dsh-border, #444)', background: 'var(--dsh-bg, #1e1e1e)', color: 'var(--dsh-fg, #e6e6e6)', textAlign: 'right' },
+      popoverFooterButton: { flex: '0 0 auto', flexShrink: 0, whiteSpace: 'nowrap' },
       row: { display: 'flex', alignItems: 'center', gap: 8 },
       input: { flex: 1, minWidth: 0, padding: '6px 8px', fontSize: 14, borderRadius: 8, border: '1px solid var(--dsh-border, #444)', background: 'var(--dsh-bg, #1e1e1e)', color: 'var(--dsh-fg, #e6e6e6)' },
       inputError: { borderColor: 'var(--dsh-red, #e05252)' },
@@ -762,6 +773,8 @@ window.__ModuleLoader__.load({
        * "Rendered more hooks than during the previous render"，整个气泡崩掉（真机 chip/气泡齐哑）。
        */
       const [layout, setLayout] = react.useState(null);
+      // B11：内容区动态保底（默认 96；footer 变大时自动让位，避免顶穿面板）。
+      const [bodyMin, setBodyMin] = react.useState(96);
       const viewportRef = react.useRef(null);
       const chipRectRef = react.useRef(null);
       // B10：每次打开只允许校正一次（否则测量持续失配会无限重渲染）。
@@ -870,6 +883,8 @@ window.__ModuleLoader__.load({
             }
           } catch { /* 拿不到 computed 就用兜底 */ }
           // B9：走带**下限**的统一算法（内容区 96 保底 + footer + chrome），避免内容少时裁掉 footer。
+          const floor = computeBodyFloor({ footerHeight, chrome });
+          setBodyMin((prev) => (prev === floor ? prev : floor));
           const desired = computePopoverHeight({ bodyScroll, footerHeight, chrome });
           if (Math.abs(desired - layout.height) <= 1) return;
           const chip = chipRectRef.current;
@@ -964,7 +979,7 @@ window.__ModuleLoader__.load({
           key: 'body',
           'data-cg-body': '1',
           ref: bodyRef,
-          style: S.popoverBody,
+          style: { ...S.popoverBody, minHeight: bodyMin },
         },
           h('div', { style: { ...S.title, flexShrink: 0 } }, model.title),
           h('div', { style: { ...S.big, flexShrink: 0 }, 'data-role': 'current-percent' }, model.percentText),
@@ -976,37 +991,38 @@ window.__ModuleLoader__.load({
           sessionId === null ? h('div', { style: S.error }, labels.noSession ?? LABELS.zh.noSession) : null,
           h('div', { role: 'alert', 'aria-live': 'polite', style: { ...S.error, flexShrink: 0 } }, error),
         ),
-        // footer：**不在滚动区内**（flex:0 0 auto）。B9：百分比输入行也搬进来——
-        // 操作区（输入 + 四个按钮）整体常驻，用户永远不需要滚动才能保存。
+        // footer：**不在滚动区内**（flex:0 0 auto）。B9/B11：窄输入框放在按钮行**左侧同一排**，
+        // 四个按钮各自 flexShrink:0 —— 宽度不够时**只让输入框换行/压缩，绝不裁按钮**。
         h('div', { key: 'footer', 'data-cg-footer': '1', ref: footerRef, style: S.popoverFooter },
-          h('div', { key: 'footer-input-row', 'data-cg-footer-row': 'input', style: S.popoverFooterRow },
-            h('input', {
-              ref: inputRef, type: 'text', inputMode: 'numeric', value: draft, 'aria-label': labels.percent,
-              'aria-invalid': error === '' ? 'false' : 'true',
-              style: error === '' ? S.input : { ...S.input, ...S.inputError },
-              onChange: (event) => { setDraft(normalizePercentInput(event.target.value)); setSaved(false); },
-              onBlur: onBlurField,
-              onKeyDown: (event) => { if (event?.key === 'Enter') { event.preventDefault?.(); save(); } if (event?.key === 'Escape') { close(); } },
-            }),
-            h('span', { style: S.metaLine }, labels.unit)),
-          h('div', { key: 'footer-actions-row', 'data-cg-footer-row': 'actions', style: { ...S.popoverFooterRow, flexWrap: 'wrap', justifyContent: 'flex-end' } },
-            h('button', { type: 'button', style: S.button, onClick: restoreDefault, disabled: !canSaveSession }, `${labels.restore} ${model.defaultPercent}%`),
-            h('button', {
-              type: 'button',
-              className: 'cg-reset-global',
-              style: canSaveSession ? S.button : { ...S.button, ...S.buttonDisabled },
-              onClick: resetToGlobal,
-              disabled: !canSaveSession,
-            }, labels.resetGlobal ?? '恢复全局设置'),
-            model.ready ? null : h('button', { type: 'button', style: S.button, onClick: retry }, labels.retry),
-            h('button', {
-              type: 'button',
-              style: canSaveSession && !saving ? { ...S.button, ...S.buttonPrimary } : { ...S.button, ...S.buttonPrimary, ...S.buttonDisabled },
-              onClick: save,
-              disabled: !canSaveSession || saving,
-            }, saving ? labels.saving : saved ? labels.saved : labels.save),
-            h('button', { type: 'button', className: 'cg-at-settings-link', style: S.button, onClick: () => { try { ctx?.openSettings?.(); } catch { /* ignore */ } } }, labels.openSettings),
-          ),
+          h('input', {
+            key: 'footer-input',
+            ref: inputRef, type: 'text', inputMode: 'numeric', value: draft, 'aria-label': labels.percent,
+            'aria-invalid': error === '' ? 'false' : 'true',
+            'data-cg-footer-input': '1',
+            style: error === '' ? S.popoverFooterInput : { ...S.popoverFooterInput, ...S.inputError },
+            onChange: (event) => { setDraft(normalizePercentInput(event.target.value)); setSaved(false); },
+            onBlur: onBlurField,
+            onKeyDown: (event) => { if (event?.key === 'Enter') { event.preventDefault?.(); save(); } if (event?.key === 'Escape') { close(); } },
+          }),
+          h('span', { key: 'footer-unit', style: { ...S.metaLine, flexShrink: 0 } }, labels.unit),
+          h('button', { key: 'footer-restore', type: 'button', style: { ...S.button, ...S.popoverFooterButton }, onClick: restoreDefault, disabled: !canSaveSession }, `${labels.restore} ${model.defaultPercent}%`),
+          h('button', {
+            key: 'footer-reset-global',
+            type: 'button',
+            className: 'cg-reset-global',
+            style: { ...(canSaveSession ? S.button : { ...S.button, ...S.buttonDisabled }), ...S.popoverFooterButton },
+            onClick: resetToGlobal,
+            disabled: !canSaveSession,
+          }, labels.resetGlobal ?? '恢复全局设置'),
+          model.ready ? null : h('button', { key: 'footer-retry', type: 'button', style: { ...S.button, ...S.popoverFooterButton }, onClick: retry }, labels.retry),
+          h('button', {
+            key: 'footer-save',
+            type: 'button',
+            style: { ...(canSaveSession && !saving ? { ...S.button, ...S.buttonPrimary } : { ...S.button, ...S.buttonPrimary, ...S.buttonDisabled }), ...S.popoverFooterButton },
+            onClick: save,
+            disabled: !canSaveSession || saving,
+          }, saving ? labels.saving : saved ? labels.saved : labels.save),
+          h('button', { key: 'footer-settings', type: 'button', className: 'cg-at-settings-link', style: { ...S.button, ...S.popoverFooterButton }, onClick: () => { try { ctx?.openSettings?.(); } catch { /* ignore */ } } }, labels.openSettings),
         ),
       );
       // B6：portal 到 body 后 fixed 的包含块才是视口。只 portal **这一个面板节点**（不搬入口组件）。
@@ -1151,6 +1167,7 @@ window.__ModuleLoader__.load({
       displaySourceFor,
       computePopoverRect,
       computePopoverHeight,
+      computeBodyFloor,
       correctPopoverRect,
       samePopoverRect,
       compactBubbleLines,
