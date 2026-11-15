@@ -1022,7 +1022,6 @@ window.__ModuleLoader__.load({
             onClick: save,
             disabled: !canSaveSession || saving,
           }, saving ? labels.saving : saved ? labels.saved : labels.save),
-          h('button', { key: 'footer-settings', type: 'button', className: 'cg-at-settings-link', style: { ...S.button, ...S.popoverFooterButton }, onClick: () => { try { ctx?.openSettings?.(); } catch { /* ignore */ } } }, labels.openSettings),
         ),
       );
       // B6：portal 到 body 后 fixed 的包含块才是视口。只 portal **这一个面板节点**（不搬入口组件）。

@@ -26,11 +26,13 @@ const inputAt = inFooter("'aria-label': labels.percent");
 const saveAt = inFooter('saving ? labels.saving : saved ? labels.saved : labels.save');
 const resetAt = inFooter("labels.resetGlobal ?? '恢复全局设置'");
 const restoreAt = inFooter('${labels.restore} ${model.defaultPercent}%');
-const settingsAt = inFooter("className: 'cg-at-settings-link'");
+const settingsAt = inFooter("className: 'cg-at-settings-link'"); // B12：应为 -1（按钮已删）
 const detailToggleAt = idx("className: 'cg-detail-toggle'");
-check('B9-footer-has-input-and-4-buttons',
-  footerAt > 0 && inputAt > 0 && saveAt > 0 && resetAt > 0 && restoreAt > 0 && settingsAt > 0,
-  `footer@${footerAt} 之内 input@${inputAt} save@${saveAt} reset@${resetAt} restore@${restoreAt} settings@${settingsAt}`);
+check('B12-footer-has-input-and-3-buttons',
+  footerAt > 0 && inputAt > 0 && saveAt > 0 && resetAt > 0 && restoreAt > 0,
+  `footer@${footerAt} 之内 input@${inputAt} save@${saveAt} reset@${resetAt} restore@${restoreAt}`);
+check('B12-settings-button-removed', settingsAt === -1,
+  `'打开设置页' 按钮偏移=${settingsAt}（应为 -1：用户要求删除，设置页仍从 DSH 设置进入）`);
 check('B9-detail-toggle-stays-in-body', detailToggleAt > 0 && detailToggleAt < footerAt,
   `detail-toggle@${detailToggleAt} < footer@${footerAt}`);
 check('B11-footer-wrap-allowed',
@@ -110,9 +112,10 @@ check('B9-vm-input-lives-in-footer',
   findNode(footNode, isInput) !== null && findNode(bodyNode, isInput) === null,
   '输入框在 footer 内、不在 body 内');
 const footerText = JSON.stringify(footNode ?? {});
-check('B9-vm-four-buttons-in-footer',
-  ['保存到本会话', '恢复默认', '恢复全局设置', '打开设置页'].every((label) => footerText.includes(label)),
-  `四按钮在 footer=${['保存到本会话', '恢复默认', '恢复全局设置', '打开设置页'].map((label) => footerText.includes(label)).join('/')}`);
+check('B12-vm-three-buttons-in-footer',
+  ['保存到本会话', '恢复默认', '恢复全局设置'].every((label) => footerText.includes(label))
+  && footerText.includes('打开设置页') === false,
+  `三按钮在 footer=${['保存到本会话', '恢复默认', '恢复全局设置'].map((label) => footerText.includes(label)).join('/')} 含打开设置页=${footerText.includes('打开设置页')}`);
 
 // ---------- ③ 几何 + 高度算法 ----------
 const rect = client.computePopoverRect({
