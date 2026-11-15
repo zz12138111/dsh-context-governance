@@ -1,6 +1,6 @@
 # dsh-context-governance
 
-上下文治理插件（DSH / DeepSeek Harness）。M1 目标：**压缩前后不断线**——任务态记忆落项目文件，压缩后只回注 ID/状态/指针，详情按需取。
+上下文治理插件（DSH / DeepSeek Harness）。M1 目标：**压缩前后不断线**——**会话指针**（`MEM-<session>-…` → 文件路径:行号）存用户级，正文留在人工文件，压缩后只回注 ID/状态/指针，详情按需取。
 
 > 版本：**以 `package.json` 为唯一来源**（本文与代码都不再重复版本号；启动行/审计里的 version 由运行时读取）。
 > 当前交付：**1.1.0-RC**（修 bug + 压缩改进；**不是 1.1.0 终版**——终版仍含「分会话阈值设置」与平台级会话覆盖 C36，均待后续迭代）。**全量测试以最新报告为准**（本文不写死数字）；**自 M3 T2（0.3.1）起新会话 header 默认开启**（`/cg header off` 或配置 `memoryHeader.enabled=false` 可关）。
@@ -28,7 +28,7 @@
 2. **新会话自动带前情提要**：最多 **8 行**摘要（实测约 **69 tokens**），只带动态状态；与规则文件（AGENTS.md）冲突时**以规则文件为准**。
 3. **提前压但不抢戏**：默认 **60%** 找安全时机清理旧账，清理完收手，不干扰宿主原生压缩。
 4. **一个会话一个档**：长跑 `batch`、写码 `coding`、评审 `review`、研究 `research`（完全不提前压）；会话内可临时微调，重启回默认。
-5. **多工作区全覆盖**：按会话 cwd 上溯最近的 `.git` 识别项目根，各项目记忆/压缩独立，不用挨个配。
+5. **多工作区全覆盖**：**有 session id 即纳入治理**，`.git` 不再是闸门（C36）；root 只作审计/压缩分组，**记忆按会话隔离**（C38），不用挨个登记。
 6. **老决策自动让位**：旧决定标 `[Old]` 排到末尾、不占主预算；真正的去重清理在 **1.1**。
 7. **压缩留痕**：每次压前/压后 token、后端类型都有记录；跨会话汇总账单在 **1.1**。
 
@@ -70,7 +70,7 @@
 - 记忆是**文件**：人可读、可 git、可人工修；无数据库、无向量检索、无第三方依赖。
 - 回注遵守一条硬规则：**详情永不回注**；摘要不可读时只放 ID+状态。
 - 压缩沿用宿主或 context-zip，不写第二个压缩引擎，也**不替换** `ctx.compaction`。
-- **1.0 多根治理**：可判定根按会话 cwd 登记并各自纳管；每根独立 `MemoryStore`、`memory/governance/audit.jsonl`、writer lock、guard/header/提前压；`configRoot` 非空时其下会话强制归该根，嵌套 `.git` 不另立根。**已知限制**：显式配置根内多根隔离不完整（v3 冻结口径，不是 bug）。
+- **1.1 会话级记忆与多根**：root 只作审计/压缩分组；**指针库在用户级** `<home>/context-governance/sessions/<sessionId>/`（`MEMORY.md`/`topics/`/`.id-watermark`），**不进项目根**；共享只经 `shared/<rootId>/` + 显式 `memory promote`；legacy `<root>/memory/governance/` 标 `legacy-shared-v1` **只读**。**已知限制**：显式配置根内多根隔离不完整（v3 冻结口径，不是 bug）。
 
 ### 隐私边界（准确口径）
 
@@ -162,7 +162,7 @@ packages/dsh-context-governance/
 ```yaml
 config:
   projectRoot: ""                     # D9=A：空 = 首次推断并持久化；包内不预填
-  memoryRoot: "memory/governance"     # 相对推断出的 projectRoot
+  memoryRoot: "memory/governance"     # legacy 只读位置；新指针存用户级 sessions/<sessionId>/
   project: ""                         # 空 = 运行期按根 basename 推导
   compression:
     enabled: true
@@ -198,7 +198,7 @@ config:
 - **根判定**：`configRoot` 非空 → cwd 在其下即归该根、`source=config`，**嵌套 `.git` 不另立根**（**显式配置根内多根隔离不完整**，已知限制）；configRoot 外/默认空根 → 最近 `.git` 多根。
 - **状态文件 v2**：`<home>/context-governance/root-state-<profile>.json`，`roots` 以 `rootId`（路径 hash）为键；`primaryRootId` 只作 v1 迁移锚点/展示，**config 不改写持久化主根**；v1 自动迁移并留 `.v1.bak`。
 - **`/cg roots`**：只读列出全部已登记根（`id`/`name`/`project`/`state`/`memory`/`audit` 末行）；`/cg status` 也含同一段。
-- **写入边界**：只有两处——`<home>/context-governance/`（状态/root audit/默认诊断）与 `<root>/memory/governance/`（记忆/每根 audit）；每次实际写入前做 realpath/`..`/符号链接/盘符归一 containment，白名单外 fail-closed。
+- **写入边界**：① `<home>/context-governance/`（状态/root audit/日志）；② `sessions/<sessionId>/`（指针/会话审计）；③ `shared/<rootId>/`（显式 promote）；`<root>/memory/governance/` 仅 legacy 只读、不再新写；每次实际写入前做 realpath/`..`/符号链接/盘符归一 containment，白名单外 fail-closed。
 - **`logFile`**：只允许用户级或该根 `memory/governance/`；旧 `<root>/logs/` 路径会 CONFIG 拒绝、插件不加载该 profile。
 - **`mem_*`**：只读写本会话根；`no-root/fail-closed/子会话写` 均拒绝并审计 `memory-tool-rejected`；1.0 不做跨根查询。
 - 身份不可得 → fail-closed：不猜路径、不落盘、根保持 unknown。
@@ -212,7 +212,9 @@ config:
 ```
 <home>/context-governance/           用户级：root-state-<profile>.json、root-audit-<profile>.jsonl、
                                      logs/governance.log（默认诊断；旧 <root>/logs/ 已废弃）
-<root>/memory/governance/             每根：记忆、保护 journal、.writer.json、audit.jsonl
+<home>/context-governance/sessions/<sessionId>/   指针：MEMORY.md / topics/ / .id-watermark / audit
+<home>/context-governance/shared/<rootId>/       显式 promote 的共享指针
+<root>/memory/governance/                         legacy-shared-v1（只读，不新写）
 ├─ MEMORY.md      派生索引（一行一条，不手改；手改会在下次写入时被覆盖）
 ├─ .writer.json   进程间写者锁
 ├─ audit.jsonl    审计（只写元数据，不写正文）
