@@ -135,6 +135,34 @@ export function buildMemoryHeader(store, options = {}) {
   };
 }
 
+/**
+ * P3（rc.11）：`header-injected` 审计字段。
+ *
+ * rc.10 缺陷：`lines` 直接取 `built.count`（指针/条目条数），与真实注入的文本行数混用；
+ * 一条指针渲染成一行时两者恰好相等，掩盖了问题，多行/带 Note 时读数失真。
+ * 现在：`lines` = **实际注入文本的行数**，`pointers` = 条目数，两值各自可核对。
+ */
+export function headerInjectedFields(built, injection = {}) {
+  const text = typeof built?.text === 'string' ? built.text : '';
+  const count = Number.isFinite(built?.count) ? built.count : 0;
+  return {
+    count,
+    lines: text === '' ? 0 : text.split('\n').length,
+    pointers: count,
+    mode: built?.mode ?? null,
+    source: 'memory',
+    tokensInjected: Math.ceil(text.length / 4),
+    // 0.2.2：不记裸 messages.length（基线+1 会被误读成“注入 1 条”）；
+    // 只记前后长度，由两值差得 injected（0/1）+ header 指纹。
+    injected: Number.isFinite(injection.messagesAfter) && Number.isFinite(injection.messagesBefore)
+      ? injection.messagesAfter - injection.messagesBefore
+      : null,
+    messagesBefore: injection.messagesBefore ?? null,
+    messagesAfter: injection.messagesAfter ?? null,
+    // 审核定论（2026-10-26）：不做 header hash（32 bit 指纹对低熵 header 不抗猜测；需公开比对时用 HMAC/加盐另立项）。
+  };
+}
+
 function isSubagentPayload(payload) {
   const agent = payload?.agent ?? null;
   if (agent === null) return false;
@@ -194,7 +222,14 @@ export function registerMemoryHeader(ctx, store, options = {}) {
           const rendered = renderMemoryHeader({ query: () => pointers }, {
             maxLines: options.maxLines,
             maxBytes: Number.isFinite(options.maxBytes) ? options.maxBytes : options.maxChars,
-            audit: options.onTruncated,
+            // P3：把 session 一并透出，保证 `header-truncated` 与 `header-injected` **同根**。
+            audit: (event, details) => {
+              try {
+                options.onTruncated?.(event, details, session);
+              } catch {
+                /* 审计失败不影响 header */
+              }
+            },
           });
           header = { text: rendered.text, ids: pointers.map((entry) => entry.id), count: pointers.length, mode: 'session-pointers' };
         } else {

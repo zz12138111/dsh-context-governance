@@ -30,7 +30,7 @@ import { formatCapability, probeCapability } from './capabilities.js';
 import { DEFAULT_AUDIT_MAX_BYTES, MAX_AUDIT_MAX_BYTES, MIN_AUDIT_MAX_BYTES, AuditLog, createRootAudit } from './audit.js';
 import { appendDiagnosticLine, capabilityLine, PLUGIN_VERSION, registerDiagnosticPath, startupLine } from './diagnostics.js';
 import { DEFAULT_MEMORY_DIR, MemoryStore, MemoryStoreError } from './memory/store.js';
-import { registerMemoryHeader } from './memory/header.js';
+import { headerInjectedFields, registerMemoryHeader } from './memory/header.js';
 import { openSessionMemory } from './memory/session-store.js';
 import { SCOPE_SKIP, resolveScope } from './scope.js';
 import { MEM_QUERY_NAME, MEM_WRITE_NAME, registerMemoryTools } from './tools/mem-tools.js';
@@ -38,7 +38,7 @@ import { createSnapshotHandler, createSnapshotPolicyResolver, mergeSettingsAt, p
 import { mountSessionPolicyRoute, mountPluginPolicyRoute } from './session-policy-route.js';
 import { rebuildPolicyStates } from './policy-rebuild.js';
 import { createPluginPolicyStore, pluginPolicyFile } from './plugin-policy.js';
-import { createDedupedMemoryAudit } from './memory-audit.js';
+import { createRootRoutedMemoryAudit } from './memory-audit.js';
 import { legacySessionBase, resolveUserHome, userDataDir } from './user-paths.js';
 
 // C39：用户级 home（profileContext 优先）。startRuntime 赋值；命令/header/工具面统一读 currentUserHome()。
@@ -934,8 +934,58 @@ let policyForEntryRef = null;
 // 取值为 { setAt: async ({sessionId, at}) => {ok, error?, detail?} }，命令面未挂载时为 null。
 let sessionWriteRef = null;
 // C38：memory-pointer-miss 去重（sessionId|id|reason）——**唯一一份**，mem_*/header/`/cg memory show` 共用。
-const auditMemoryEvent = createDedupedMemoryAudit({
-  sink: (event, details) => { try { primaryAudit?.append?.(event, details); } catch { /* 审计失败不影响记忆 */ } },
+// P3（rc.11）：审计落点按会话根路由（G 不落 D）；根已删 → 不建目录、不写（P4：不得伪造根）。
+const rootAuditCache = new Map();
+const openRootAuditForEntry = (entry) => {
+  const rootId = typeof entry?.rootId === 'string' ? entry.rootId : '';
+  if (rootId === '') return null;
+  if (rootAuditCache.has(rootId)) return rootAuditCache.get(rootId) ?? null;
+  let created = null;
+  try {
+    const memory = memoryRootFor(entry.root, config.memoryRootRel ?? config.memoryRoot);
+    // 根目录不在 → 不建、不写；用户恢复根后下一行会重新尝试。
+    if (memory.ok === true && fs.existsSync(memory.memoryRoot) === true) {
+      created = new AuditLog({
+        file: path.join(memory.memoryRoot, 'audit.jsonl'),
+        maxBytes: config.audit.maxBytes,
+        allowedBase: memory.memoryRoot,
+      });
+    }
+  } catch {
+    created = null;
+  }
+  if (created !== null) rootAuditCache.set(rootId, created);
+  return created;
+};
+/** 按会话解析审计落点：已打开的根 guard → 该根审计；否则按 registry 落该根；都没有 → 主根。 */
+const auditForSessionRoot = (session) => {
+  const opened = guardPool === null ? null : (guardPool.auditForSession(session ?? null) ?? null);
+  if (opened !== null) return opened;
+  if (registry === null) return primaryAudit;
+  let resolved = null;
+  try {
+    resolved = registry.resolveSessionRoot(session ?? null);
+  } catch {
+    resolved = null;
+  }
+  if (resolved?.status !== 'managed' || resolved.entry === null) return primaryAudit;
+  return openRootAuditForEntry(resolved.entry) ?? primaryAudit;
+};
+const auditMemoryEvent = createRootRoutedMemoryAudit({
+  auditForSessionId: (sessionId) => (guardPool === null ? null : guardPool.auditForSessionId(sessionId)),
+  resolveEntry: (sessionId) => {
+    if (registry === null) return null;
+    let resolved = null;
+    try {
+      resolved = registry.resolveSessionRoot({ id: sessionId, header: { id: sessionId } });
+    } catch {
+      resolved = null;
+    }
+    if (resolved?.status !== 'managed' || resolved.entry === null) return null;
+    return resolved.entry;
+  },
+  openRootAudit: openRootAuditForEntry,
+  fallback: { append: (event, details) => { try { primaryAudit?.append?.(event, details); } catch { /* 审计失败不影响记忆 */ } } },
 });
 /**
  * C11②（实现②·保承诺）：plugin 层持久值。
@@ -1650,9 +1700,9 @@ let policyState = buildPolicyState(mergePluginPolicy(config), {
           return null;
         }
       },
-      onTruncated: (event, details) => {
-        const auditForHeader = guardPool?.auditForSession(null) ?? primaryAudit;
-        auditForHeader?.append?.(event, details);
+      onTruncated: (event, details, session) => {
+        // P3：与 header-injected 同根——按会话解析该会话根的审计，不写主根。
+        auditForSessionRoot(session ?? null)?.append?.(event, details);
       },
       resolveStore: async (session) => {
         if (guardPool === null) return store;
@@ -1668,22 +1718,8 @@ let policyState = buildPolicyState(mergePluginPolicy(config), {
       oldAgeDays: config.memoryHeader.oldAgeDays,
       oldLimit: config.memoryHeader.oldLimit,
       onInjected: (built, injection = {}, info = {}) => {
-        const auditForHeader = guardPool?.auditForSession(info.session) ?? primaryAudit;
-        auditForHeader?.append?.('header-injected', {
-          count: built.count,
-          lines: built.count,
-          mode: built.mode,
-          source: 'memory',
-          tokensInjected: Math.ceil(built.text.length / 4),
-          // 0.2.2：不记裸 messages.length（基线+1 会被误读成“注入 1 条”）；
-          // 只记前后长度，由两值差得 injected（0/1）+ header 指纹。
-          injected: Number.isFinite(injection.messagesAfter) && Number.isFinite(injection.messagesBefore)
-            ? injection.messagesAfter - injection.messagesBefore
-            : null,
-          messagesBefore: injection.messagesBefore ?? null,
-          messagesAfter: injection.messagesAfter ?? null,
-          // 审核定论（2026-10-26）：不做 header hash（32 bit 指纹对低熵 header 不抗猜测；需公开比对时用 HMAC/加盐另立项）。
-        });
+        // P3：与 header-truncated 同根——按会话解析该会话根的审计，不写主根。
+        auditForSessionRoot(info.session ?? null)?.append?.('header-injected', headerInjectedFields(built, injection));
       },
     });
     if (header.registered) {
