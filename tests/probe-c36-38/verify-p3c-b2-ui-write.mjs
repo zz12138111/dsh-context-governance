@@ -12,8 +12,9 @@
  *   `plugin-policy-persisted` 无会话根可落 → 落主根（断言落主根、会话根 0 行；已知口径）。
  * B2：reset 成功后展示必须回落 —— 快照（`/context-governance/policy-snapshot?session=`）
  *   的 `source` 要离开 `session:A2`、`at` 回 plugin 值；保存后快照应回 `session:A2`/新值。
- * 边界（独列、不计主分）：无 pin 无 cwd 会话 → 断言不猜会话根（rootB 0 行）；
- *   实际落主根=1 行，**需求口径 `:458` 要求降级 `root-unresolved` 而非落主根**，与审核"落主根兜底"冲突 → 待需求裁定。
+ * 边界（独列、不计主分）：无 pin 无 cwd 会话 → 断言不猜会话根（rootB 0 行）。
+ *   需求 2026-11-15 裁 **A**：落主根=设计兜底（不猜根、不落会话根），不判红、不进主分、不影响出包；
+ *   **当前无 `root-unresolved` 审计 = 已知边界（下版补）**——补后把断言改硬（须有 `root-unresolved{sessionId,cwd,reason}` 行）。
  *
  * 手法：apply + 假 webServer 抓 mount 的写/快照 handler，两根本地模拟（rootA 主根 / rootB 会话根）；
  *   不装、不启用、不重启、不碰真实 profile。
@@ -175,7 +176,7 @@ try {
   check('P3c-boundary-no-pin-does-not-guess-session-root', dRowsB.length === 0,
     `rootB rows=${dRowsB.length}（期望 0：无 pin 不得猜会话根）`);
   console.log(`INFO P3c-nopin-fallback :: status=${saveD.status} rootA=${dRowsA.length} rootB=${dRowsB.length} `
-    + `（需求口径：应 root-unresolved 而非落主根；现实现落主根=${dRowsA.length >= 1}。口径待裁定，不计主分）`);
+    + `（需求裁 A：落主根=设计兜底，不判红不判缺口；当前无 root-unresolved 审计=已知边界，下版补后改硬断言）`);
 } catch (error) {
   check('P3c-B2-window', false, `抛错：${String(error?.stack ?? error).slice(0, 500)}`);
 } finally {
