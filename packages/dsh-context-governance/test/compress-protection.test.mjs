@@ -28,7 +28,7 @@ import {
   userMessage,
 } from './compress-helpers.mjs';
 
-function reportFor({ before, summary, start, end, shadowedSeqs, checkpointSeq, postSurfaceNodes } = {}) {
+function reportFor({ before, summary, start, end, shadowedSeqs, checkpointSeq, postSurfaceNodes, protectionCoverage } = {}) {
   const built = buildCompaction({
     before,
     summary,
@@ -43,6 +43,7 @@ function reportFor({ before, summary, start, end, shadowedSeqs, checkpointSeq, p
     summaryEvent: built.summaryEvent,
     checkpointSeq: checkpointSeq === undefined ? built.checkpointSeq : checkpointSeq,
     ...(postSurfaceNodes === undefined ? {} : { postSurfaceNodes }),
+    ...(protectionCoverage === undefined ? {} : { protectionCoverage }),
     adapterKind: built.source,
   });
   return { built, snapshot, report };
@@ -572,4 +573,39 @@ test('空表面/无消息也能返回报告而不抛错', () => {
   assert.equal(report.ok, false);
   assert.equal(report.checks.find((item) => item.name === 'artifact').status, 'fail');
   assert.equal(report.checks.find((item) => item.name === 'latest-user-message').status, 'skip');
+});
+
+test('回滚点摘要未覆盖但保护条目已 materialize+回注：判 pass 且标注覆盖来源（C34 作废后的遗留假 fail）', () => {
+  const { report } = reportFor({
+    before: healthyMessages(),
+    summary: 'Current state: 批次 511/958 项完成。',
+    start: 2,
+    end: 11,
+    protectionCoverage: {
+      entries: [{ id: 'MEM-20261115-1002', kind: 'rollback', deduped: false }],
+      materializedIds: ['MEM-20261115-1002'],
+    },
+  });
+  const check = report.checks.find((item) => item.name === 'rollback-point');
+  assert.equal(check.status, 'pass');
+  assert.equal(check.coveredByProtection, 'MEM-20261115-1002');
+  assert.match(check.detail, /已由保护条目 MEM-20261115-1002 覆盖/);
+  assert.deepEqual(report.failures, []);
+});
+
+test('回滚点摘要未覆盖且保护条目未 materialize：仍判 fail（真丢不得被吞）', () => {
+  const { report } = reportFor({
+    before: healthyMessages(),
+    summary: 'Current state: 批次 511/958 项完成。',
+    start: 2,
+    end: 11,
+    protectionCoverage: {
+      entries: [{ id: 'MEM-20261115-1002', kind: 'rollback', deduped: false }],
+      materializedIds: [],
+    },
+  });
+  const check = report.checks.find((item) => item.name === 'rollback-point');
+  assert.equal(check.status, 'fail');
+  assert.equal(check.coveredByProtection, undefined);
+  assert.deepEqual(report.failures.map((item) => item.name), ['rollback-point']);
 });

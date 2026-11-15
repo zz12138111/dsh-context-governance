@@ -290,6 +290,8 @@ export const AUDIT_EVENTS = Object.freeze([
   /** C36 ④：A2 持久会话层淘汰（TTL/上限）与装载失败（损坏/未知版本）。 */
   'a2-evicted',
   'a2-load-failed',
+  /** 保护口径：摘要未覆盖但已由保护条目（materialize+回注）覆盖——不判 unacceptable，留可见痕。 */
+  'protection-covered',
   /** C39：用户级基座不可得（无 profileContext.home 且无 USERPROFILE/HOME）——显式不写盘。 */
   'user-store-unavailable',
   /** C39：会话记忆从旧基座复制到新基座（只提示一次，不移动不删除）。 */

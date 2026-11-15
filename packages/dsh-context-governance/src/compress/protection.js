@@ -480,6 +480,7 @@ export function verifyProtection({
   summaryEvent,
   checkpointSeq = null,
   postSurfaceNodes = null,
+  protectionCoverage = null,
   adapterKind = 'unknown',
   manual = null,
   delegateRuleInjection = false,
@@ -633,6 +634,32 @@ export function verifyProtection({
     checks.push(check('rollback-point', 'fail', `rollback message seq ${snapshot.rollback.seq} shadowed and not covered by summary`, {
       seqs: [snapshot.rollback.seq],
     }));
+  }
+
+  // 保护口径补丁（C34 作废后的遗留假 fail）：摘要文本不是唯一凭据——若该类已被保护条目
+  // materialize + 回注，则信息没有丢，判 pass（detail 记明覆盖条目 id，便于审计回溯）。
+  if (protectionCoverage !== null && typeof protectionCoverage === 'object') {
+    const kindOfClass = {
+      'latest-user-message': 'latest-user',
+      'batch-list': 'batch',
+      'rollback-point': 'rollback',
+      'rule-injection': 'rules',
+    };
+    const materializedIds = new Set(
+      Array.isArray(protectionCoverage.materializedIds) ? protectionCoverage.materializedIds : [],
+    );
+    for (const item of checks) {
+      if (item.status !== 'fail') continue;
+      const kind = kindOfClass[item.name];
+      if (kind === undefined) continue;
+      const match = (Array.isArray(protectionCoverage.entries) ? protectionCoverage.entries : [])
+        .find((entry) => entry?.id !== undefined && entry?.deduped !== true && entry?.kind === kind
+          && materializedIds.has(entry.id));
+      if (match === undefined) continue;
+      item.status = 'pass';
+      item.coveredByProtection = match.id;
+      item.detail = `${item.detail}；已由保护条目 ${match.id} 覆盖（materialized + reinjected）`;
+    }
   }
 
   const failures = checks.filter((item) => item.status === 'fail');

@@ -2845,12 +2845,45 @@ export class CompressionGuard {
             summaryEvent: state.summaryEvent,
             checkpointSeq: state.checkpointSeq,
             postSurfaceNodes,
+            // C34 作废后的遗留假 fail：摘要不是唯一凭据——已 materialize 的保护条目同类别算覆盖。
+            protectionCoverage: {
+              entries: (Array.isArray(state.entries) ? state.entries : [])
+                .map((entry, index) => ({
+                  id: entry?.id,
+                  deduped: entry?.deduped === true,
+                  kind: state.protectionMeta?.[index]?.kind ?? null,
+                }))
+                .filter((entry) => typeof entry.id === 'string' && entry.kind !== null),
+              materializedIds: Array.isArray(state.protectionMaterialized?.ids)
+                ? state.protectionMaterialized.ids
+                : (state.protectionMaterialized === undefined || state.protectionMaterialized === null
+                  ? []
+                  : (Array.isArray(state.entries) ? state.entries : [])
+                    .filter((entry) => entry?.deduped !== true && typeof entry?.id === 'string')
+                    .map((entry) => entry.id)),
+            },
             adapterKind: this.#adapter.kind,
             manual: state.manual ?? null,
             // 用户 A：指令/目录由宿主 pre-step 自愈，插件不重建、不计 rule-injection 失败。
             delegateRuleInjection: true,
           });
           state.report = this.#record(report, state);
+          // C34 作废后的口径：摘要未覆盖但已由保护条目覆盖的类别 → 不判 unacceptable，
+          // 但**保留一行可见审计**（不静默），便于真机回溯"哪类靠回注兜住"。
+          const coveredChecks = Array.isArray(report.checks)
+            ? report.checks.filter((item) => typeof item.coveredByProtection === 'string')
+            : [];
+          if (coveredChecks.length > 0) {
+            this.#auditEvent('protection-covered', {
+              sessionId: state.sessionId,
+              compactionId: id,
+              manual: state.manual === true,
+              count: coveredChecks.length,
+              names: coveredChecks.map((item) => String(item.name)),
+              ids: coveredChecks.map((item) => String(item.coveredByProtection)),
+              reason: 'summary-paraphrase',
+            });
+          }
           // 保护校验中有“明确原因”的 skip（如 batch 只有关键字、没有数字比例）要留痕，便于回溯改判。
           const explainedSkips = report.checks.filter(
             (item) => item.status === 'skip' && typeof item.reason === 'string' && item.reason !== '',
