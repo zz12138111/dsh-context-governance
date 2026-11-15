@@ -17,9 +17,52 @@
 export const SESSION_POLICY_PATH = '/context-governance/session-policy';
 
 /** 会话 id：宿主是 uuid，历史/别名统一按白名单字符集收口。 */
-export const SESSION_ID_PATTERN = /^[A-Za-z0-9._:-]{1,120}$/;
+export const SESSION_ID_PATTERN = /^[A-Za-z0-9._-]{1,128}$/;
 
 const DEFAULT_MAX_BYTES = 4096;
+
+/** C31①：只接受 loopback 来源（IPv4 / IPv6 / IPv4-mapped）；取不到 socket 地址按拒绝处理。 */
+export const LOOPBACK_ADDRESSES = Object.freeze(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+export function isLoopbackRequest(req) {
+  let address = null;
+  try {
+    address = req?.socket?.remoteAddress ?? req?.connection?.remoteAddress ?? null;
+  } catch {
+    address = null;
+  }
+  if (typeof address !== 'string' || address === '') return false;
+  const normalized = address.startsWith('::ffff:') ? address : address.replace(/^\[|\]$/g, '');
+  return LOOPBACK_ADDRESSES.includes(normalized);
+}
+
+/** C31③：同源必做——`Origin`+`Host` 同源，或 `Sec-Fetch-Site ∈ {same-origin, none}`；否则拒绝。 */
+export function isSameOriginRequest(req) {
+  const headers = req?.headers ?? {};
+  const site = String(headers['sec-fetch-site'] ?? '').toLowerCase();
+  if (site === 'same-origin') return true;
+  const origin = headers.origin;
+  const host = headers.host;
+  if (typeof origin !== 'string' || origin === '' || typeof host !== 'string' || host === '') return false;
+  try {
+    return new URL(origin).host === host;
+  } catch {
+    return false;
+  }
+}
+
+/** 同源失败时的错误码：两处头都缺 = `missing-origin`；给了但不同源 = `cross-origin`。 */
+export function sameOriginErrorCode(req) {
+  const headers = req?.headers ?? {};
+  const site = String(headers['sec-fetch-site'] ?? '').toLowerCase();
+  const hasOrigin = typeof headers.origin === 'string' && headers.origin !== '';
+  return site === '' && hasOrigin !== true ? 'missing-origin' : 'cross-origin';
+}
+
+/** C31②：只接受 JSON 请求体（浏览器 fetch 会带 application/json）。 */
+function isJsonContentType(req) {
+  const type = String(req?.headers?.['content-type'] ?? '').toLowerCase();
+  return type.includes('application/json');
+}
 
 /** 读请求体：优先 `req.body`（已解析），否则按流读；超限直接失败。 */
 async function readBody(req, maxBytes) {
@@ -42,25 +85,14 @@ async function readBody(req, maxBytes) {
   }
 }
 
-/** Origin 与 Host 不同源 → 拒绝（缺任一头按未提供处理，交给宿主自身同源策略）。 */
-function crossOrigin(req) {
-  const origin = req?.headers?.origin;
-  const host = req?.headers?.host;
-  if (typeof origin !== 'string' || origin === '' || typeof host !== 'string' || host === '') return false;
-  try {
-    const parsed = new URL(origin);
-    return parsed.host !== host;
-  } catch {
-    return true;
-  }
-}
+
 
 /**
  * @param {{writeSessionAt: (input:{sessionId:string, at:number}) => Promise<{ok:boolean, error?:string, detail?:string, text?:string}>,
  *   onError?: (error: unknown) => void, maxBytes?: number}} deps
  * @returns {(req: any, res: any) => Promise<void>}
  */
-export function createSessionPolicyHandler({ writeSessionAt, onError = null, maxBytes = DEFAULT_MAX_BYTES } = {}) {
+export function createSessionPolicyHandler({ writeSessionAt, resetSessionAt = null, onError = null, maxBytes = DEFAULT_MAX_BYTES } = {}) {
   return async (req, res) => {
     const send = (status, payload) => {
       try {
@@ -77,8 +109,19 @@ export function createSessionPolicyHandler({ writeSessionAt, onError = null, max
       } catch { /* ignore */ }
       return;
     }
-    if (crossOrigin(req) === true) {
-      send(403, { ok: false, error: 'cross-origin' });
+    // C31①：仅 loopback。
+    if (isLoopbackRequest(req) !== true) {
+      send(403, { ok: false, error: 'not-loopback' });
+      return;
+    }
+    // C31③：同源必做（缺失即拒，不作为可选）。
+    if (isSameOriginRequest(req) !== true) {
+      send(403, { ok: false, error: sameOriginErrorCode(req) });
+      return;
+    }
+    // C31②：只收 JSON。
+    if (isJsonContentType(req) !== true) {
+      send(415, { ok: false, error: 'json-required' });
       return;
     }
     if (typeof writeSessionAt !== 'function') {
@@ -99,13 +142,19 @@ export function createSessionPolicyHandler({ writeSessionAt, onError = null, max
       send(400, { ok: false, error: 'invalid-session' });
       return;
     }
+    // C29：`{ reset: true }` = 恢复全局设置（A1+A2 同清），走与 `/cg set reset` 同一条命令链。
+    const wantsReset = body?.reset === true;
     const at = typeof body?.at === 'number' ? body.at : Number(body?.at);
-    if (Number.isFinite(at) !== true || at < 0 || at > 1) {
+    if (wantsReset !== true && (Number.isFinite(at) !== true || at < 0 || at > 1)) {
       send(400, { ok: false, error: 'invalid-at' });
       return;
     }
     try {
-      const result = await writeSessionAt({ sessionId, at });
+      const result = wantsReset === true
+        ? (typeof resetSessionAt === 'function'
+          ? await resetSessionAt({ sessionId })
+          : { ok: false, error: 'reset-unavailable' })
+        : await writeSessionAt({ sessionId, at });
       if (result?.ok !== true) {
         send(409, {
           ok: false,
@@ -114,7 +163,7 @@ export function createSessionPolicyHandler({ writeSessionAt, onError = null, max
         });
         return;
       }
-      send(200, { ok: true, at, source: 'session:A2' });
+      send(200, wantsReset === true ? { ok: true, reset: true, source: 'plugin' } : { ok: true, at, source: 'session:A2' });
     } catch (error) {
       try { onError?.(error); } catch { /* logger 自身失败不得影响响应 */ }
       send(500, { ok: false, error: 'internal' });
@@ -159,8 +208,17 @@ export function createPluginPolicyHandler({ writePluginAt, onError = null, maxBy
       } catch { /* ignore */ }
       return;
     }
-    if (crossOrigin(req) === true) {
-      send(403, { ok: false, error: 'cross-origin' });
+    // 与 A2 写路由同一安全边界（C31①③②）：仅 loopback、同源必做、只收 JSON。
+    if (isLoopbackRequest(req) !== true) {
+      send(403, { ok: false, error: 'not-loopback' });
+      return;
+    }
+    if (isSameOriginRequest(req) !== true) {
+      send(403, { ok: false, error: sameOriginErrorCode(req) });
+      return;
+    }
+    if (isJsonContentType(req) !== true) {
+      send(415, { ok: false, error: 'json-required' });
       return;
     }
     if (typeof writePluginAt !== 'function') {

@@ -673,12 +673,22 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
       };
     }
     if (argText === 'reset' || argText === 'clear') {
-      const count = Object.keys(sessionValues).length;
+      // C27/C29：重启后 A1 桶不存在时也必须是"真清"——直接清 A2 落盘，不依赖 Proxy delete 钩子。
+      const hadA2 = typeof policy.a2For === 'function' ? policy.a2For(sessionId) !== null : false;
+      const count = Object.keys(sessionValues).length + (hadA2 ? 1 : 0);
       for (const key of Object.keys(sessionValues)) delete sessionValues[key];
+      let a2Cleared = false;
+      if (typeof policy.a2Clear === 'function') {
+        try { a2Cleared = policy.a2Clear(sessionId) === true; } catch { a2Cleared = false; }
+      }
       // 清空覆盖 = 该会话的 transient 拒绝也应消失（不跨会话、不留残影）。
       policy.clearSessionRejections?.(sessionId);
       emitPolicySet(audit, { source: 'session', key: '*', value: 'reset' });
-      return { kind: 'success', text: `context-governance set\ncleared: ${count} session override(s)` };
+      return {
+        kind: 'success',
+        text: `context-governance set\ncleared: ${count} session override(s)` +
+          (hadA2 === true && a2Cleared !== true ? '\nwarning: A2 clear failed; value may persist after restart' : ''),
+      };
     }
     // 解析 `key=value` 或 `key value` 两种写法。
     const tokens = argText.split(/\s+/).filter((token) => token !== '');

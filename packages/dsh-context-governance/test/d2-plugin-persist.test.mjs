@@ -27,8 +27,14 @@ function makeRes() {
   res.end = (payload) => { res.body = payload === undefined ? '' : String(payload); };
   return res;
 }
-function makeReq({ method = 'POST', headers = {}, body = undefined, raw = undefined } = {}) {
-  const req = { method, headers };
+function makeReq({ method = 'POST', headers = {}, body = undefined, raw = undefined, socket = { remoteAddress: '127.0.0.1' } } = {}) {
+  const mergedHeaders = {
+    'content-type': 'application/json',
+    host: '127.0.0.1:14915',
+    origin: 'http://127.0.0.1:14915',
+    ...headers,
+  };
+  const req = { method, headers: mergedHeaders, socket };
   if (body !== undefined) req.body = body;
   if (raw !== undefined) req[Symbol.asyncIterator] = async function* iterate() { yield Buffer.from(raw, 'utf8'); };
   return req;

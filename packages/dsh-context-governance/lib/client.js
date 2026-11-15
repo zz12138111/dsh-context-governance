@@ -41,7 +41,7 @@ window.__ModuleLoader__.load({
         overrideNote: '本会话已自定义，全局修改不影响本会话（清除用 /cg set reset）',
         noSession: '无会话标识：会话级保存不可用（不会退化为全局写入）',
         percent: '触发百分比', unit: '%', save: '保存到本会话', saveGlobal: '保存为全局', saving: '保存中…',
-        saved: '已保存', restore: '恢复默认', retry: '重试', loading: '读取中…', unavailable: '暂不可用', invalid: '输入无效',
+        saved: '已保存', restore: '恢复默认', resetGlobal: '恢复全局设置', retry: '重试', loading: '读取中…', unavailable: '暂不可用', invalid: '输入无效',
         openSettings: '打开设置页', chipUnknown: '压 —', chip: (t) => `压 ${t}`,
       },
       en: {
@@ -52,7 +52,7 @@ window.__ModuleLoader__.load({
         overrideNote: 'This session is customized; global changes do not affect it (clear with /cg set reset)',
         noSession: 'No session id: session-level save unavailable (never falls back to global)',
         percent: 'Trigger percent', unit: '%', save: 'Save to this session', saveGlobal: 'Save globally', saving: 'Saving…',
-        saved: 'Saved', restore: 'Restore default', retry: 'Retry', loading: 'Loading…', unavailable: 'Unavailable', invalid: 'Invalid input',
+        saved: 'Saved', restore: 'Restore default', resetGlobal: 'Reset to global', retry: 'Retry', loading: 'Loading…', unavailable: 'Unavailable', invalid: 'Invalid input',
         openSettings: 'Open settings', chipUnknown: 'At —', chip: (t) => `At ${t}`,
       },
     };
@@ -170,6 +170,32 @@ window.__ModuleLoader__.load({
           body: JSON.stringify({ sessionId, at }),
         });
         if (response && response.ok === true) return { ok: true, error: null, requestSent: true };
+        let error = response ? `HTTP ${response.status}` : 'no-response';
+        try {
+          const body = await response.json();
+          if (typeof body?.error === 'string') error = body.error;
+          if (typeof body?.detail === 'string' && body.detail !== '') error = `${error}: ${body.detail}`;
+        } catch { /* 非 JSON 响应按状态码报 */ }
+        return { ok: false, error, requestSent: true };
+      } catch (failure) {
+        return { ok: false, error: String(failure?.message ?? failure), requestSent: true };
+      }
+    };
+
+    /**
+     * C29：恢复全局设置——清掉本会话覆盖（A1+A2 同清），与服务端 `/cg set reset` 同一条链路。
+     * 成功后 chip/气泡回落到项目模板/plugin（快照按 ?session= 重取）。
+     */
+    const resetSessionAt = async ({ sessionId, fetchImpl = globalThis.fetch } = {}) => {
+      if (typeof sessionId !== 'string' || sessionId === '') return { ok: false, error: LABELS.zh.noSession, requestSent: false };
+      if (typeof fetchImpl !== 'function') return { ok: false, error: 'no-fetch', requestSent: false };
+      try {
+        const response = await fetchImpl(SESSION_POLICY_PATH, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', accept: 'application/json' },
+          body: JSON.stringify({ sessionId, reset: true }),
+        });
+        if (response && response.ok === true) return { ok: true, requestSent: true };
         let error = response ? `HTTP ${response.status}` : 'no-response';
         try {
           const body = await response.json();
@@ -476,6 +502,14 @@ window.__ModuleLoader__.load({
         setError(result.ok === true ? '' : result.reason);
       };
       const restoreDefault = () => { setDraft(String(defaultPercentFor(view ?? null))); setError(''); };
+      // C29：恢复全局设置（清本会话 A1+A2 → 回落 project/plugin），与服务端 /cg set reset 同一链路。
+      const resetToGlobal = async () => {
+        const result = await resetSessionAt({ sessionId });
+        if (result.ok !== true) { setError(result.error); return; }
+        setError('');
+        const next = await fetchSnapshot(globalThis.fetch, { sessionId });
+        store.set(next ? { snapshot: next } : {});
+      };
       const retry = () => { fetchSnapshot(globalThis.fetch, { sessionId }).then((snapshot) => { if (snapshot) store.set({ snapshot }); }); };
       return h('div', {
         role: 'dialog', 'aria-modal': 'true', 'aria-label': model.title, ref: dialogRef, style: S.dialog,
@@ -500,6 +534,13 @@ window.__ModuleLoader__.load({
         h('div', { role: 'alert', 'aria-live': 'polite', style: S.error }, error),
         h('div', { style: S.actions },
           h('button', { type: 'button', style: S.button, onClick: restoreDefault, disabled: !canSaveSession }, `${labels.restore} ${model.defaultPercent}%`),
+          h('button', {
+            type: 'button',
+            className: 'cg-reset-global',
+            style: canSaveSession ? S.button : { ...S.button, ...S.buttonDisabled },
+            onClick: resetToGlobal,
+            disabled: !canSaveSession,
+          }, labels.resetGlobal ?? '恢复全局设置'),
           model.ready ? null : h('button', { type: 'button', style: S.button, onClick: retry }, labels.retry),
           h('button', {
             type: 'button',
@@ -637,6 +678,7 @@ window.__ModuleLoader__.load({
       layerLabel,
       writeLayerTextFor,
       saveSessionAt,
+      resetSessionAt,
       postSessionAt,
       savePluginAt,
       PLUGIN_POLICY_PATH,

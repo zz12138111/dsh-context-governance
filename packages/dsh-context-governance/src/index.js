@@ -644,6 +644,11 @@ export function buildPolicyState(config, deps = {}) {
     },
     /** C36 ④：读该会话的 A2 持久值（无则 null；供 status/测试）。 */
     a2For: (sessionId) => (a2Store === null ? null : a2Store.read(sessionId)),
+    /**
+     * C27/C29：直接清该会话的 A2 落盘（不依赖会话层 Proxy 的 delete 钩子）。
+     * 重启后 A1 桶不存在时，`/cg set reset` 必须仍能把 A2 清掉。
+     */
+    a2Clear: (sessionId) => (a2Store === null ? false : a2Store.clear(sessionId)),
     /** 1a：按会话读取覆盖值（create=false 不建桶；命令写入时 create=true）。 */
     sessionValues: sessionValuesFor,
     /** 1a：按会话取“会话层”形状（供 resolve/展示复用）。 */
@@ -1330,6 +1335,19 @@ let policyState = buildPolicyState(mergePluginPolicy(config), {
     }
     // C11③：会话级写路由（UI 保存 → A2）。只写会话层，校验/审计复用 `/cg set` 命令链。
     mountSessionPolicyRoute(ctx, {
+      resetSessionAt: async ({ sessionId }) => {
+        const writer = sessionWriteRef;
+        if (writer === null || typeof writer.reset !== 'function') return { ok: false, error: 'command-unavailable' };
+        const result = await writer.reset({ sessionId });
+        if (result?.ok === true) {
+          // 清完立刻刷新快照口径（chip/气泡回落 project/plugin）。
+          try {
+            const session = { id: sessionId, header: { id: sessionId } };
+            rememberSessionPolicy(policyForSession(session), session);
+          } catch { /* 快照刷新失败不影响重置 */ }
+        }
+        return result;
+      },
       writeSessionAt: async ({ sessionId, at }) => {
         const writer = sessionWriteRef;
         if (writer === null || typeof writer.setAt !== 'function') return { ok: false, error: 'command-unavailable' };
@@ -1763,6 +1781,20 @@ let policyState = buildPolicyState(mergePluginPolicy(config), {
     // C11③：UI（chip / 气泡）会话级保存的唯一写入口——直接跑 `/cg set compact.at=<at>` 同一条处理链，
     // 校验（下限 / 窗口上限 / <0.30 未确认）、审计（policy-set / policy-invalid）与 A1+A2 双写全部复用。
     sessionWriteRef = {
+      // C29：恢复全局设置 = `/cg set reset` 同一条命令链（A1+A2 同清，桶不存在也清 A2）。
+      reset: async ({ sessionId }) => {
+        const definition = commandRef.current?.definition ?? null;
+        if (definition === null || typeof definition.handler !== 'function') {
+          return { ok: false, error: 'command-unavailable' };
+        }
+        try {
+          const result = await definition.handler({ agent: { session: { id: sessionId } }, rawInput: 'set reset' });
+          if (result?.kind === 'success') return { ok: true, text: String(result.text ?? '') };
+          return { ok: false, error: 'rejected', detail: String(result?.text ?? '').slice(0, 300) };
+        } catch (error) {
+          return { ok: false, error: 'internal', detail: String(error?.message ?? error).slice(0, 200) };
+        }
+      },
       setAt: async ({ sessionId, at }) => {
         const definition = commandRef.current?.definition ?? null;
         if (definition === null || typeof definition.handler !== 'function') {
