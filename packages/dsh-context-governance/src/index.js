@@ -34,6 +34,7 @@ import { openSessionMemory } from './memory/session-store.js';
 import { SCOPE_SKIP, resolveScope } from './scope.js';
 import { MEM_QUERY_NAME, MEM_WRITE_NAME, registerMemoryTools } from './tools/mem-tools.js';
 import { createSnapshotHandler, createSnapshotPolicyResolver, mergeSettingsAt, policySnapshot, readVolatileAt } from './settings-policy.js';
+import { mountSessionPolicyRoute } from './session-policy-route.js';
 
 export const name = 'dsh-context-governance';
 
@@ -896,6 +897,9 @@ const a2Store = createA2Store({
 });
 // C37④：status 需要走“每次 stat 重建”的 policyForEntry（startRuntime 内赋值）。
 let policyForEntryRef = null;
+// C11③：UI（chip / 气泡）的会话级保存写入口——复用 `/cg set compact.at=<at>` 同一条命令链。
+// 取值为 { setAt: async ({sessionId, at}) => {ok, error?, detail?} }，命令面未挂载时为 null。
+let sessionWriteRef = null;
 // C38：memory-pointer-miss 去重（sessionId|id|reason），避免 header 每步刷屏。
 const memoryMissSeen = new Set();
 const auditMemoryEvent = (event, details) => {
@@ -1249,6 +1253,23 @@ let policyState = buildPolicyState(mergeSettingsAt(config), {
         onError: (error) => ctx.logger?.warn?.(`[context-governance] policy-snapshot failed: ${String(error?.message ?? error)}`),
       });
     }
+    // C11③：会话级写路由（UI 保存 → A2）。只写会话层，校验/审计复用 `/cg set` 命令链。
+    mountSessionPolicyRoute(ctx, {
+      writeSessionAt: async ({ sessionId, at }) => {
+        const writer = sessionWriteRef;
+        if (writer === null || typeof writer.setAt !== 'function') return { ok: false, error: 'command-unavailable' };
+        const result = await writer.setAt({ sessionId, at });
+        // 写入成功后刷新快照口径：否则 chip/气泡刚保存完仍显示上一次解析的旧值。
+        if (result?.ok === true) {
+          try {
+            const session = { id: sessionId, header: { id: sessionId } };
+            rememberSessionPolicy(policyForSession(session), session);
+          } catch { /* 快照刷新失败不得影响写入结果 */ }
+        }
+        return result;
+      },
+      onError: (error) => ctx.logger?.warn?.(`[context-governance] session-policy write failed: ${String(error?.message ?? error)}`),
+    });
     // 1.1.0 D2：声明本实例自带设置页（非自动表单），供宿主 settings 服务登记策略。
     if (typeof ctx.inject === 'function') {
       ctx.inject(['settings'], (sctx) => {
@@ -1632,6 +1653,27 @@ let policyState = buildPolicyState(mergeSettingsAt(config), {
       getDiagnosticsError: () => rootInfo.diagnosticsError,
     };
     const commandRef = { current: registerStatusCommand(ctx, commandOptions) };
+    // C11③：UI（chip / 气泡）会话级保存的唯一写入口——直接跑 `/cg set compact.at=<at>` 同一条处理链，
+    // 校验（下限 / 窗口上限 / <0.30 未确认）、审计（policy-set / policy-invalid）与 A1+A2 双写全部复用。
+    sessionWriteRef = {
+      setAt: async ({ sessionId, at }) => {
+        const definition = commandRef.current?.definition ?? null;
+        if (definition === null || typeof definition.handler !== 'function') {
+          return { ok: false, error: 'command-unavailable' };
+        }
+        let result;
+        try {
+          result = await definition.handler({
+            agent: { session: { id: sessionId } },
+            rawInput: `set compact.at=${at}`,
+          });
+        } catch (error) {
+          return { ok: false, error: 'internal', detail: String(error?.message ?? error).slice(0, 200) };
+        }
+        if (result?.kind === 'success') return { ok: true, text: String(result.text ?? '') };
+        return { ok: false, error: 'rejected', detail: String(result?.text ?? '').slice(0, 300) };
+      },
+    };
     const retryStatusCommand = () => {
       if (commandRef.current.registered) return;
       const retried = registerStatusCommand(ctx, commandOptions);
@@ -1658,6 +1700,7 @@ let policyState = buildPolicyState(mergeSettingsAt(config), {
 
     if (typeof ctx.effect === 'function') {
       ctx.effect(() => async () => {
+        sessionWriteRef = null;
         commandRef.current.dispose?.();
         if (guardPool !== null) {
           await guardPool.closeAll('dispose');

@@ -8,8 +8,9 @@
  * 入口：`conversation.composer.dock`（chip `压 65%`）/ `conversation.input.overlay`（气泡）/ `settings.section`（设置页卡片）。
  * 依赖共享模块（factory 的 require 形参解析）：`react`；注入客户端服务：`slots`/`locale`/`configForms`。
  * 只读数据：同源 `GET /context-governance/policy-snapshot`（字段含 at/source/sessionOverride/effectiveAt/native/defaultAt）。
- * C8/C11 文案：生命周期随 source 派生（session → 本会话有效，重启后失效；持久层 → 保存后生效、重启仍有效）；
- *   「本次修改写入：plugin 层（profile patch）」为静态文案。
+ * 写：chip/气泡 = 本会话层（`POST /context-governance/session-policy`，落 session:A2，重启保留）；
+ *   设置页 = 全局 plugin 层（宿主 configForms）。C11③：主入口绝不写 plugin/project。
+ * C8/C11/C32 文案：生命周期随 source 派生；四层标签用固定表（与 src/ui-labels.js 同字面，禁别名）。
  * U1-U12：打开聚焦并全选、层级/大号数值、输入清洗、失焦或保存才校验、成功「已保存」1.5s、恢复默认只填值、Esc/外点/再点 chip 关闭并重置、
  *   不可用态（读取中/暂不可用/重试、保存禁用）、深浅色用 `var(--…, fallback)`、只用内联样式、禁 alert/prompt/confirm 与滑块。
  */
@@ -21,6 +22,7 @@ window.__ModuleLoader__.load({
 
     const ENTRY_ID = 'dsh-context-governance';
     const SNAPSHOT_PATH = '/context-governance/policy-snapshot';
+    const SESSION_POLICY_PATH = '/context-governance/session-policy';
     const AT_MIN = 0.2;
     const LOW_THRESHOLD_ACK_MIN = 0.3;
     const PROJECT_AT_MIN = 0.45;
@@ -29,16 +31,44 @@ window.__ModuleLoader__.load({
     const LABELS = {
       zh: {
         sectionLabel: '上下文治理', title: '压缩触发阈值', current: '当前生效', source: '来源层', when: '生效时点',
-        writeLayer: '本次修改写入：plugin 层（profile patch）', percent: '触发百分比', unit: '%', save: '保存', saving: '保存中…',
+        writeLayer: '本次修改写入：全局（plugin 层，影响所有会话）',
+        writeLayerSession: '本次修改写入：本会话（session:A2，重启保留）',
+        writeLayerGlobal: '本次修改写入：全局（plugin 层，影响所有会话）',
+        overrideNote: '本会话已自定义，全局修改不影响本会话（清除用 /cg set reset）',
+        noSession: '无会话标识：会话级保存不可用（不会退化为全局写入）',
+        percent: '触发百分比', unit: '%', save: '保存到本会话', saveGlobal: '保存为全局', saving: '保存中…',
         saved: '已保存', restore: '恢复默认', retry: '重试', loading: '读取中…', unavailable: '暂不可用', invalid: '输入无效',
         openSettings: '打开设置页', chipUnknown: '压 —', chip: (t) => `压 ${t}`,
       },
       en: {
         sectionLabel: 'Context governance', title: 'Compaction threshold', current: 'Effective', source: 'Source layer', when: 'Takes effect',
-        writeLayer: 'Writes to: plugin layer (profile patch)', percent: 'Trigger percent', unit: '%', save: 'Save', saving: 'Saving…',
+        writeLayer: 'Writes to: global (plugin layer, affects all sessions)',
+        writeLayerSession: 'Writes to: this session (session:A2, survives restart)',
+        writeLayerGlobal: 'Writes to: global (plugin layer, affects all sessions)',
+        overrideNote: 'This session is customized; global changes do not affect it (clear with /cg set reset)',
+        noSession: 'No session id: session-level save unavailable (never falls back to global)',
+        percent: 'Trigger percent', unit: '%', save: 'Save to this session', saveGlobal: 'Save globally', saving: 'Saving…',
         saved: 'Saved', restore: 'Restore default', retry: 'Retry', loading: 'Loading…', unavailable: 'Unavailable', invalid: 'Invalid input',
         openSettings: 'Open settings', chipUnknown: 'At —', chip: (t) => `At ${t}`,
       },
+    };
+    /**
+     * C32：来源层的用户可见标签（唯一映射、禁别名）。与 `src/ui-labels.js` 同字面，
+     * `test/d2-ui-labels.test.mjs` 逐项比对两侧（浏览器侧不能 import 宿主源码）。
+     */
+    const LAYER_LABELS = {
+      'session:A1': '本会话·临时（重启失效）',
+      'session:A2': '本会话·已保存（重启保留）',
+      project: '项目模板（可选）',
+      plugin: '全局（影响所有会话）',
+      builtin: '内置默认',
+    };
+    const layerLabel = (source) => {
+      const key = String(source ?? '');
+      if (key === '') return '未知来源';
+      if (key === 'session') return LAYER_LABELS['session:A1'];
+      if (key.startsWith('profile=')) return `配置 profile=${key.slice('profile='.length)}`;
+      return LAYER_LABELS[key] ?? key;
     };
 
     /** 百分比（0–100 整数）→ 比例；非法 → null。 */
@@ -64,14 +94,19 @@ window.__ModuleLoader__.load({
 
     const toPercentText = (at) => (Number.isFinite(at) ? `${Math.round(Number(at) * 100)}%` : '—');
 
-    // C36：source 字面 session:A1（临时）/ session:A2（已保存，重启保留）/ project / plugin。
-const effectiveTextFor = (source) => {
-  const key = String(source ?? '');
-  if (key === 'session:A2') return '本会话已保存，重启保留';
-  if (key === 'session' || key === 'session:A1') return '本会话有效，重启后失效';
-  return '保存后生效、重启仍有效';
-};
-    const WRITE_LAYER = '本次修改写入：plugin 层（profile patch）';
+    /** C8：生命周期文案随来源派生（禁一句常量盖所有来源）。 */
+    const effectiveTextFor = (source) => {
+      const key = String(source ?? '');
+      if (key === 'session:A2') return '本会话已保存，重启保留';
+      if (key === 'session' || key === 'session:A1') return '本会话有效，重启后失效';
+      return '保存后生效、重启仍有效';
+    };
+    /** C11①/C11③：写层文案按入口区分——主入口写本会话（A2），设置页写全局（plugin）。 */
+    const writeLayerTextFor = (entry = 'session') => (entry === 'global'
+      ? LABELS.zh.writeLayerGlobal
+      : LABELS.zh.writeLayerSession);
+    /** 兼容旧导出名：默认按主入口（会话级）口径。 */
+    const WRITE_LAYER = LABELS.zh.writeLayerSession;
 
     /** 默认值单一来源 = 快照 `defaultAt`；缺字段才 fallback 并 **只 warn 一次**（模块级 flag，防刷屏）。 */
     let warnedDefaultAt = false;
@@ -120,6 +155,41 @@ const effectiveTextFor = (source) => {
       }
     };
 
+    /** C11③：把比例写到该会话（A1 即时 + A2 持久，同一命令链）。返回 requestSent 供用例断言。 */
+    const postSessionAt = async ({ sessionId, at, fetchImpl = globalThis.fetch } = {}) => {
+      if (typeof sessionId !== 'string' || sessionId === '') return { ok: false, error: 'no-session', requestSent: false };
+      if (typeof fetchImpl !== 'function') return { ok: false, error: 'no-fetch', requestSent: false };
+      try {
+        const response = await fetchImpl(SESSION_POLICY_PATH, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', accept: 'application/json' },
+          body: JSON.stringify({ sessionId, at }),
+        });
+        if (response && response.ok === true) return { ok: true, error: null, requestSent: true };
+        let error = response ? `HTTP ${response.status}` : 'no-response';
+        try {
+          const body = await response.json();
+          if (typeof body?.error === 'string') error = body.error;
+          if (typeof body?.detail === 'string' && body.detail !== '') error = `${error}: ${body.detail}`;
+        } catch { /* 非 JSON 响应按状态码报 */ }
+        return { ok: false, error, requestSent: true };
+      } catch (failure) {
+        return { ok: false, error: String(failure?.message ?? failure), requestSent: true };
+      }
+    };
+
+    /** C11③：主入口（chip/气泡）保存 = 会话级。非法值不发请求；失败保留输入。 */
+    const saveSessionAt = async ({ raw, snapshot, sessionId, fetchImpl } = {}) => {
+      const result = computeSave(raw, snapshot ?? {});
+      if (result.ok !== true) return { ok: false, ratio: null, error: result.reason, requestSent: false };
+      if (typeof sessionId !== 'string' || sessionId === '') {
+        return { ok: false, ratio: result.ratio, error: LABELS.zh.noSession, requestSent: false };
+      }
+      const posted = await postSessionAt({ sessionId, at: result.ratio, fetchImpl });
+      if (posted.ok === true) return { ok: true, ratio: result.ratio, error: null, requestSent: true };
+      return { ok: false, ratio: result.ratio, error: posted.error, requestSent: posted.requestSent };
+    };
+
     /** U2 结构 / U8 不可用态：气泡与设置页共用同一视图模型。 */
     const bubbleView = (snapshot) => {
       const ready = snapshot !== null && snapshot !== undefined;
@@ -128,9 +198,9 @@ const effectiveTextFor = (source) => {
         title: LABELS.zh.title,
         percentText: ready ? toPercentText(snapshot.at) : '—',
         fields: [
-          `${LABELS.zh.source}：${ready ? (snapshot.source ?? 'unknown') : '—'}`,
+          `${LABELS.zh.source}：${ready ? `${layerLabel(snapshot.source)} (source=${snapshot.source ?? 'unknown'})` : '—'}`,
           `${LABELS.zh.when}：${ready ? effectiveTextFor(snapshot.source) : '—'}`,
-          WRITE_LAYER,
+          writeLayerTextFor('session'),
         ],
         canSave: ready,
         statusText: ready ? '' : LABELS.zh.loading,
@@ -150,14 +220,22 @@ const effectiveTextFor = (source) => {
       return labels.chip(toPercentText(snapshot.at));
     };
 
-    /** 气泡/设置页信息四行（C8/C11/C13）：生效值 / 来源层 / 生命周期 / 写入层。 */
-    const renderBubbleText = (snapshot = {}, labels = LABELS.zh) => {
+    /**
+     * 气泡/设置页信息行（C8/C11/C32/C28）：生效值 / 来源层（固定标签 + 原始键）/ 生命周期 / 写入层，
+     * 全局入口在多会话已自定义时追加「不受全局修改影响」提示。
+     * @param {object} snapshot
+     * @param {object} labels
+     * @param {{entry?: 'session'|'global'}} options
+     */
+    const renderBubbleText = (snapshot = {}, labels = LABELS.zh, { entry = 'session' } = {}) => {
       const source = snapshot.source ?? 'unknown';
+      const sessionCustomized = /^session(:|$)/.test(String(source));
       return [
         `${labels.current}: ${toPercentText(snapshot.at)}`,
-        `${labels.source}: ${source}`,
+        `${labels.source}: ${layerLabel(source)} (source=${source})`,
         `${labels.when}: ${effectiveTextFor(source)}`,
-        WRITE_LAYER,
+        writeLayerTextFor(entry),
+        ...(entry === 'global' && sessionCustomized ? [labels.overrideNote ?? LABELS.zh.overrideNote] : []),
       ].join('\n');
     };
 
@@ -267,9 +345,18 @@ const effectiveTextFor = (source) => {
       }, chipLabel(view, ctx?.locale?.language?.startsWith('zh') === false ? 'en' : 'zh'));
     };
 
-    /** 气泡（conversation.input.overlay）：U1-U12 交互标准。 */
+    /** 会话 id：宿主给 session 作用域 slot 的 `sessionId` prop（拿不到就明确不可用，绝不退化写全局）。 */
+    const sessionIdOf = (props, ctx) => {
+      const fromProps = props?.sessionId;
+      if (typeof fromProps === 'string' && fromProps !== '') return fromProps;
+      const fromCtx = ctx?.sessionId;
+      return typeof fromCtx === 'string' && fromCtx !== '' ? fromCtx : null;
+    };
+
+    /** 气泡（conversation.input.overlay）：U1-U12 交互标准；保存写本会话（C11③）。 */
     const createBubble = (state, store, pluginCtx = null) => (props) => {
       const ctx = pluginCtx ?? props?.ctx ?? props;
+      const sessionId = sessionIdOf(props, ctx);
       const labels = pickLabels(ctx);
       const [view, setView] = react.useState(state.snapshot);
       const [open, setOpen] = react.useState(state.open);
@@ -314,9 +401,11 @@ const effectiveTextFor = (source) => {
       const close = () => { if (closeDecision('escape')) store.set({ open: false }); };
       if (!open) return null;
       const model = bubbleView(view ?? null);
+      // C11③：主入口保存写本会话（A2）；无会话标识时明确不可保存，绝不退化写全局。
+      const canSaveSession = model.canSave && sessionId !== null;
       const save = async () => {
         setSaving(true);
-        const result = await saveAttempt({ raw: draft, snapshot: view ?? {}, configForms: ctx?.configForms });
+        const result = await saveSessionAt({ raw: draft, snapshot: view ?? {}, sessionId });
         setSaving(false);
         if (result.ok !== true) { setError(result.error); return; }
         setError('');
@@ -339,7 +428,8 @@ const effectiveTextFor = (source) => {
       },
         h('div', { style: S.title }, model.title),
         h('div', { style: S.big, 'data-role': 'current-percent' }, model.percentText),
-        ...renderBubbleText(view ?? {}, labels).split('\n').slice(1).map((line, index) => h('div', { key: index, style: S.metaLine }, line)),
+        ...renderBubbleText(view ?? {}, labels, { entry: 'session' }).split('\n').slice(1).map((line, index) => h('div', { key: index, style: S.metaLine }, line)),
+        sessionId === null ? h('div', { style: S.error }, labels.noSession ?? LABELS.zh.noSession) : null,
         h('div', { style: S.row },
           h('input', {
             ref: inputRef, type: 'text', inputMode: 'numeric', value: draft, 'aria-label': labels.percent,
@@ -352,20 +442,20 @@ const effectiveTextFor = (source) => {
           h('span', { style: S.metaLine }, labels.unit)),
         h('div', { role: 'alert', 'aria-live': 'polite', style: S.error }, error),
         h('div', { style: S.actions },
-          h('button', { type: 'button', style: S.button, onClick: restoreDefault, disabled: !model.canSave }, `${labels.restore} ${model.defaultPercent}%`),
+          h('button', { type: 'button', style: S.button, onClick: restoreDefault, disabled: !canSaveSession }, `${labels.restore} ${model.defaultPercent}%`),
           model.ready ? null : h('button', { type: 'button', style: S.button, onClick: retry }, labels.retry),
           h('button', {
             type: 'button',
-            style: model.canSave && !saving ? { ...S.button, ...S.buttonPrimary } : { ...S.button, ...S.buttonPrimary, ...S.buttonDisabled },
+            style: canSaveSession && !saving ? { ...S.button, ...S.buttonPrimary } : { ...S.button, ...S.buttonPrimary, ...S.buttonDisabled },
             onClick: save,
-            disabled: !model.canSave || saving,
+            disabled: !canSaveSession || saving,
           }, saving ? labels.saving : saved ? labels.saved : labels.save),
           h('button', { type: 'button', className: 'cg-at-settings-link', style: S.button, onClick: () => { try { ctx?.openSettings?.(); } catch { /* ignore */ } } }, labels.openSettings),
         ),
       );
     };
 
-    /** 设置页卡片（与气泡同数据/同写入口，保留 settings.section）。 */
+    /** 设置页卡片：**只写全局 plugin 层**（C11③/C28），与气泡的会话级写入明确分开。 */
     const createSettingsCard = (state, store, pluginCtx = null) => (props) => {
       const ctx = pluginCtx ?? props?.ctx ?? props;
       const labels = pickLabels(ctx);
@@ -380,6 +470,7 @@ const effectiveTextFor = (source) => {
         return () => { alive = false; };
       }, [ctx, store]);
       const model = bubbleView(view ?? null);
+      // 设置页＝全局入口：写 plugin 层（configForms），影响所有会话（C28）。
       const save = async () => {
         const result = await saveAttempt({ raw: draft, snapshot: view ?? {}, configForms: ctx?.configForms });
         if (result.ok !== true) { setError(result.error); return; }
@@ -392,7 +483,7 @@ const effectiveTextFor = (source) => {
       return h('div', { style: { ...S.dialog, width: 'auto', boxShadow: 'none' } },
         h('div', { style: S.title }, model.title),
         h('div', { style: S.big, 'data-role': 'current-percent' }, model.percentText),
-        ...renderBubbleText(view ?? {}, labels).split('\n').slice(1).map((line, index) => h('div', { key: index, style: S.metaLine }, line)),
+        ...renderBubbleText(view ?? {}, labels, { entry: 'global' }).split('\n').slice(1).map((line, index) => h('div', { key: index, style: S.metaLine }, line)),
         h('div', { style: S.row },
           h('input', {
             type: 'text', inputMode: 'numeric', value: draft, 'aria-label': labels.percent,
@@ -405,7 +496,7 @@ const effectiveTextFor = (source) => {
         h('div', { role: 'alert', 'aria-live': 'polite', style: S.error }, error),
         h('div', { style: S.actions },
           h('button', { type: 'button', style: S.button, onClick: () => setDraft(String(defaultPercentFor(view ?? null))) }, `${labels.restore} ${model.defaultPercent}%`),
-          h('button', { type: 'button', style: S.buttonPrimary, onClick: save, disabled: !model.canSave }, saved ? labels.saved : labels.save),
+          h('button', { type: 'button', style: S.buttonPrimary, onClick: save, disabled: !model.canSave }, saved ? labels.saved : (labels.saveGlobal ?? labels.save)),
         ));
     };
 
@@ -485,6 +576,13 @@ const effectiveTextFor = (source) => {
       defaultPercentFor,
       effectiveTextFor,
       WRITE_LAYER,
+      LAYER_LABELS,
+      layerLabel,
+      writeLayerTextFor,
+      saveSessionAt,
+      postSessionAt,
+      sessionIdOf,
+      SESSION_POLICY_PATH,
       toPercentText,
       toRatio,
       validateRatio,

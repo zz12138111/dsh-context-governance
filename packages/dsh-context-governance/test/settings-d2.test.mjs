@@ -196,15 +196,19 @@ test('C12 主入口：dock 条目 id/order + chip 文案与快照一致（缺快
   assert.equal(client.chipLabel({ at: 0.65 }, 'en'), 'At 65%');
 });
 
-test('C13/C8/C11 气泡四行：当前生效 / 来源层 / 生命周期（随 source 派生）/ 写入层（静态）', async () => {
+test('C13/C8/C11/C32 气泡四行：当前生效 / 来源层（固定标签+原始键）/ 生命周期（随 source 派生）/ 写入层（主入口=会话级）', async () => {
   const client = await loadClient();
   const text = client.renderBubbleText({ at: 0.55, source: 'plugin' });
   const lines = text.split('\n');
   assert.equal(lines.length, 4, 'C13 三行信息 + C11 写入层 = 四行');
   assert.match(lines[0], /55%/);
-  assert.match(lines[1], /plugin/);
+  assert.equal(lines[1], '来源层: 全局（影响所有会话） (source=plugin)', 'C32：plugin 固定标签 + 原始键并列');
   assert.equal(lines[2], `生效时点: ${PERSISTENT_LIFECYCLE_TEXT}`, '持久层：保存后生效、重启仍有效');
-  assert.equal(lines[3], '本次修改写入：plugin 层（profile patch）', 'C11：静态写入层文案');
+  assert.equal(lines[3], '本次修改写入：本会话（session:A2，重启保留）', 'C11③：主入口写会话层');
+  // 设置页（全局入口）同一快照：写层文案必须变成全局，且带 C28 提示。
+  const globalText = client.renderBubbleText({ at: 0.55, source: 'session:A2' }, undefined, { entry: 'global' });
+  assert.match(globalText, /本次修改写入：全局（plugin 层，影响所有会话）/, 'C11①/C28：设置页写全局');
+  assert.match(globalText, /本会话已自定义，全局修改不影响本会话/, 'C28：已自定义会话时提示全局不影响本会话');
 
   const sessionText = client.renderBubbleText({ at: 0.5, source: 'session' });
   assert.match(sessionText, /本会话有效，重启后失效/, 'C8：session 必须用会话生命周期文案');
@@ -547,9 +551,9 @@ test('C21 结构/关闭/无障碍/默认值来源：U2/U6/U7/U8/U10', async () =
   const view = client.bubbleView({ at: 0.45, source: 'project', defaultAt: 0.45 });
   assert.equal(view.canSave, true);
   assert.equal(view.percentText, '45%', 'U2：大号当前值');
-  assert.equal(view.fields[0], '来源层：project');
+  assert.equal(view.fields[0], '来源层：项目模板（可选） (source=project)', 'C32：固定标签 + 原始键并列');
   assert.match(view.fields[1], /保存后生效、重启仍有效/);
-  assert.equal(view.fields[2], '本次修改写入：plugin 层（profile patch）');
+  assert.equal(view.fields[2], '本次修改写入：本会话（session:A2，重启保留）', 'C11③：主入口写会话层');
   assert.equal(view.defaultPercent, 45, 'U6：默认值用 snapshot.defaultAt（非写死 60）');
 
   const fallback = client.defaultRatioFor({}, (line) => warns.push(line));

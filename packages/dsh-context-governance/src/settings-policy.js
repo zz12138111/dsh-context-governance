@@ -66,7 +66,8 @@ export function policySnapshot(policy, { native = null } = {}) {
   return {
     at,
     source,
-    sessionOverride: source === 'session' && at !== null ? at : null,
+    // C36：source 字面已是 session:A1/session:A2（历史 `session` 兼容），不能再按等号判。
+    sessionOverride: String(source).startsWith('session') && at !== null ? at : null,
     effectiveAt: lifecycleText(source),
     native: Number.isFinite(native) ? Number(native) : null,
     defaultAt: POLICY_DEFAULTS['compact.at'],

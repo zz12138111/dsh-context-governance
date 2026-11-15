@@ -8,6 +8,8 @@
  * 显式层（会话 > 项目 > 插件）> 标签层 > 内置默认（与 REQ-20261025-09 一致）。
  */
 
+import { layerLabel } from './ui-labels.js';
+
 export const POLICY_DEFAULTS = Object.freeze({
   'compact.at': 0.60,
   'compact.early': true,
@@ -352,7 +354,8 @@ export function summarizePolicy(policy) {
   } else {
     earlyText = `off (${armedLabel})`;
   }
-  return `compact.at=${at.toFixed(2)} (source=${source}) native=${nativeText} early=${earlyText}`;
+  // C32：层标签追加在行尾（「键名 + 中文」并列，不改既有 source=/native=/early= 口径与顺序）。
+  return `compact.at=${at.toFixed(2)} (source=${source}) native=${nativeText} early=${earlyText} 层=${layerLabel(source)}`;
 }
 
 /** 四层来源逐键展开（供 /cg policy show）。 */
@@ -360,7 +363,7 @@ export function policyTable(policy) {
   return POLICY_KEYS.map((key) => {
     const value = policy.values[key];
     const text = value === null ? 'null' : String(value);
-    return `${key}=${text} (source=${policy.sources[key]})`;
+    return `${key}=${text} (source=${policy.sources[key]}) 层=${layerLabel(policy.sources[key])}`;
   });
 }
 
