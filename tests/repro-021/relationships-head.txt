@@ -1,0 +1,105 @@
+.filter((key) => key === "tools" && Array.isArray(header[key]) && header[key].length === 0 || key === "adapterDefaults" && isSessionFormatJsonObject(header[key]) && Object.keys(header[key]).length === 0);
+		if (empty.length > 0) {
+			const canonical = Object.fromEntries(Object.entries(header).filter(([key]) => !empty.includes(key)));
+			target = {
+				...target,
+				data: {
+					...data,
+					header: canonical
+				}
+			};
+		}
+	}
+	assertV3Event(target);
+	return target;
+}
+//#endregion
+//#region lib/types/validation.js
+/** Native V3 system-head validation with a private view for frozen non-system relationships. */
+/**
+* Validate v3 logical metadata with the released-v2 fields.
+* @param header - decoded v3 Session header.
+*/
+function assertReleasedV3Header(header) {
+	if (header.version !== 3) throw new SessionFormatError("expected format v3 header");
+	assertReleasedV2Header({
+		...header,
+		version: 2
+	});
+}
+/**
+* Validate system ownership, protected-head operations, ordinary relationships, and inherited cut.
+* The private relationship view never escapes; the returned artifact and its messages are unchanged.
+* @param artifact - detached v3 artifact.
+* @param knownEventTypes - event types understood by the installed Session package.
+* @returns the same validated artifact.
+*/
+function restoreReleasedV3Artifact(artifact, knownEventTypes) {
+	assertReleasedV3Header(artifact.header);
+	let step;
+	let head;
+	let hasSurface = false;
+	const events = artifact.events.map((event) => {
+		assertV3EventAdmission(event);
+		assertV3Event(event, knownEventTypes);
+		const system = event.type === "system/message";
+		if (event.type === "step/start") {
+			const data = record(event.data, event.type);
+			step = {
+				turn: data["turn"],
+				step: data["step"]
+			};
+		} else if (event.type === "step/end" || event.type === "turn/end") step = void 0;
+		if (system) {
+			const data = record(event.data, "system/message");
+			if (step === void 0 || step.turn !== data["turn"] || step.step !== data["step"]) throw new SessionFormatError("system/message does not match an open step");
+			const operation = event["surfaceOp"];
+			if (hasSurface && head === void 0) throw new SessionFormatError("system/message requires a protected first surface head");
+			if (operation === "append") {
+				if (!hasSurface) head = event.seq;
+			} else {
+				const replace = record(operation, "system replacement");
+				if (replace["startSeq"] === head || replace["endSeq"] === head) {
+					if (replace["startSeq"] !== head || replace["endSeq"] !== head) throw new SessionFormatError("system/message must replace exactly the current system head");
+					head = event.seq;
+				}
+			}
+		} else if (SURFACE_TYPES.has(event.type) && event["surfaceOp"] !== "append") {
+			const replace = record(event["surfaceOp"], "surface replacement");
+			if (replace["startSeq"] === head || replace["endSeq"] === head) throw new SessionFormatError("surface replacement cannot shadow the protected system head");
+		}
+		if (event.type === "compaction/prune" || event.type === "compaction/summary") {
+			const seqs = record(event.data, event.type)["shadowedSeqs"];
+			if (Array.isArray(seqs) && seqs.some((seq) => seq === head)) throw new SessionFormatError("compaction cannot shadow the protected system head");
+		}
+		if (SURFACE_TYPES.has(event.type)) hasSurface = true;
+		const projected = relationshipEvent(event);
+		if (!SURFACE_TYPES.has(event.type) || event["surfaceOp"] === "append") return projected;
+		const replacement = event["surfaceOp"];
+		return {
+			...projected,
+			surfaceOp: {
+				op: "replace",
+				start: replacement.startSeq,
+				end: replacement.endSeq
+			}
+		};
+	});
+	restoreReleasedV2Artifact({
+		...artifact,
+		header: {
+			...artifact.header,
+			version: 2
+		},
+		events
+	}, knownEventTypes, 3);
+	return artifact;
+}
+/**
+* Refuse required predecessor PTC tags without interpreting native extension payloads.
+* @param event - event envelope whose type and ignorable admission markers are available.
+*/
+function assertV3EventAdmission(event) {
+	if ((event.type === "tool/code-dispatch-start" || event.type === "tool/code-dispatch") && event["ignorable"] !== true) throw new SessionFormatUnsupportedMigrationError("format v3 contains unknown event type " + JSON.stringify(event.type) + " at seq " + String(event.seq));
+}
+f

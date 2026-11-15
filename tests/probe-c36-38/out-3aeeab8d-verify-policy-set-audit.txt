@@ -1,0 +1,11 @@
+ref=3aeeab8
+sha=3aeeab8d0ea634b90c3f023753d1945fa8f2e322
+
+FAIL policy-set-set-compact-at-has-sessionId :: rows=[{"event":"policy-set","sessionId":null,"key":"compact.at"}] text="context-governance set"
+FAIL policy-set-set-reset-has-sessionId :: rows=[{"event":"policy-set","sessionId":null,"key":"*"}] text="context-governance set"
+FAIL policy-set-profile-set-has-sessionId :: rows=[{"event":"policy-set","sessionId":null,"key":"profile"}] text="context-governance profile"
+FAIL policy-set-profile-reset-has-sessionId :: rows=[{"event":"policy-set","sessionId":null,"key":"profile"}] text="context-governance profile"
+FAIL policy-set-header-off-has-sessionId :: rows=[{"event":"policy-set","sessionId":null,"key":"header.enabled"}] text="context-governance header"
+
+policy-set 归因 TOTAL 0/5 PASS
+FAILED: policy-set-set-compact-at-has-sessionId, policy-set-set-reset-has-sessionId, policy-set-profile-set-has-sessionId, policy-set-profile-reset-has-sessionId, policy-set-header-off-has-sessionId

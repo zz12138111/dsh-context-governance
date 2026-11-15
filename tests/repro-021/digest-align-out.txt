@@ -1,0 +1,16 @@
+
+== session-58a2e845-cec5-4229-afa9-7f09a0fc0207 cwd=D:\DS-PROJECT\DSH插件开发 baselineSeq=67466 baseline=true changes=2
+
+== session-2ebebd78-77b9-401a-b632-6d8ff3574431 cwd=G:\DS-HARNESS baselineSeq=7238 baseline=true changes=2
+{"abs":"C:\\Users\\19091\\.dsh\\AGENTS.md","ok":"DIFF","eventDigest":"d2789382c602","recomputed":"298adbebda0b","trimmed":"22b9edacf444","mtime":"2026-11-14T18:47:12.412Z"}
+{"abs":"D:\\DS-PROJECT\\DSH插件开发\\AGENTS.md","ok":"same","eventDigest":"ff8d10549155","recomputed":"ff8d10549155","trimmed":"40dcd9e43ab3","mtime":"2026-10-27T18:13:11.896Z"}
+{"abs":"C:\\Users\\19091\\.dsh\\AGENTS.md","ok":"DIFF","eventDigest":"18354beced20","recomputed":"298adbebda0b","trimmed":"22b9edacf444","mtime":"2026-11-14T18:47:12.412Z"}
+{"abs":"G:\\DS-HARNESS\\AGENTS.md","ok":"same","eventDigest":"fa70afa19bdf","recomputed":"fa70afa19bdf","trimmed":"e9fb03866f6f","mtime":"2026-10-21T02:39:15.294Z"}
+
+INSTRUCTION digest alignment: same=2 diff=2 unreadable=0
+
+CATALOG session-58a2e845-cec5-4229-afa9-7f09a0fc0207: seq=67468 entries=6 entriesWithDigest=0 update=true keys=["name","description"]
+  wholeCatalogDigest(recomputed)=6319946b688d3341 eventHasCatalogDigest=NO
+
+CATALOG session-2ebebd78-77b9-401a-b632-6d8ff3574431: seq=7250 entries=7 entriesWithDigest=0 update=true keys=["name","description"]
+  wholeCatalogDigest(recomputed)=ac3b89903fff1da6 eventHasCatalogDigest=NO

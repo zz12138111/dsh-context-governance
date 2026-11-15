@@ -1,0 +1,19 @@
+ref=3aeeab8
+sha=3aeeab8d0ea634b90c3f023753d1945fa8f2e322
+
+PASS C11-3-bubble-entry-writes-a2 [RC] :: bubble 会话写入口=true WRITE_LAYER=""（00 定调：不接受降级）
+PASS C11-3-settings-entry-writes-plugin [RC] :: settings 走 configForms/saveAttempt=true
+PASS C11-3-two-entries-not-mixed [RC] :: bubble 也走 configForms/saveAttempt=false（混用=主入口改全局）
+INFO C11-4(record-only) :: 产品内警示=false 保存隐藏/置灰=false（00 定调：rc.4 装机待 C11③ 真 A2，不接受过渡方案）
+PASS C11-2-effect-time-text [终版] :: A1「重启后失效」/A2「重启保留」=true
+PASS C32-four-fixed-labels [终版] :: missing=[]
+PASS C32-builtin-profile-labels [终版] :: 内置默认=true 配置 profile==true
+PASS C32-no-raw-source-alias [终版] :: 经 layerLabel 映射=true（裸值直出=false）
+PASS C32-status-same-literal [终版] :: policyLine="policy: compact.at=0.50 (source=project) native=0.6785 (config-fallback) early=on (default; unvalidated) 层=项目模板（可选）" templateLine="project-template: {\"compact.at\":0.5} (source=.cg-policy.json)"
+PASS C32-status-template-line [终版] :: templateLine="project-template: {\"compact.at\":0.5} (source=.cg-policy.json)"
+PASS C37-6-main-usage-lists-project-template [RC] :: 主 usage 含 project-template create/clear=true
+PASS C37-6-command-template-chinese [RC] :: cg-template 中文文案=true
+PASS C37-6-ui-entry-visible [终版] :: client 含模板入口=true（终版可选项）
+
+UI TOTAL 12/12 PASS（RC 失败 0）
+计数口径：12 条 = 11 项 + `C32-status-template-line` 单独拆分；合并计 11 项。终版要求 12/12 全绿；C11④ 仅 INFO、不计。

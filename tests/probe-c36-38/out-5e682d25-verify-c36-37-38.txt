@@ -1,0 +1,60 @@
+ref=5e682d2
+sha=5e682d258fe8a6f9f1833bb1350b67c24b840017
+
+PASS C36-1-governed-on-first-event-no-compaction :: session-governed=1 (首个事件=user/message，无压缩)
+PASS C36-1-governed-fields :: fields={"sessionId":"session-iso-a1","cwd":"C:\\Users\\19091\\AppData\\Local\\Temp\\cg-iso-fuaKHd\\nogit-cwd","root":"C:\\Users\\19091\\AppData\\Local\\Temp\\cg-iso-fuaKHd\\nogit-cwd","rootId":"600c136cf30e3bd3","source":"inferred","subagent":false}
+PASS C36-1-governed-root-realpath :: root=C:\Users\19091\AppData\Local\Temp\cg-iso-fuaKHd\nogit-cwd
+PASS C36-1-governed-deduped-per-session :: rows=1
+PASS C36-5-unresolved-once-per-cycle :: rows=1 detail={"sessionId":"session-iso-u1","cwd":"","reason":"cwd-missing","cycle":"turn:1"}
+PASS C36-5-unresolved-fields :: cycle=turn:1 reason=cwd-missing
+PASS C36-5-unresolved-next-cycle :: cycles=["turn:1","turn:2"]
+PASS C36-5-unresolved-not-in-loss :: compaction-loss=0
+PASS C36-4-a2-file-key-full-session-id :: disk={"version":1,"sessions":{"session-iso-a2":{"at":0.55,"source":"session:A2","updatedAt":"2026-11-15T02:00:00.000Z","version":1}}}
+PASS C36-3-a2-hits :: at=0.55 source=session:A2
+PASS C36-3-policy-resolved-audit :: rows=[{"sessionId":"session-iso-a2","at":0.55,"source":"session:A2"}]
+PASS C36-3-policy-resolved-deduped :: rows(session-iso-a2)=1
+PASS C36-3-a2-evicted-with-sessionIds :: evicted={"count":1,"reason":"max-entries","sessionIds":["session-iso-e1"]}
+PASS C36-3-a1-over-a2 :: at=0.62 source=session:A1
+PASS C36-3-a1-persists-to-a2 :: disk={"version":1,"sessions":{"session-iso-a2":{"at":0.62,"source":"session:A2","updatedAt":"2026-11-15T02:28:06.462Z","version":1}}}
+PASS C36-3-restart-source-a2 :: at=0.62 source=session:A2
+PASS C36-3-clear-falls-back :: source=builtin disk={"version":1,"sessions":{}}
+PASS C36-3-plugin-source-literal :: source=plugin at=0.52
+PASS C36-3-profile-source-literal :: source=profile=batch at=0.45
+PASS C36-3-profile-policyresolved-literal :: rows=[{"sessionId":"session-iso-profile2","at":0.45,"source":"profile=batch"}]
+PASS C36-3-profile-status-literal :: line="policy: compact.at=0.45 (source=profile=batch) native=0.6785 (config-fallback) early=on (default; unvalidated)"
+PASS C37-state1-no-file-not-project :: source=builtin at=0.6
+PASS C37-no-hidden-fallback :: source=builtin
+PASS C37-create-command-audited :: text=context-governance project-template audit={"path":"C:\\Users\\19091\\AppData\\Local\\Temp\\cg-iso-fuaKHd\\proj-template\\.cg-policy.json","keys":["compact.at"]}
+PASS C37-status-visible :: statusHas=true
+PASS C37-show-command-chinese :: show=["context-governance project-template","项目模板 {\"compact.at\":0.5}（来源 .cg-policy.json）"]
+PASS C37-state2-explicit-file-project :: at=0.5 source=project
+WARN C37-immediate-change-needs-apply-path :: buildPolicyState 直调：before=builtin afterWrite=builtin afterDelete=builtin（apply 级由 verify-c38-memtools.mjs 复核）
+PASS C37-a2-over-project :: at=0.57 source=session:A2
+PASS C37-state4-bad-json-inactive :: source=builtin invalid=[{"source":"project","key":"*","reason":"invalid-json"}]
+PASS C37-state5-missing-version-inactive :: source=builtin invalid=[{"source":"project","key":"*","reason":"unknown-version"}]
+PASS C37-state3-deleted-inactive :: source=builtin
+PASS C37-clear-command-audited :: audit={"path":"C:\\Users\\19091\\AppData\\Local\\Temp\\cg-iso-fuaKHd\\proj-template\\.cg-policy.json"}
+PASS C38-1-pointer-id-and-resolve :: id=MEM-isoaaaa1-20261115-0001 target=C:\Users\19091\AppData\Local\Temp\cg-iso-fuaKHd\body\body1.md:2
+PASS C38-3-no-root-still-has-store :: dir=C:\Users\19091\AppData\Local\Temp\cg-iso-fuaKHd\home\context-governance\sessions\session-isoaaaa-1111-2222-3333-444455556666
+PASS C38-1-two-sessions-isolated :: bAll=0 bById=0
+PASS C38-2-restart-keeps-pointers :: reloaded=MEM-isoaaaa1-20261115-0001
+PASS C38-5-miss-body-deleted :: miss=true reason=body-missing
+PASS C38-5-miss-audited :: rows=1 reasons=["body-missing"]
+PASS C38-5-miss-line-drift :: miss=true reason=line-drift
+PASS C38-5-drift-audited :: rows=["memory-pointer-miss"]
+PASS C38-5-append-missing-target-warns :: {"ok":true,"id":"MEM-isoaaaa1-20261115-0002","warning":"body-missing"}
+PASS C38-4-header-truncated-audited :: truncated=26 audit={"count":26,"bytes":300,"lines":4}
+PASS C38-4-header-no-body-copy :: bytes=170 lines=6
+PASS C38-8-default-no-inherit :: all=0
+PASS C38-7-subagent-readonly :: {"ok":false,"reason":"subagent-readonly"}
+PASS C38-6-promote-shared :: promoted=["MEM-shrootis-20261115-0001"]
+PASS C38-6-promote-audited-with-source :: audit={"sessionId":"session-isohhhh-1111-2222-3333-444455556666","rootId":"root-iso","count":1,"ids":["MEM-shrootis-20261115-0001"]}
+PASS C38-6-shared-not-auto-visible :: bAll=0 sharedAll=1
+PASS C38-10-legacy-not-auto-migrated :: all=0
+PASS C38-10-legacy-explicit-import :: imported=["MEM-isolegac-20261115-0001"] audit=["memory-imported"]
+PASS C38-7-from-role-copied :: from=session-isorole-1111-2222-3333-444455556666 newId=MEM-isobbbb1-20261115-0001 origin=session-isorole-1111-2222-3333-444455556666
+PASS C38-7-from-role-origin-untouched :: bytesEqual=true
+PASS C38-7-from-role-audited :: audit=["memory-imported-role"]
+PASS C38-7-no-source-errors :: result={"ok":false,"reason":"no-source-session"} audit=["memory-import-no-source"]
+
+C36/C37/C38 TOTAL 54/54 PASS  WARN=1  (sandbox=C:\Users\19091\AppData\Local\Temp\cg-iso-fuaKHd)

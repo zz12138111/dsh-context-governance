@@ -1,0 +1,27 @@
+total_shadowed_system_rules=25
+counts={"a-superseded":9,"a-reemitted":12,"skip-empty":4}
+session-58a2e845-cec5-4229-afa9-7f09a0fc0207 comp@67455(cmd-f756f93e-2) rule@62011 len=7501 -> a-superseded :: newer same-compaction system/message seq=67152
+session-58a2e845-cec5-4229-afa9-7f09a0fc0207 comp@67455(cmd-f756f93e-2) rule@67152 len=8040 -> a-reemitted :: next system/message seq=67464 identical (sha 85d7063fe9cd)
+session-8b7b552a-bb46-462c-b084-e0711ea77310 comp@4611(cmd-f756f93e-1) rule@1502 len=7501 -> a-superseded :: newer same-compaction system/message seq=4463
+session-8b7b552a-bb46-462c-b084-e0711ea77310 comp@4611(cmd-f756f93e-1) rule@4463 len=8040 -> a-reemitted :: next system/message seq=4619 identical (sha 85d7063fe9cd)
+session-f72e86a8-fe89-4311-b186-7193a392e9c8 comp@20840(auto) rule@15669 len=7501 -> a-superseded :: newer same-compaction system/message seq=20126
+session-f72e86a8-fe89-4311-b186-7193a392e9c8 comp@20840(auto) rule@20126 len=8040 -> a-reemitted :: next system/message seq=20843 identical (sha 85d7063fe9cd)
+session-0c90bd42-b521-41af-b913-fe0359d34c4c comp@2309(cmd-97c11c4f-6) rule@70 len=4066 -> a-superseded :: newer same-compaction system/message seq=90,2256
+session-0c90bd42-b521-41af-b913-fe0359d34c4c comp@2309(cmd-97c11c4f-6) rule@90 len=7095 -> a-superseded :: newer same-compaction system/message seq=2256
+session-0c90bd42-b521-41af-b913-fe0359d34c4c comp@2309(cmd-97c11c4f-6) rule@2256 len=7847 -> a-reemitted :: next system/message seq=2317 identical (sha f2a0b4014f13)
+session-48742d19-90d2-4baa-b6b9-1f1b5ecdb21e comp@930(cmd-97c11c4f-7) rule@78 len=4066 -> a-superseded :: newer same-compaction system/message seq=104,869
+session-48742d19-90d2-4baa-b6b9-1f1b5ecdb21e comp@930(cmd-97c11c4f-7) rule@104 len=7095 -> a-superseded :: newer same-compaction system/message seq=869
+session-48742d19-90d2-4baa-b6b9-1f1b5ecdb21e comp@930(cmd-97c11c4f-7) rule@869 len=7847 -> a-reemitted :: next system/message seq=938 identical (sha f2a0b4014f13)
+session-cc603a5c-01a5-4e41-a075-f94fa63364d3 comp@3086(cmd-97c11c4f-4) rule@2999 len=7847 -> a-reemitted :: next system/message seq=3094 identical (sha f2a0b4014f13)
+session-27173095-4116-4838-addb-4ca55c2f2b85 comp@715(cmd-97c11c4f-8) rule@679 len=7847 -> a-reemitted :: next system/message seq=723 identical (sha f2a0b4014f13)
+session-cc281a25-850c-4a6c-8a45-1bcc84f5d7d7 comp@811(cmd-97c11c4f-9) rule@775 len=7847 -> a-reemitted :: next system/message seq=819 identical (sha f2a0b4014f13)
+session-f7510eda-432b-471f-8ad5-ac9c73efa141 comp@1092(cmd-97c11c4f-5) rule@106 len=4066 -> a-superseded :: newer same-compaction system/message seq=159,1029
+session-f7510eda-432b-471f-8ad5-ac9c73efa141 comp@1092(cmd-97c11c4f-5) rule@159 len=7095 -> a-superseded :: newer same-compaction system/message seq=1029
+session-f7510eda-432b-471f-8ad5-ac9c73efa141 comp@1092(cmd-97c11c4f-5) rule@1029 len=7847 -> a-reemitted :: next system/message seq=1100 identical (sha f2a0b4014f13)
+session-2ebebd78-77b9-401a-b632-6d8ff3574431 comp@2100(cmd-97c11c4f-3) rule@1995 len=7847 -> a-reemitted :: next system/message seq=2108 identical (sha f2a0b4014f13)
+session-53ece2c2-6726-4550-8d89-e7ac24e4ebc6 comp@3526(auto) rule@3031 len=0 -> skip-empty :: text=""
+session-53ece2c2-6726-4550-8d89-e7ac24e4ebc6 comp@20939(cmd-97c11c4f-2) rule@20613 len=0 -> skip-empty :: text=""
+session-53ece2c2-6726-4550-8d89-e7ac24e4ebc6 comp@20939(cmd-97c11c4f-2) rule@20614 len=0 -> skip-empty :: text=""
+session-53ece2c2-6726-4550-8d89-e7ac24e4ebc6 comp@20939(cmd-97c11c4f-2) rule@20615 len=0 -> skip-empty :: text=""
+session-53ece2c2-6726-4550-8d89-e7ac24e4ebc6 comp@20939(cmd-97c11c4f-2) rule@20658 len=7847 -> a-reemitted :: next system/message seq=20947 identical (sha f2a0b4014f13)
+session-53ece2c2-6726-4550-8d89-e7ac24e4ebc6 comp@74576(early-auto) rule@71577 len=7501 -> a-reemitted :: next system/message seq=74584 identical (sha 1a880bbab4de)

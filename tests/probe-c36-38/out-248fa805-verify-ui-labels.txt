@@ -1,0 +1,18 @@
+ref=248fa80
+sha=248fa80585dec13ad52a6e413b1e24c23c4144e9
+
+FAIL C11-3-bubble-entry-writes-a2 :: bubble 写层=plugin(configForms) WRITE_LAYER="本次修改写入：plugin 层（profile patch）"
+PASS C11-3-settings-entry-writes-plugin :: settings 走 configForms=true（plugin patch，符合）
+FAIL C11-3-two-entries-not-mixed :: bubble 与 settings 共用 configForms=true（混用则主入口也写 plugin）
+PASS C11-2-effect-time-text :: effectiveTextFor 覆盖 A1/A2 生效时点=true
+FAIL C32-four-fixed-labels :: missing=["本会话·临时（重启失效）","本会话·已保存（重启保留）","项目模板（可选）","全局（影响所有会话）"]
+FAIL C32-builtin-profile-labels :: 内置默认=false 配置 profile==false
+FAIL C32-no-raw-source-alias :: client 直接显示 snapshot.source=true（禁别名/裸 source）
+FAIL C37-6-help-lists-project-template :: hint="status | status last-cost | policy show | set <key>=<value> | set reset | header on|off | profile <batch|coding|review|research>|reset"（宿主命令帮助=input.hint；错误分支 Usage 不算帮助）
+FAIL C37-6-ui-entry-visible :: client 含模板入口=false（终版项：设置页入口，可选项）
+PASS C37-6-command-template-chinese :: cg-status 含中文模板文案=true
+FAIL C32-status-same-literal :: statusPolicyLine="policy: compact.at=0.50 (source=project) native=0.6785 (config-fallback) early=on (default; unvalidated)"
+PASS C32-status-template-line :: line="project-template: {\"compact.at\":0.5} (source=.cg-policy.json)"
+
+UI/C32/C37 TOTAL 4/12 PASS
+FAILED: C11-3-bubble-entry-writes-a2, C11-3-two-entries-not-mixed, C32-four-fixed-labels, C32-builtin-profile-labels, C32-no-raw-source-alias, C37-6-help-lists-project-template, C37-6-ui-entry-visible, C32-status-same-literal
