@@ -1,0 +1,52 @@
+ref=7d72ad8
+sha=7d72ad8c48608d3a073cbe13eb57939f9465fb6e
+
+PASS C39-1-package-zero-machine-binding :: blockers=0 files=49 例外=2
+PASS C39-1-config-defaults-portable :: projectRoot="" memoryRoot="" logFile=""
+PASS C39-1-package-metadata-clean :: package.json 机器绑定=false
+PASS C39-2-coldstart-session-policy-under-home :: path=C:\Users\19091\AppData\Local\Temp\cg-c39-Ony8DT\ext-home\context-governance\session-policy.json exists=true
+PASS C39-2-coldstart-plugin-policy-under-home :: path=C:\Users\19091\AppData\Local\Temp\cg-c39-Ony8DT\ext-home\context-governance\plugin-policy.json exists=true
+PASS C39-2-coldstart-root-state-under-home :: path=C:\Users\19091\AppData\Local\Temp\cg-c39-Ony8DT\ext-home\context-governance\root-state-ext.json exists=true
+PASS C39-2-coldstart-root-audit-under-home :: path=C:\Users\19091\AppData\Local\Temp\cg-c39-Ony8DT\ext-home\context-governance\root-audit-ext.jsonl exists=true
+PASS C39-2-coldstart-logs-under-home :: path=C:\Users\19091\AppData\Local\Temp\cg-c39-Ony8DT\ext-home\context-governance\logs exists=true
+PASS C39-2-coldstart-sessions-under-home :: path=C:\Users\19091\AppData\Local\Temp\cg-c39-Ony8DT\ext-home\context-governance\sessions\session-c39ext-1111-2222-3333-444455556666 exists=true
+PASS C39-2-profile-suffix-derived :: root-state-ext=true root-state-desktop=false
+PASS C39-2-coldstart-pending-reconcile-under-home :: identity=ext file=C:\Users\19091\AppData\Local\Temp\cg-c39-Ony8DT\ext-home\context-governance\pending-reconcile-ext-b13de78406480491.json
+PASS C39-2-coldstart-shared-under-home :: promote=["promoted: 1","shared: C:\\Users\\19091\\AppData\\Local\\Temp\\cg-c39-Ony8DT\\ext-home\\context-governance\\shared\\b13de78406480491"] sharedDir=C:\Users\19091\AppData\Local\Temp\cg-c39-Ony8DT\ext-home\context-governance\shared\b13de78406480491 exists=true
+PASS C39-2-coldstart-shared-queryable :: sharedText=["shared: 1 pointer(s)"]
+PASS C39-2-no-write-fake-userprofile :: dot-dsh=false legacy-base=false tree=[]
+PASS C39-2-no-write-process-cwd :: cwd=C:\Users\19091\AppData\Local\Temp\cg-c39-Ony8DT\cwd-cold files=[]
+PASS C39-2-no-write-real-user-home :: realHome=C:\Users\19091 leak=null
+PASS C39-2-status-shows-resolved-paths :: statusLines=["persistence-identity: source=profileContext name=ext dir=C:\\Users\\19091\\AppData\\Local\\Temp\\cg-c39-Ony8DT\\ext-dir home=present anchor=home path=C:\\Users\\19091\\Ap","root-audit: file=C:\\Users\\19091\\AppData\\Local\\Temp\\cg-c39-Ony8DT\\ext-home\\context-governance\\root-audit-ext.jsonl max=8388608 size=1330 rotations=0 failures=non","user-store: C:\\Users\\19091\\AppData\\Local\\Temp\\cg-c39-Ony8DT\\ext-home/context-governance"]
+PASS C39-2-status-user-store-equals-derived-base :: line=user-store: C:\Users\19091\AppData\Local\Temp\cg-c39-Ony8DT\ext-home/context-governance expected=C:\Users\19091\AppData\Local\Temp\cg-c39-Ony8DT\ext-home\context-governance
+PASS C39-2-state-audit-no-machine-strings :: hits=[]
+PASS C39-2-state-audit-paths-inside-temp :: outside=0 []
+PASS C39-2-command-face-same-home :: showHead=["context-governance memory","session: session-c39ext-1111-2222-3333-444455556666","role: (unset)","root: b13de78406480491"]
+PASS C39-3-env-fallback-single-base :: landed=["env-userprofile\\.dsh\\context-governance"]
+PASS C39-3-env-fallback-state-under-base :: base=env-userprofile\.dsh\context-governance set=["context-governance set","applied: compact.at=0.45"] tree=["plugin-policy.json","session-policy.json"]
+PASS C39-3-env-fallback-cwd-clean :: cwdTree=[]
+PASS C39-3-env-fallback-status-user-store :: line=user-store: C:\Users\19091\AppData\Local\Temp\cg-c39-Ony8DT\env-userprofile/.dsh/context-governance（env fallback 基座=env-userprofile\.dsh\context-governance）
+PASS C39-4-empty-base-status-unavailable :: line=user-store: unavailable (profileContext)
+PASS C39-4-empty-base-cwd-clean :: cwdTree=[]
+PASS C39-4-empty-base-zero-user-store-dirs :: stray=[]（cwd/配置根/temp 下不得新建 .dsh 或 context-governance）
+PASS C39-4-empty-base-set-still-works-a1 :: setText=["context-governance set","applied: compact.at=0.5","session: compact.at=0.5"]
+PASS C39-4-empty-base-memory-explicit :: memoryShow="[context-governance] user-store unavailable (profileContext)；会话/共享记忆不可用（不写盘）" register="[context-governance] user-store unavailable (profileContext)；会话/共享记忆不可用（不写盘）"
+PASS C39-4-empty-base-role-explicit :: role="[context-governance] user-store unavailable (profileContext)；角色元数据不可写（不写盘）"
+PASS C39-4-empty-base-memory-no-write :: cwdLeak=false realLeak=false
+PASS C39-4-empty-base-audit-row :: rows=1 where=["proj/memory/governance/audit.jsonl"] bad=[]（期望恰 1 行，落根审计，不落 cwd/用户级）
+PASS C39-4-empty-base-audit-once :: afterExtraCommands rows=1（期望 1，进程内只写一次）
+PASS C39-5-legacy-read-back :: queries=[{"round":0,"count":1,"ids":["MEM-c39legac-20261115-0001"]},{"round":1,"count":1,"ids":["MEM-c39legac-20261115-0001"]}] legacyId=MEM-c39legac-20261115-0001
+PASS C39-5-legacy-copied-once :: rows=1 from=["C:\\Users\\19091\\AppData\\Local\\Temp\\cg-c39-Ony8DT\\legacy-userprofile\\context-governance\\sessions\\session-c39legacy-1111-2222-3333-444455556666"]
+PASS C39-5-legacy-not-moved-or-deleted :: legacyExists=true unchanged=true
+PASS C39-5-new-write-lands-new-base :: registered=MEM-c39legac-20261115-0002 newIndexExists=true legacyUnchanged=true
+PASS C39-5-command-surface-injected-home :: registered=MEM-c39cmd11-20261115-0001 underInjected=true realLeak=false
+PASS C39-6-root-unresolved-explicit :: statusLines=["project-root: unknown (no-project-root)","memory: unavailable","roots: 0 (active=0, idle=0, fail-closed=0)"]
+PASS C39-6-memory-says-root-unresolved :: memoryLines=["context-governance memory","session: session-c39noroot-1111-2222-3333-444455556666","role: (unset)","root: (root-unresolved)","## 会话记忆指针（C38）"]
+PASS C39-6-no-guessed-fallback-path :: ghostStoreExists=false
+INFO C39-6-configured-nonexistent-root :: project-root: C:\Users\19091\AppData\Local\Temp\cg-c39-Ony8DT\ghost-root-configured (source=config) | storeCreated=true（非门级：config 根被直接采用并自动建目录；C39③ 只判"无可用根"）
+PASS C39-7-probes-portable :: hits=0 []
+SKIP C39-7-real-machine-dsh-home-coldstart :: 未覆盖：真机第二个 DSH_HOME 冷启动需另起 DSH 实例（要 00/用户开窗口）；离线以假 profileContext 覆盖，不得算 PASS
+PASS C39-7-probes-use-tempdir :: probes=9
+
+C39 外发可移植性 TOTAL 45 项 · PASS 44 · SKIP 1 · FAIL 0
+SKIP: C39-7-real-machine-dsh-home-coldstart

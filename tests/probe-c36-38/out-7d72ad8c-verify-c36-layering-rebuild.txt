@@ -1,0 +1,13 @@
+ref=7d72ad8
+sha=7d72ad8c48608d3a073cbe13eb57939f9465fb6e
+
+PASS C36-rebuild-precondition-a2 :: before=session:A2 at=0.62
+PASS C36-rebuild-precondition-a2-rootB :: beforeB=session:A2 at=0.62
+PASS C36-rebuild-1-a2-kept :: after=session:A2 at=0.62
+PASS C36-rebuild-4-multiroot-a2-kept :: afterB=session:A2 at=0.62（第二根 A2 0.62 不得因 rebuild 丢）
+PASS C36-rebuild-3-plugin-save-a2-not-downgraded :: afterPlugin=session:A2 at=0.62（期望 session:A2 0.62，不得被 plugin 0.58 降级）
+PASS C36-rebuild-2-a1-kept :: beforeA1=session:A1(0.50) afterA1=session:A1(0.50)
+INFO C36-rebuild-5-multisession-each-own :: ENV-LIMITED sidC=plugin at=0.58（A2 store 在 apply 时加载，外部写入不被重读；非门级）
+INFO C36-rebuild-6-no-root-safe :: PASS threw=false hasPolicyLine=true（非门级）
+
+C36 层级/重建 TOTAL 6/6 PASS
