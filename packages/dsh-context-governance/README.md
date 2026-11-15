@@ -3,18 +3,18 @@
 上下文治理插件（DSH / DeepSeek Harness）。M1 目标：**压缩前后不断线**——**会话指针**（`MEM-<session>-…` → 文件路径:行号）存用户级，正文留在人工文件，压缩后只回注 ID/状态/指针，详情按需取。
 
 > 版本：**以 `package.json` 为唯一来源**（本文与代码都不再重复版本号；启动行/审计里的 version 由运行时读取）。
-> 当前交付：**1.1.0-RC**（修 bug + 压缩改进；**不是 1.1.0 终版**——终版仍含「分会话阈值设置」与平台级会话覆盖 C36，均待后续迭代）。**全量测试以最新报告为准**（本文不写死数字）；**自 M3 T2（0.3.1）起新会话 header 默认开启**（`/cg header off` 或配置 `memoryHeader.enabled=false` 可关）。
+> 当前交付：**1.1.0-RC**（修 bug + 压缩改进；**C36 平台级会话覆盖已实现**）。**不是 1.1.0 终版**——终版仍含「分会话阈值设置」。**全量测试以最新报告为准**（本文不写死数字）；**自 M3 T2（0.3.1）起新会话 header 默认开启**（`/cg header off` 或配置 `memoryHeader.enabled=false` 可关）。
 > 安装方式：`docs/插件安装升级-Runbook.md`（`file:` 声明 + junction + bundle；不用 pnpm）。本机已按该方式安装（junction 指向源码），其它机器按 Runbook 操作。
 > **宿主兼容边界**（1.1.0 起双区间，与 `DEFAULT_MATRIX.host` 字面一致）：`engines.dsh = ">=0.2.1-rc.2 <0.2.2-0 || >=0.2.2-rc.3 <0.3.0-0"`。0.2.1 线**实测到 0.2.1-rc.3**；0.2.2 线以 **`0.2.2-rc.3` 为下界**声明、由宿主升级窗口验证（见 `docs/1.1.0-发布说明-草稿.md`）；0.3.0+ 仍拒载。
 > **设置页 / 输入框入口（1.1.0 D2）**：输入框下方统计行新增「压 65%」chip；点开气泡后**打开即聚焦并全选**、大号当前生效值 + 来源层/生命周期/写入层三行、数字输入（`%` 单位，自动清洗全角/空格/百分号）、失焦或保存才校验、成功显示「已保存」、可「恢复默认」（值来自快照 `defaultAt`，不写死）；Esc/点外部/再点 chip 关闭并重置；深/浅色用变量+fallback。设置页保留同一套字段。
 
 ## 适用范围（用户速览）
 
-**1.1.0 终版口径（C36 落地后）**：有 **session id** 的会话都会纳入治理（压缩策略、保护/回注、审计与成本）；工作区是否有 `.git` 不影响是否受治。**当前 RC 例外**：平台级会话覆盖（C36）尚未实现，无 `.git` 工作区暂不纳入治理（见下方已知限制）。每个会话的压缩比独立保存、重启后各自保留；工作区只决定记忆/审计挂在哪个目录与项目默认值。
+有 **session id** 的会话都会纳入治理（压缩策略、保护/回注、审计与成本）；**工作区是否有 `.git` 不影响是否受治**（C36 已实现）。每个会话的压缩比独立保存、重启后各自保留；工作区只决定审计/分组与项目默认值，记忆按会话隔离。
 
 工作目录不可读/不可写/离线时**仍然受治理**：压缩与审计照常，记忆不落项目并留 `root-unresolved` 审计，压缩比仍保存、重启保留。显式关闭（`out-of-scope`）不干预但留审计；observe-only 只观察不干预、仍记账。
 
-当前 RC 已知限制与完整说明见 [适用范围与已知限制](../../docs/适用范围与已知限制.md)：`rollback-point` 的 b 类损失与指针回补、early 通道与陈旧锁自愈尚未真机触发、平台级会话覆盖（C36）尚未实现（无 `.git` 工作区暂不纳入，终版补齐）。
+当前已知限制与完整说明见 [适用范围与已知限制](../../docs/适用范围与已知限制.md)：`rollback-point` 的 b 类损失与指针回补、early 通道与陈旧锁自愈尚未真机触发、C38 记忆切换过渡项（`mem_*` 仍根级、header 注入源切换中）。
 
 ## 新用户先读（5 分钟上手）
 
@@ -195,12 +195,12 @@ config:
 
 ### 多根治理与状态（v2，1.0）
 
-- **定位**：每个可判定根都纳管；不是 P1 阶段的主根骨架。`/cg roots` 列出全部根，各根独立 memory/audit/guard/header/提前压。
-- **根判定**：`configRoot` 非空 → cwd 在其下即归该根、`source=config`，**嵌套 `.git` 不另立根**（**显式配置根内多根隔离不完整**，已知限制）；configRoot 外/默认空根 → 最近 `.git` 多根。
+- **定位**：每个会话都纳管（有 session id 即纳入，`.git` 非闸门）；`/cg roots` 列出分组根，各根独立 audit/guard/header/提前压，**记忆按会话隔离**。
+- **根判定**：`configRoot` 非空 → cwd 在其下即归该根、`source=config`，**configRoot 内不再按 `.git` 细分（root=configRoot）**（**显式配置根内多根隔离不完整**，已知限制）；configRoot 外/默认空根 → **cwd 的 `realpath` 归一分组**（不要求 `.git`）。
 - **状态文件 v2**：`<home>/context-governance/root-state-<profile>.json`，`roots` 以 `rootId`（路径 hash）为键；`primaryRootId` 只作 v1 迁移锚点/展示，**config 不改写持久化主根**；v1 自动迁移并留 `.v1.bak`。
 - **`/cg roots`**：只读列出全部已登记根（`id`/`name`/`project`/`state`/`memory`/`audit` 末行）；`/cg status` 也含同一段。
 - **写入边界**：① `<home>/context-governance/`（状态/root audit/日志）；② `sessions/<sessionId>/`（指针/会话审计）；③ `shared/<rootId>/`（显式 promote）；`<root>/memory/governance/` 仅 legacy 只读、不再新写；每次实际写入前做 realpath/`..`/符号链接/盘符归一 containment，白名单外 fail-closed。
-- **`logFile`**：只允许用户级或该根 `memory/governance/`；旧 `<root>/logs/` 路径会 CONFIG 拒绝、插件不加载该 profile。
+- **`logFile`**：只允许用户级 `<home>/context-governance/`；legacy 根目录不再接受新日志；旧 `<root>/logs/` 路径会 CONFIG 拒绝、插件不加载该 profile。
 - **`mem_*`**：只读写本会话根；`no-root/fail-closed/子会话写` 均拒绝并审计 `memory-tool-rejected`；1.0 不做跨根查询。
 - 身份不可得 → fail-closed：不猜路径、不落盘、根保持 unknown。
 - 根未知时 `/cg status` 显示 `project-root: unknown (no-project-root)`；根变化可见（`source=config|persisted|inferred`、`inferred-fresh` / `changed-from=`），根生命周期事件写用户级 root audit。
