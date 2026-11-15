@@ -126,6 +126,8 @@ function statusText({ store, guard, audit, rootAudit = null, rootsView = null, r
   if (policy !== null && typeof policy.resolve === 'function') {
     resolvedPolicy = policy.resolve(sessionId);
     lines.push(`policy: ${summarizePolicy(resolvedPolicy)}`);
+    // C38 ⑯：记忆模式可见（默认会话指针库；=0 显式回退 legacy）。
+    lines.push(`memory-mode: ${process.env.DSH_CG_SESSION_MEMORY === '0' ? 'legacy (opt-out)' : 'session'}`);
     // D：项目模板可见性（默认没有；仅显式存在时显示）。
     if (policy.projectTemplate !== null && policy.projectTemplate !== undefined) {
       try {

@@ -864,18 +864,39 @@ let a2AuditSink = (event, details) => {
   ctx.logger?.info?.(`[context-governance] ${event}: ${JSON.stringify(details)}`);
 };
 // 裁定 3：活跃会话（本进程最近解析过策略的 session）不清 A2；pins 预留显式保护。
-const recentGovernedSessions = new Set();
+// 裁定 3：活跃=最近 10 分钟内有策略解析（有界 Map，超 500 条按 lastSeen 淘汰）；
+// 不用“曾经见过”做恒真保护，否则 A2 的 TTL/LRU 永远清不掉。
+const recentGovernedSessions = new Map();
+const ACTIVE_WINDOW_MS = 10 * 60 * 1000;
+const ACTIVE_MAX = 500;
+const markSessionActive = (sessionId) => {
+  if (typeof sessionId !== 'string' || sessionId === '') return;
+  recentGovernedSessions.set(sessionId, Date.now());
+  if (recentGovernedSessions.size > ACTIVE_MAX) {
+    const oldest = [...recentGovernedSessions.entries()].sort((a, b) => a[1] - b[1]);
+    for (const [key] of oldest) {
+      if (recentGovernedSessions.size <= ACTIVE_MAX) break;
+      recentGovernedSessions.delete(key);
+    }
+  }
+};
+const isSessionActive = (sessionId) => {
+  const at = recentGovernedSessions.get(sessionId);
+  return typeof at === 'number' && Date.now() - at <= ACTIVE_WINDOW_MS;
+};
+// C38 默认口径：会话指针库 on；=0 为显式 opt-out（legacy）。
+const sessionPointersMode = process.env.DSH_CG_SESSION_MEMORY !== '0';
+const memoryModeSeen = new Set();
 const a2Store = createA2Store({
   file: a2File,
   logger: ctx.logger,
   audit: (event, details) => a2AuditSink(event, details),
   pins: [],
-  isActive: (sessionId) => recentGovernedSessions.has(sessionId),
+  isActive: (sessionId) => isSessionActive(sessionId),
 });
 let policyState = buildPolicyState(mergeSettingsAt(config), {
   a2Store,
-  markActive: (sessionId) => { if (typeof sessionId === 'string' && sessionId !== '') recentGovernedSessions.add(sessionId); },
-  markActive: (sessionId) => { if (typeof sessionId === 'string' && sessionId !== '') recentGovernedSessions.add(sessionId); },
+  markActive: markSessionActive,
   onPolicyResolved: ({ sessionId, at, source }) => {
     a2AuditSink('policy-resolved', { sessionId, at, source });
   },
@@ -980,10 +1001,16 @@ let policyState = buildPolicyState(mergeSettingsAt(config), {
     };
     const registration = registerMemoryTools(ctx, null, {
   resolveStore,
+  legacyReadOnly: sessionPointersMode,
   audit: rootAudit,
   // C38：会话指针库优先（有 session id 即用；空库也优先，不回落到 legacy）。
-  // C38 mem_* 切换默认关闭（与既有 root 路由测试冲突，需审核定默认值；开关：DSH_CG_SESSION_MEMORY=1）。
-  resolveSessionMemory: process.env.DSH_CG_SESSION_MEMORY === '1' ? (exec) => {
+  // C38：默认会话指针库；DSH_CG_SESSION_MEMORY=0 显式回退 legacy（过渡/回滚），并审计可见。
+  resolveSessionMemory: sessionPointersMode ? (exec) => {
+    const sessionIdForMode = exec?.agent?.session?.id ?? null;
+    if (typeof sessionIdForMode === 'string' && sessionIdForMode !== '' && !memoryModeSeen.has(sessionIdForMode)) {
+      memoryModeSeen.add(sessionIdForMode);
+      try { rootAudit?.append?.('memory-mode', { sessionId: sessionIdForMode, mode: 'session' }); } catch { /* ignore */ }
+    }
     const sessionId = exec?.agent?.session?.id ?? null;
     if (typeof sessionId !== 'string' || sessionId === '') return null;
     const home = process.env.USERPROFILE ?? process.env.HOME ?? '';
@@ -1004,6 +1031,27 @@ let policyState = buildPolicyState(mergeSettingsAt(config), {
       `entries=${store.status.counts.active + store.status.counts.proposed} active/proposed`,
     );
     for (const warning of store.warnings) ctx.logger?.warn?.(`[context-governance] ${warning}`);
+    // C38：默认会话指针库时，若根内有 legacy 记忆则提示（不自动迁移）。
+    if (sessionPointersMode) {
+      try {
+        const legacyRoot = path.join(config.memoryRoot, 'MEMORY.md');
+        const legacyTopics = path.join(config.memoryRoot, 'topics');
+        const hasLegacy = fs.existsSync(legacyRoot) || fs.existsSync(legacyTopics);
+        if (hasLegacy) {
+          rootAudit?.append?.('memory-legacy-detected', { root: config.memoryRoot, path: config.memoryRoot });
+          ctx.logger?.warn?.(
+            '[context-governance] legacy memory detected at ' + config.memoryRoot +
+            '; it is read-only. Import explicitly: /cg memory import --from legacy --session <id>',
+          );
+        }
+      } catch {
+        /* 检测失败不影响装载 */
+      }
+    }
+    // C38：legacy 回退模式显式审计（可见）。
+    if (!sessionPointersMode) {
+      rootAudit?.append?.('memory-mode', { mode: 'legacy', reason: 'env-opt-out' });
+    }
     // rc.2：陈旧写者锁被回收——必须留持久证据（根审计），不能只靠一行 warning。
     const lockReclaimed = store.status.lockReclaimed ?? null;
     if (lockReclaimed !== null) {
@@ -1106,7 +1154,7 @@ let policyState = buildPolicyState(mergeSettingsAt(config), {
       };
       const state = buildPolicyState(mergeSettingsAt(rootConfig), {
         a2Store,
-        markActive: (sessionId) => { if (typeof sessionId === 'string' && sessionId !== '') recentGovernedSessions.add(sessionId); },
+        markActive: markSessionActive,
         onPolicyResolved: ({ sessionId, at, source }) => {
           a2AuditSink('policy-resolved', { sessionId, at, source });
         },

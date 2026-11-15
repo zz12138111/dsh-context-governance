@@ -9,6 +9,9 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
+// C38 ⑯：本文件验证 legacy 根路由契约，显式 opt-out（默认已切会话指针库）。
+process.env.DSH_CG_SESSION_MEMORY = '0';
+
 import { apply } from '../src/index.js';
 import { MemoryStore } from '../src/memory/store.js';
 import { rootIdOf } from '../src/roots/identity.js';

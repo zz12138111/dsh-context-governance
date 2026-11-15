@@ -238,6 +238,8 @@ export function createMemoryTools(store, options = {}) {
   const resolveStore = typeof options.resolveStore === 'function' ? options.resolveStore : defaultResolver(store);
   const subagentOf = typeof options.isSubagent === 'function' ? options.isSubagent : isSubagentExec;
   // C38：有 session id 时会话指针库优先（空库也优先，不回落到 legacy root 记忆）。
+  // C38 裁定 A：默认会话指针库模式下，无 session id 的根写入视为 legacy（只读）。
+  const legacyReadOnly = options.legacyReadOnly === true;
   const sessionMemoryFor = async (exec) => {
     if (typeof options.resolveSessionMemory !== 'function') return null;
     try {
@@ -345,6 +347,16 @@ export function createMemoryTools(store, options = {}) {
               'POINTER_ONLY',
               'memory is pointer-based in this session: write the body to the human file, then register a pointer via /cg memory register <type> <file>:<line> <summary>',
               { reason: 'pointer-only' },
+            );
+          }
+          // C38 裁定 A：无 session id 的根写入在默认模式下按 legacy 只读拒绝。
+          if (legacyReadOnly && (exec?.agent?.session?.id ?? null) === null) {
+            throw rejectWith(
+              MEM_WRITE_NAME,
+              exec,
+              'LEGACY_READ_ONLY',
+              'root memory is legacy/read-only in session-pointer mode; use /cg memory import --from legacy --session <id>',
+              { reason: 'legacy-read-only' },
             );
           }
           let resolution = null;

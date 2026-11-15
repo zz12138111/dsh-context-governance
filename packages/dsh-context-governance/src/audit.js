@@ -295,6 +295,8 @@ export const AUDIT_EVENTS = Object.freeze([
   'project-template-cleared',
   /** C38：会话级记忆指针（正文缺失/行漂移/登记失败）与角色元数据。 */
   'memory-pointer-miss',
+  'memory-legacy-detected',
+  'memory-mode',
   'session-role-set',
   'memory-import-no-source',
   'memory-imported-role',

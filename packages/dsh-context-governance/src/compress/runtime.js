@@ -279,6 +279,8 @@ export class CompressionGuard {
     this.#scopeResolver = typeof options.resolveScope === 'function' ? options.resolveScope : null;
     this.#captureTitle = options.captureTitle !== false;
     this.#rebuildEnabled = options.rebuildEnabled !== false;
+    // C36 裁定 3：每压缩 cycle 首事件解析策略并写 policy-resolved。
+    this.#resolvePolicy = typeof options.resolvePolicy === 'function' ? options.resolvePolicy : null;
     this.#readOnly = this.#store?.status?.readOnlyReason !== null && this.#store?.status?.readOnlyReason !== undefined;
     this.#auditFile = typeof options.auditFile === 'string' ? options.auditFile : '';
     this.#readOnlyReason = this.#readOnly ? this.#store.status.readOnlyReason : null;
