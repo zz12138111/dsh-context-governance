@@ -34,7 +34,8 @@ import { openSessionMemory } from './memory/session-store.js';
 import { SCOPE_SKIP, resolveScope } from './scope.js';
 import { MEM_QUERY_NAME, MEM_WRITE_NAME, registerMemoryTools } from './tools/mem-tools.js';
 import { createSnapshotHandler, createSnapshotPolicyResolver, mergeSettingsAt, policySnapshot, readVolatileAt } from './settings-policy.js';
-import { mountSessionPolicyRoute } from './session-policy-route.js';
+import { mountSessionPolicyRoute, mountPluginPolicyRoute } from './session-policy-route.js';
+import { createPluginPolicyStore, pluginPolicyFile } from './plugin-policy.js';
 
 export const name = 'dsh-context-governance';
 
@@ -915,7 +916,37 @@ const auditMemoryEvent = (event, details) => {
   }
   try { primaryAudit?.append?.(event, details); } catch { /* 审计失败不影响记忆 */ }
 };
-let policyState = buildPolicyState(mergeSettingsAt(config), {
+/**
+ * C11②（实现②·保承诺）：plugin 层持久值。
+ * volatile（设置页表单）有值 → 以它为准并幂等落盘；volatile 为空（重启后宿主未恢复表单值）
+ * → 读用户级 `~/.dsh/context-governance/plugin-policy.json`，把持久值当作 plugin 层默认。
+ * 只影响 plugin 层，**不得越级压** A1/A2/项目模板（那三层在更高位置）。
+ */
+const pluginPolicyStoreSingleton = { value: null };
+const getPluginPolicyStore = () => {
+  if (pluginPolicyStoreSingleton.value !== null) return pluginPolicyStoreSingleton.value;
+  const file = pluginPolicyFile();
+  if (file === null) return null;
+  pluginPolicyStoreSingleton.value = createPluginPolicyStore({
+    file,
+    audit: (event, details) => { try { primaryAudit?.append?.(event, details); } catch { /* 审计失败不影响持久化 */ } },
+    logger: null,
+  });
+  return pluginPolicyStoreSingleton.value;
+};
+const mergePluginPolicy = (configInput) => {
+  const volatileAt = readVolatileAt(configInput);
+  const store = getPluginPolicyStore();
+  if (Number.isFinite(volatileAt)) {
+    // 设置页保存过：落盘保证重启后仍有效（值没变不重复写/不刷审计）。
+    try { store?.writeAtIfChanged?.(volatileAt); } catch { /* 落盘失败不改变本次生效值 */ }
+    return mergeSettingsAt(configInput, volatileAt);
+  }
+  const persisted = store?.read?.() ?? null;
+  if (persisted === null || !Number.isFinite(persisted.at)) return configInput;
+  return mergeSettingsAt(configInput, persisted.at);
+};
+let policyState = buildPolicyState(mergePluginPolicy(config), {
   a2Store,
   markActive: markSessionActive,
   onPolicyResolved: ({ sessionId, at, source }) => {
@@ -1174,7 +1205,7 @@ let policyState = buildPolicyState(mergeSettingsAt(config), {
         memoryRoot: memory.memoryRoot ?? config.memoryRoot,
         project: entry?.project ?? (samePath(root, config.projectRoot) ? config.project : path.basename(root)),
       };
-      const state = buildPolicyState(mergeSettingsAt(rootConfig), {
+      const state = buildPolicyState(mergePluginPolicy(rootConfig), {
         a2Store,
         markActive: markSessionActive,
         onPolicyResolved: ({ sessionId, at, source }) => {
@@ -1211,25 +1242,29 @@ let policyState = buildPolicyState(mergeSettingsAt(config), {
       }
       return policyState;
     };
-    // 1.1.0 D2：配置热更新。设置页写 profile patch 后 Host 广播 `app-boot/config-reload`；
+    // C11②（实现②·保承诺）：plugin 层值变更后统一重算（配置热更新 / 设置页保存都走这里）。
     // 逐 root（多根不串）重算并把新策略下发到该 root 的 guard，`policyForSession` 语义不变。
+    const rebuildPolicies = () => {
+      policyState = buildPolicyState(mergePluginPolicy(config), {
+        a2Store,
+        onPolicyResolved: ({ sessionId, at, source }) => {
+          a2AuditSink('policy-resolved', { sessionId, at, source });
+        },
+      });
+      for (const [rootId, rootConfig] of policyConfigs) {
+        const next = buildPolicyState(mergePluginPolicy(rootConfig));
+        policyCache.set(rootId, next);
+        guardPool?.updatePolicy?.(rootId, next.policy);
+      }
+      if (attachEntry !== null) policyCache.set(attachEntry.rootId, policyState);
+    };
+    // 1.1.0 D2：配置热更新。设置页写 profile patch 后 Host 广播 `app-boot/config-reload`；
     // 只在宿主提供 `settings` 服务时挂（纯单测 ctx 没有该服务，避免干扰事件断言）。
     const hasSettingsService = typeof ctx.get === 'function' && ctx.get('settings') !== undefined;
     if (hasSettingsService && typeof ctx.on === 'function') {
       ctx.on('app-boot/config-reload', () => {
         try {
-          policyState = buildPolicyState(mergeSettingsAt(config), {
-  a2Store,
-  onPolicyResolved: ({ sessionId, at, source }) => {
-    a2AuditSink('policy-resolved', { sessionId, at, source });
-  },
-});
-          for (const [rootId, rootConfig] of policyConfigs) {
-            const next = buildPolicyState(mergeSettingsAt(rootConfig));
-            policyCache.set(rootId, next);
-            guardPool?.updatePolicy?.(rootId, next.policy);
-          }
-          if (attachEntry !== null) policyCache.set(attachEntry.rootId, policyState);
+          rebuildPolicies();
         } catch (error) {
           ctx.logger?.warn?.(`[context-governance] policy reload failed: ${String(error?.message ?? error)}`);
         }
@@ -1269,6 +1304,23 @@ let policyState = buildPolicyState(mergeSettingsAt(config), {
         return result;
       },
       onError: (error) => ctx.logger?.warn?.(`[context-governance] session-policy write failed: ${String(error?.message ?? error)}`),
+    });
+    // C11②（实现②·保承诺）：plugin 层写路由——设置页保存时插件自持久化到
+    // `~/.dsh/context-governance/plugin-policy.json`，重启后仍以 source=plugin 读回。
+    // 不依赖宿主 volatile 字段是否跨进程保留（那层只负责表单可编辑 / 即时投影）。
+    mountPluginPolicyRoute(ctx, {
+      writePluginAt: ({ at }) => {
+        const store = getPluginPolicyStore();
+        if (store === null) return { ok: false, error: 'persist-unavailable' };
+        if (store.writeAt(at) !== true) return { ok: false, error: 'persist-failed' };
+        try {
+          rebuildPolicies();
+        } catch (error) {
+          return { ok: false, error: 'rebuild-failed', detail: String(error?.message ?? error).slice(0, 200) };
+        }
+        return { ok: true, at, source: 'plugin' };
+      },
+      onError: (error) => ctx.logger?.warn?.(`[context-governance] plugin-policy write failed: ${String(error?.message ?? error)}`),
     });
     // 1.1.0 D2：声明本实例自带设置页（非自动表单），供宿主 settings 服务登记策略。
     if (typeof ctx.inject === 'function') {

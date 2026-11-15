@@ -23,6 +23,7 @@ window.__ModuleLoader__.load({
     const ENTRY_ID = 'dsh-context-governance';
     const SNAPSHOT_PATH = '/context-governance/policy-snapshot';
     const SESSION_POLICY_PATH = '/context-governance/session-policy';
+    const PLUGIN_POLICY_PATH = '/context-governance/plugin-policy';
     const AT_MIN = 0.2;
     const LOW_THRESHOLD_ACK_MIN = 0.3;
     const PROJECT_AT_MIN = 0.45;
@@ -188,6 +189,45 @@ window.__ModuleLoader__.load({
       const posted = await postSessionAt({ sessionId, at: result.ratio, fetchImpl });
       if (posted.ok === true) return { ok: true, ratio: result.ratio, error: null, requestSent: true };
       return { ok: false, ratio: result.ratio, error: posted.error, requestSent: posted.requestSent };
+    };
+
+    /**
+     * C11②：设置页保存 = plugin 全局层，且**插件自持久化**（服务端写 `plugin-policy.json`），
+     * 不依赖宿主 volatile 字段是否跨进程保留。宿主表单（configForms）只做尽力同步，失败不回滚。
+     */
+    const savePluginAt = async ({ raw, snapshot, fetchImpl = globalThis.fetch, configForms } = {}) => {
+      const result = computeSave(raw, snapshot ?? {});
+      if (result.ok !== true) return { ok: false, ratio: null, error: result.reason, requestSent: false };
+      if (typeof fetchImpl !== 'function') return { ok: false, ratio: result.ratio, error: 'no-fetch', requestSent: false };
+      let posted;
+      try {
+        const response = await fetchImpl(PLUGIN_POLICY_PATH, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', accept: 'application/json' },
+          body: JSON.stringify({ at: result.ratio }),
+        });
+        if (response && response.ok === true) {
+          posted = { ok: true, requestSent: true };
+        } else {
+          let error = response ? `HTTP ${response.status}` : 'no-response';
+          try {
+            const body = await response.json();
+            if (typeof body?.error === 'string') error = body.error;
+            if (typeof body?.detail === 'string' && body.detail !== '') error = `${error}: ${body.detail}`;
+          } catch { /* 非 JSON 响应按状态码报 */ }
+          posted = { ok: false, error, requestSent: true };
+        }
+      } catch (failure) {
+        posted = { ok: false, error: String(failure?.message ?? failure), requestSent: true };
+      }
+      if (posted.ok !== true) return { ok: false, ratio: result.ratio, error: posted.error, requestSent: posted.requestSent };
+      // 宿主 volatile 表单同步（只影响设置页显示；持久化已由插件文件保证）。
+      try {
+        const form = configForms?.get?.(ENTRY_ID);
+        if (typeof form?.set === 'function') await form.set('policy.at', result.ratio);
+        else if (typeof form?.mutate === 'function') await form.mutate([{ path: 'policy.at', value: result.ratio }], form.revision);
+      } catch { /* 表单同步失败不影响已落盘的持久值 */ }
+      return { ok: true, ratio: result.ratio, error: null, requestSent: true };
     };
 
     /** U2 结构 / U8 不可用态：气泡与设置页共用同一视图模型。 */
@@ -470,9 +510,9 @@ window.__ModuleLoader__.load({
         return () => { alive = false; };
       }, [ctx, store]);
       const model = bubbleView(view ?? null);
-      // 设置页＝全局入口：写 plugin 层（configForms），影响所有会话（C28）。
+      // 设置页＝全局入口：写 plugin 层（插件自持久化 + 宿主 volatile 表单尽力同步）。
       const save = async () => {
-        const result = await saveAttempt({ raw: draft, snapshot: view ?? {}, configForms: ctx?.configForms });
+        const result = await savePluginAt({ raw: draft, snapshot: view ?? {}, configForms: ctx?.configForms });
         if (result.ok !== true) { setError(result.error); return; }
         setError('');
         setSaved(true);
@@ -581,6 +621,8 @@ window.__ModuleLoader__.load({
       writeLayerTextFor,
       saveSessionAt,
       postSessionAt,
+      savePluginAt,
+      PLUGIN_POLICY_PATH,
       sessionIdOf,
       SESSION_POLICY_PATH,
       toPercentText,

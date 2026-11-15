@@ -127,13 +127,94 @@ export function createSessionPolicyHandler({ writeSessionAt, onError = null, max
  * @returns {boolean} 已挂载或已排队等待 webServer
  */
 export function mountSessionPolicyRoute(ctx, { writeSessionAt, onError = null, path = SESSION_POLICY_PATH } = {}) {
-  const handler = createSessionPolicyHandler({ writeSessionAt, onError });
+  return mountWriteRoute(ctx, {
+    path,
+    handler: createSessionPolicyHandler({ writeSessionAt, onError }),
+    label: 'context-governance: session-policy route',
+  });
+}
+
+// ---- C11②：plugin 层（全局）写路由 --------------------------------------
+
+export const PLUGIN_POLICY_PATH = '/context-governance/plugin-policy';
+
+/**
+ * 设置页保存 → 插件自持久化（`plugin-policy.json`）。
+ * 与会话路由同源、同安全边界；区别是不需要 sessionId（全局层），响应 source='plugin'。
+ * @param {{writePluginAt: (input:{at:number}) => {ok:boolean, error?:string, detail?:string},
+ *   onError?: (error: unknown) => void, maxBytes?: number}} deps
+ */
+export function createPluginPolicyHandler({ writePluginAt, onError = null, maxBytes = DEFAULT_MAX_BYTES } = {}) {
+  return async (req, res) => {
+    const send = (status, payload) => {
+      try {
+        res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+        res.end(JSON.stringify(payload));
+      } catch { /* 连接已关：不影响其它请求 */ }
+    };
+    if (req?.method !== 'POST') {
+      try {
+        res.writeHead(405, { allow: 'POST' });
+        res.end();
+      } catch { /* ignore */ }
+      return;
+    }
+    if (crossOrigin(req) === true) {
+      send(403, { ok: false, error: 'cross-origin' });
+      return;
+    }
+    if (typeof writePluginAt !== 'function') {
+      send(503, { ok: false, error: 'write-unavailable' });
+      return;
+    }
+    const body = await readBody(req, maxBytes);
+    if (body === null) {
+      send(413, { ok: false, error: 'body-too-large' });
+      return;
+    }
+    if (body === undefined) {
+      send(400, { ok: false, error: 'invalid-json' });
+      return;
+    }
+    const at = typeof body?.at === 'number' ? body.at : Number(body?.at);
+    if (Number.isFinite(at) !== true || at < 0 || at > 1) {
+      send(400, { ok: false, error: 'invalid-at' });
+      return;
+    }
+    try {
+      const result = await writePluginAt({ at });
+      if (result?.ok !== true) {
+        send(409, {
+          ok: false,
+          error: typeof result?.error === 'string' ? result.error : 'rejected',
+          detail: typeof result?.detail === 'string' ? result.detail : null,
+        });
+        return;
+      }
+      send(200, { ok: true, at, source: 'plugin' });
+    } catch (error) {
+      try { onError?.(error); } catch { /* logger 自身失败不得影响响应 */ }
+      send(500, { ok: false, error: 'internal' });
+    }
+  };
+}
+
+export function mountPluginPolicyRoute(ctx, { writePluginAt, onError = null, path = PLUGIN_POLICY_PATH } = {}) {
+  return mountWriteRoute(ctx, {
+    path,
+    handler: createPluginPolicyHandler({ writePluginAt, onError }),
+    label: 'context-governance: plugin-policy route',
+  });
+}
+
+/** 两个写路由共用的挂载逻辑（webServer 后挂 → inject；dispose 随 effect 回收）。 */
+function mountWriteRoute(ctx, { path, handler, label }) {
   const mount = (host) => {
     if (host === null || host === undefined || typeof host.webServer?.register !== 'function') return false;
     try {
       const dispose = host.webServer.register({ kind: 'exact', path, handler });
       if (typeof dispose === 'function' && typeof host.effect === 'function') {
-        host.effect(() => () => { try { dispose(); } catch { /* ignore */ } }, 'context-governance: session-policy route');
+        host.effect(() => () => { try { dispose(); } catch { /* ignore */ } }, label);
       }
       return true;
     } catch {

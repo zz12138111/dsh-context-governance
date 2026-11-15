@@ -290,6 +290,9 @@ export const AUDIT_EVENTS = Object.freeze([
   /** C36 ④：A2 持久会话层淘汰（TTL/上限）与装载失败（损坏/未知版本）。 */
   'a2-evicted',
   'a2-load-failed',
+  /** C11②：plugin 层自持久化（保存落盘 / 装载失败），供真机核"哪次保存落了盘"。 */
+  'plugin-policy-persisted',
+  'plugin-policy-load-failed',
   /** C36 ③：策略解析来源审计（source 字面 session:A1/session:A2/project/plugin）。 */
   'policy-resolved',
   /** D：项目模板显式创建/清除（仅经 /cg project-template 入口）。 */
