@@ -605,8 +605,18 @@ try {
   } else {
     check('C39-7-real-machine-dsh-home-coldstart', fs.existsSync(realDshHome), `外部真机读数由窗口提供：${realDshHome}`);
   }
-  check('C39-7-probes-use-tempdir', probes.every((name) => readTextSafe(path.join(import.meta.dirname, name)).includes('os.tmpdir()') || readTextSafe(path.join(import.meta.dirname, name)).includes('mkdtempSync')),
-    `probes=${probes.length}`);
+  // 落盘型探针必须用 os.tmpdir()/mkdtempSync（纯内存探针不涉及落盘，自动免检）
+  const writesFs = /fs\.writeFileSync|mkdtempSync|createA2Store\(|openSessionMemory\(/;
+  const needsTemp = probes.filter((name) => writesFs.test(readTextSafe(path.join(import.meta.dirname, name))));
+  const tempOk = needsTemp.every((name) => {
+    const text = readTextSafe(path.join(import.meta.dirname, name));
+    return text.includes('os.tmpdir()') || text.includes('mkdtempSync');
+  });
+  check('C39-7-probes-use-tempdir', tempOk,
+    `落盘型探针=${needsTemp.length}/${probes.length}（免检=纯内存），不合规=${JSON.stringify(needsTemp.filter((name) => {
+      const text = readTextSafe(path.join(import.meta.dirname, name));
+      return !(text.includes('os.tmpdir()') || text.includes('mkdtempSync'));
+    }))}`);
 }
 
 // ---------------------------------------------------------------- 汇总

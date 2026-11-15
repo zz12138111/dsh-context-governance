@@ -1,0 +1,13 @@
+ref=7d72ad8
+sha=7d72ad8c48608d3a073cbe13eb57939f9465fb6e
+
+FAIL C31-1-non-loopback-rejected :: status=200 body={"ok":true,"at":0.5,"source":"session:A2"}（期望 403，错误码含 loopback）
+FAIL C31-3-missing-origin-rejected :: status=200 body={"ok":true,"at":0.5,"source":"session:A2"}（期望 403，错误码 missing-origin/cross-origin）
+FAIL C31-3-missing-host-rejected :: status=200 body={"ok":true,"at":0.5,"source":"session:A2"}（期望 403）
+PASS C31-3-cross-origin-rejected :: status=403 body={"ok":false,"error":"cross-origin"}（期望 403 cross-origin）
+PASS C31-3-same-origin-allowed :: status=200 body={"ok":true,"at":0.5,"source":"session:A2"} writes=[{"sessionId":"session-c31-aaaa-1111-2222-333344445555","at":0.5}]
+PASS C31-1-ipv6-loopback-allowed :: status=200 body={"ok":true,"at":0.5,"source":"session:A2"}（期望 200）
+PASS C31-1-ipv4-mapped-loopback-allowed :: status=200 body={"ok":true,"at":0.5,"source":"session:A2"}（期望 200）
+
+C31 写入路由安全 TOTAL 4/7 PASS
+FAILED: C31-1-non-loopback-rejected, C31-3-missing-origin-rejected, C31-3-missing-host-rejected
