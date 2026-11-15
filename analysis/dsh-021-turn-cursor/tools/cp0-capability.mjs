@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 /**
- * CP0 能力前置门检查（C36 平台级会话覆盖，审核用，只读）。
+ * CP0 能力前置门检查（C36 平台级会话覆盖 + C37 项目模板 + C38 会话级记忆，审核用，只读）。
  *
  * 用法：
  *   node analysis/dsh-021-turn-cursor/tools/cp0-capability.mjs [--root <插件目录>]
  *
  * 默认 root = <repo>/packages/dsh-context-governance。
  * 判定：必需项任一缺失 → 退出码 1（「未就绪」，不得出放行结论）。
- * 说明：这是**源码静态存在性**检查；真机事件仍须按 CP1–CP8 现采。
+ * 说明：这是**源码静态存在性**检查；真机事件仍须按 CP1–CP8 / C37 / C38 现采。
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -39,17 +39,31 @@ const count = (re) => sources.reduce((n, s) => n + (s.text.match(re) ?? []).leng
 const where = (re) => sources.filter((s) => re.test(s.text)).map((s) => s.rel);
 
 const required = [
-  { name: 'root-unresolved（审计事件/字段）', re: /['"]root-unresolved['"]/g },
-  { name: 'policy-resolved（审计事件）', re: /['"]policy-resolved['"]/g },
-  { name: 'source 枚举 session:A1', re: /['"]session:A1['"]/g },
-  { name: 'source 枚举 session:A2', re: /['"]session:A2['"]/g },
+  { name: 'session-governed（C36 ⑭ 自动纳入证据）', re: /['"]session-governed['"]/g },
+  { name: 'root-unresolved（C36 ⑤）', re: /['"]root-unresolved['"]/g },
+  { name: 'policy-resolved（C36 ③）', re: /['"]policy-resolved['"]/g },
+  { name: 'source 枚举 session:A1（C36 ⑩）', re: /['"]session:A1['"]/g },
+  { name: 'source 枚举 session:A2（C36 ⑩）', re: /['"]session:A2['"]/g },
+  { name: 'project-template-set（C37 ⑥）', re: /['"]project-template-set['"]/g },
+  { name: 'project-template-cleared（C37 ⑥）', re: /['"]project-template-cleared['"]/g },
+  { name: 'memory-pointer-miss（C38 ③）', re: /['"]memory-pointer-miss['"]/g },
+  { name: 'memory-promoted（C38 ⑤）', re: /['"]memory-promoted['"]/g },
+  { name: 'memory-imported（C38 ⑩）', re: /['"]memory-imported['"]/g },
+  { name: 'memory-imported-role（C38 ⑪）', re: /['"]memory-imported-role['"]/g },
+  { name: 'memory-import-no-source（C38 ⑬）', re: /['"]memory-import-no-source['"]/g },
+  { name: 'session-role-set（C38 ⑬）', re: /['"]session-role-set['"]/g },
+  { name: 'header-truncated（C38 ④）', re: /['"]header-truncated['"]/g },
+  { name: '--from-role（C38 ⑪ 入口）', re: /from-role/g },
   { name: '/cg set compact.at（基线能力）', re: /compact\.at/g },
 ];
 const manual = [
-  { name: 'source 枚举 project（泛字面，须人工确认是枚举而非普通词）', re: /['"]project['"]/g },
-  { name: 'source 枚举 plugin（泛字面，同上）', re: /['"]plugin['"]/g },
+  { name: 'legacy-shared-v1（C38 ⑩ 存量标记）', re: /legacy-shared-v1/g },
   { name: 'A2 持久化候选（文件名/字段）', re: /(policy-session|session-polic|persistedPolicy|a2)/gi },
-  { name: 'root-unresolved 原因枚举', re: /(cwd-unreadable|cwd-unwritable|empty-cwd|root-unresolved)/g },
+  { name: 'root-unresolved 原因枚举', re: /(cwd-unreadable|cwd-unwritable|empty-cwd)/g },
+  { name: 'C37「无项目模板」文案', re: /无项目模板/g },
+  { name: 'C37「项目模板」显示', re: /项目模板/g },
+  { name: 'policy-invalid(source=project)（C37 ⑤）', re: /policy-invalid/g },
+  { name: 'C38 会话库路径候选', re: /(context-governance[\\/]sessions|sessions[\\/]|shared[\\/])/g },
   { name: '/cg status 的 source 输出', re: /source=\$\{|source:\s*source|source=\$source/g },
 ];
 
