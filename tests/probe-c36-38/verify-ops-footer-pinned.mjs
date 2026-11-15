@@ -225,14 +225,13 @@ try {
     footerInput !== undefined && footerButtons.length >= 4 && hasRestore && hasResetGlobal && hasSave && hasSettings,
     `input=${footerInput !== undefined} buttons=${JSON.stringify(buttonTexts)}（还需：恢复默认=${hasRestore} 恢复全局=${hasResetGlobal} 保存=${hasSave} 设置=${hasSettings}）`);
 
-  // ② footer 行容器样式（input 行 + actions 行）不得 undefined
-  const footerRows = findAll(footer ?? null, (node) => node.props?.['data-cg-footer-row'] !== undefined);
-  const rowsStyled = footerRows.length >= 2 && footerRows.every((node) => {
-    const style = node.props?.style ?? {};
-    return style.display === 'flex' && Number(style.gap) > 0;
-  });
+  // ② footer 布局样式（B11 扁平化后不再要求"两行容器"；footer 自身必须 flex + gap）
+  const footerStyle = footer?.props?.style ?? {};
+  const footerRows = findAll(footer ?? null, (node) => node?.props?.['data-cg-footer-row'] !== undefined);
+  const rowsStyled = footerStyle.display === 'flex' && Number(footerStyle.gap) > 0
+    && (footerRows.length >= 2 ? footerRows.every((node) => node.props?.style?.display === 'flex') : true);
   check('OPS-footer-row-styles-defined', rowsStyled,
-    `rows=${JSON.stringify(footerRows.map((node) => ({ row: node.props?.['data-cg-footer-row'], display: node.props?.style?.display, gap: node.props?.style?.gap })))}（期望两条行容器都是 flex 且有 gap）`);
+    `footer.display=${JSON.stringify(footerStyle.display)} footer.gap=${JSON.stringify(footerStyle.gap)} 行容器=${footerRows.length}（扁平或两行均可，footer 必须 flex+gap）`);
 
   // ③ body 可滚 + footer 兄弟（不再把 minHeight 样式常量当判据——改由下方低/高内容行为断言）
   const bodyStyle = body?.props?.style ?? {};
@@ -279,6 +278,110 @@ try {
     `popover-rect logs=${popoverLogs}（每次打开只应校一次）`);
   check('OPS-correct-once', layoutSeq.length <= 2,
     `layout 变化序列=${JSON.stringify(layoutSeq)}（>2 说明每帧都在纠）`);
+
+  // B11（2026-11-15 真机：输入框占满整行，保存/设置被挤出面板）：**三档宽度**都要放得下。
+  // 宽度估算透明可核：汉字=fontSize 13px、其余字符 7px、按钮=文本+padding 24+border 2。
+  // 280 是最容易翻车的一档——320 下"两排"只是临界（开发实测超 4px），再窄一点就 3 排被裁。
+  const footerNode = byAttr('data-cg-footer', '1');
+  const PAD = 16;
+  const ROW_GAP = 8;
+  const FONT = 13;
+  const textWidth = (text) => [...String(text)].reduce((sum, ch) => sum + (/[\u4e00-\u9fff]/.test(ch) ? FONT : 7), 0);
+  const pxOf = (value) => {
+    const match = typeof value === 'number' ? [String(value), String(value)] : /^(-?\d+(?:\.\d+)?)px$/.exec(String(value ?? ''));
+    return match === null ? null : Number(match[1]);
+  };
+  const measureFooter = (panelWidth) => {
+    const contentW = panelWidth - PAD * 2;
+    const measureNode = (node) => {
+      if (node === null || node === undefined || typeof node !== 'object') return null;
+      if (node.type === 'input') {
+        const width = pxOf(node.props?.style?.width);
+        const flex = String(node.props?.style?.flex ?? '');
+        return { kind: 'input', width: width ?? (flex.includes('1') ? contentW : 56), text: '' };
+      }
+      if (node.type === 'button') {
+        const width = pxOf(node.props?.style?.width);
+        return { kind: 'button', width: width ?? (textWidth(textOf(node)) + 26), text: textOf(node) };
+      }
+      if (node.type === 'span') return { kind: 'span', width: textWidth(textOf(node)), text: textOf(node) };
+      return null;
+    };
+    const flatChildren = (footerNode?.children ?? []).filter((node) => node?.type === 'input' || node?.type === 'button' || node?.type === 'span');
+    const groups = flatChildren.length > 0
+      ? [flatChildren]
+      : (footerNode?.children ?? []).map((child) => (child?.children ?? []).filter((node) => node?.type === 'input' || node?.type === 'button' || node?.type === 'span'));
+    const rows = [];
+    for (const group of groups) {
+      const measured = group.map(measureNode).filter(Boolean);
+      let row = [];
+      let rowWidth = 0;
+      for (const item of measured) {
+        const need = row.length === 0 ? item.width : rowWidth + ROW_GAP + item.width;
+        if (row.length > 0 && need > contentW) { rows.push({ items: row, width: rowWidth }); row = [item]; rowWidth = item.width; }
+        else { row.push(item); rowWidth = need; }
+      }
+      if (row.length > 0) rows.push({ items: row, width: rowWidth });
+    }
+    const itemHeight = (item) => (item.kind === 'input' ? 32 : item.kind === 'button' ? 30 : 14);
+    const rowHeight = (row) => Math.max(...row.items.map(itemHeight));
+    const totalHeight = rows.reduce((sum, row, index) => sum + rowHeight(row) + (index === 0 ? 0 : ROW_GAP), 0);
+    const footerMaxHeight = Number(footerNode?.props?.style?.maxHeight ?? 88);
+    const allItems = rows.flatMap((row) => row.items);
+    const buttons = allItems.filter((item) => item.kind === 'button');
+    const inputItem = allItems.find((item) => item.kind === 'input');
+    const inputSameRowAsButton = rows.some((row) => row.items.some((item) => item.kind === 'input') && row.items.some((item) => item.kind === 'button'));
+    const rowsDump = rows.map((row) => `${row.width}:[${row.items.map((item) => `${item.kind}${item.kind === 'button' ? `(${item.text})` : ''}=${Math.round(item.width)}`).join(', ')}]`);
+    return {
+      contentW, rows, rowsDump, totalHeight, footerMaxHeight, buttons, inputItem, inputSameRowAsButton,
+      overflowHeight: totalHeight > footerMaxHeight + 1,
+      overflowWidth: rows.some((row) => row.width > contentW + 1),
+    };
+  };
+  const wrapperTopPx = pxValue(byAttr('data-cg-popover', '1')?.props?.style?.top);
+  const wrapperHeightPx = pxValue(byAttr('data-cg-popover', '1')?.props?.style?.height);
+  const panelTop = wrapperTopPx ?? 0;
+  const panelBottom = panelTop + (wrapperHeightPx ?? 228);
+  const footerTop = panelTop + PAD;
+  const bands = [280, 320, 360].map((width) => ({ width, ...measureFooter(width) }));
+
+  for (const band of bands) {
+    const footerBottom = footerTop + band.totalHeight;
+    const insidePanel = footerBottom <= panelBottom;
+    const insideViewport = footerTop >= 8 && footerBottom <= VIEWPORT.height - 8;
+    const tag = `@${band.width}`;
+    check(`OPS-footer-button-count-4${tag}`, band.buttons.length === 4,
+      `buttons=${band.buttons.length} ${JSON.stringify(band.buttons.map((item) => item.text))}（精确 4 个）`);
+    check(`OPS-input-width-cap${tag}`, band.inputItem !== undefined && band.inputItem.width <= 72,
+      `inputWidth=${band.inputItem === undefined ? 'missing' : Math.round(band.inputItem.width)}（期望 ≤72，目标 56）`);
+    check(`OPS-footer-no-overflow${tag}`, !band.overflowHeight && !band.overflowWidth,
+      `footerHeight=${band.totalHeight} maxHeight=${band.footerMaxHeight} rows=${JSON.stringify(band.rowsDump)}（越界⇒按钮被裁）`);
+    check(`OPS-footer-all-items-in-panel${tag}`, !band.overflowHeight && insidePanel && insideViewport,
+      `totalHeight=${band.totalHeight} maxHeight=${band.footerMaxHeight} footer=[${footerTop},${footerBottom}] panel=[${panelTop},${panelBottom}] viewportH=${VIEWPORT.height}（全部控件须在面板与视口内）`);
+    check(`OPS-input-same-row-as-button${tag}`, band.inputSameRowAsButton,
+      `rows=${JSON.stringify(band.rowsDump)}（输入框必须与至少一个按钮同行）`);
+  }
+  // 不许用 overflow:hidden 兜底：3 排（>maxHeight）必须靠提高上限或改布局解决，不能"裁掉但仍算过"
+  const mainBand = bands.find((band) => band.width === 320) ?? bands[1];
+  check('OPS-footer-not-clipped-by-maxheight', mainBand.totalHeight <= mainBand.footerMaxHeight + 1,
+    `contentHeight=${mainBand.totalHeight} footerClientHeight≈${mainBand.footerMaxHeight}`
+    + `（contentHeight>clientHeight ⇒ 被 hidden 裁；允许提高 maxHeight 到 ≥contentHeight，不允许裁掉还过）`);
+
+  // B11 极端档（审核要求）：每个控件独占一行（footer ≈184）。最坏情况下控件**不可裁**优先于"内容区保底"，
+  // 允许 body 滚动、允许提高 footer maxHeight，但 5 个控件必须在 panel 内且不被 hidden 裁掉。
+  const extreme = measureFooter(110 + PAD * 2); // contentW=110 → 每控件独占一行
+  const extremeFooterBottom = footerTop + extreme.totalHeight;
+  const extremeInsidePanel = extremeFooterBottom <= panelBottom;
+  const extremeInsideViewport = extremeFooterBottom <= VIEWPORT.height - 8;
+  check('OPS-footer-extreme-all-items-in-panel',
+    extreme.buttons.length === 4 && extreme.rows.length >= 5 && extremeInsidePanel && extremeInsideViewport,
+    `rows=${extreme.rows.length} footerHeight=${extreme.totalHeight} footerBottom=${extremeFooterBottom} panelBottom=${panelBottom} viewportH=${VIEWPORT.height}（5 控件必须全部在面板与视口内）`);
+  check('OPS-footer-extreme-no-overflow', !extreme.overflowWidth && extreme.totalHeight <= extreme.footerMaxHeight + 1,
+    `contentHeight=${extreme.totalHeight} footerClientHeight≈${extreme.footerMaxHeight} rows=${JSON.stringify(extreme.rowsDump)}（不许被 hidden 裁；可提高 maxHeight，body 滚动是合法结果）`);
+  check('OPS-footer-extreme-body-scroll-allowed', String(body?.props?.style?.overflowY ?? '') === 'auto',
+    `body.overflowY=${JSON.stringify(body?.props?.style?.overflowY)}（控件不可裁 > 内容区保底：body 滚动合法）`);
+  check('OPS-panel-height-le-260', wrapperHeightPx !== null && wrapperHeightPx <= 260,
+    `wrapperHeight=${wrapperHeightPx}（极端档 panel 高度仍须 ≤260）`);
 
   // ⑥ 详情展开后操作区仍在
   const detailToggle = findAll(bubble.last.tree, (node) => node.props?.className === 'cg-detail-toggle')[0];
