@@ -18,7 +18,7 @@
  * 只打 `createSessionPolicyHandler`（真实 handler + 假 req/res），不装、不联网、不碰真实 profile。
  * 用法：node tests\probe-c36-38\verify-c31-write-route.mjs
  */
-import { createSessionPolicyHandler, mountPluginPolicyRoute, PLUGIN_POLICY_PATH, SESSION_POLICY_PATH } from '../../packages/dsh-context-governance/src/session-policy-route.js';
+import { createSessionPolicyHandler, mountPluginPolicyRoute, mountSessionPolicyRoute, PLUGIN_POLICY_PATH, SESSION_POLICY_PATH } from '../../packages/dsh-context-governance/src/session-policy-route.js';
 
 const results = [];
 function check(id, ok, detail) { results.push({ id, ok }); console.log(`${ok ? 'PASS' : 'FAIL'} ${id} :: ${detail}`); }
@@ -68,6 +68,30 @@ async function postPluginMounted(req) {
   };
   const ctx = { inject(services, fn) { fn(fakeHost); }, get() { return undefined; } };
   mountPluginPolicyRoute(ctx, { writePluginAt: async (args) => { calls.push(args); return { ok: true }; }, csrfToken: TOKEN });
+  if (typeof mounted !== 'function') return { status: 0, body: null, calls, mounted: false };
+  let status = 0;
+  let payload = '';
+  const res = { writeHead(code) { status = code; }, end(chunk) { payload += chunk ?? ''; } };
+  await mounted(req, res);
+  let body = null;
+  try { body = JSON.parse(payload); } catch { body = null; }
+  return { status, body, calls, mounted: true };
+}
+
+/** 走真实挂载入口（mountSessionPolicyRoute）打会话层写：防第三处漏传 token。 */
+async function postSessionMounted(req) {
+  const calls = [];
+  let mounted = null;
+  const fakeHost = {
+    webServer: { register({ handler }) { mounted = handler; return () => {}; } },
+    effect() { return () => {}; },
+  };
+  const ctx = { inject(services, fn) { fn(fakeHost); }, get() { return undefined; } };
+  mountSessionPolicyRoute(ctx, {
+    writeSessionAt: async (args) => { calls.push(args); return { ok: true }; },
+    resetSessionAt: async (args) => { calls.push(args); return { ok: true }; },
+    csrfToken: TOKEN,
+  });
   if (typeof mounted !== 'function') return { status: 0, body: null, calls, mounted: false };
   let status = 0;
   let payload = '';
@@ -175,6 +199,13 @@ try {
     const out = await postPluginMounted(makePluginReq());
     check('C31-plugin-route-no-proof-rejected', out.status === 403 && /missing-proof/.test(proofCode(out.body)),
       `status=${out.status} body=${JSON.stringify(out.body)}（期望 403 missing-proof）`);
+  }
+  // ⑬ session 层挂载入口也必须转发 token：token-only 写 → 200
+  {
+    const out = await postSessionMounted(makeReq({ headers: { [CSRF_HEADER]: TOKEN } }));
+    check('C31-session-route-mount-token-only-allowed',
+      out.status === 200 && out.body?.ok === true && out.body?.source === 'session:A2' && out.calls.length === 1,
+      `status=${out.status} body=${JSON.stringify(out.body)}（期望 200；403=session 挂载层没转发 csrfToken）`);
   }
 } catch (error) {
   check('C31-window', false, `抛错：${String(error?.stack ?? error).slice(0, 400)}`);
