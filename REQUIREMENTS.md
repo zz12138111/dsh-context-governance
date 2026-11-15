@@ -460,7 +460,7 @@
 2. **R-AUDIT（审计枚举）**：`early-forced.compaction` 只能取**本次触发**的事实结果，枚举 `committed` / `skipped` / `failed` / `unknown`；**无 fresh report 时必须写 `unknown`**，不得沿用上一轮报告、不得用默认值补位；`unknown` 不得被 `/cg status` 或账本渲染为成功。
 3. **R-MEMROOT（多根模型；用户 2026-10-26 拍板 B）**
    - **每会话按自身 cwd 归一为记忆/审计归属**：root = `realpath(cwd)` 归一（可结合 `workspaceRegistry` 分组/显式登记），**不要求 `.git`**；cwd 不可用时按 **session 级**归属并标 `root-unresolved`，**仍受治并审计**。
-   - **记忆根按项目根隔离**：各工作区在**自己的根下**写 `memory/governance/`（授权边界见下），**不得跨根读写**。
+   - **记忆按会话（session id）隔离（用户 2026-11-15 批 A）**：指针索引存 `<home>/context-governance/sessions/<完整 sessionId>/`，条目形如 `MEM-<sessionShort8>-YYYYMMDD-NNNN` → `文件路径:行号` + 一句话摘要，**不进项目根**；正文权威在人工文件（`G:\DS-HARNESS\memory/OPEN.md`、`decisions/`、`DEFECTS.md`、`ARTIFACTS.md` 等），插件**不读不写正文**、只存指针；跨会话共享仅经 `shared/<rootId>/` + 显式 promote + 审计 `memory-promoted`，默认不共享；root 仅作审计/压缩分组，不承载记忆。
    - **根来源（configRoot 强制合并）**：`projectRoot` **非空**时，其下会话的根 = `projectRoot`（`source=config`），**configRoot 内不再按 `.git` 细分根（root=realpath 分组）**——**已知限制：显式配置根内多根隔离不完整**（P1 / P4 文档须披露）；`configRoot` 外会话按自身 cwd 独立成根；`projectRoot` **为空**时按会话 cwd 的 **realpath 归一**作分组根（**不要求 `.git`**；同目录会话归同根），首见持久化（D9=A），**重启沿用、不重推**；**不再存在「单项目模式」**。
    - 根变化（配置变更 / 持久化状态丢失 / 换机）必须在 `/cg status` 与审计可见（`project-root-changed` / `inferred-fresh`）；**重启后根不得静默改变**。
    - 已写入的记忆**不迁移、不删除**，留在原根路径；**卸载保留各根 memory、回滚不回写旧根**（见「多根通用性」第 11 条）。
@@ -474,22 +474,22 @@
 **多根通用性（用户 2026-10-26 拍板；收敛 23 条通用性缺口）**
 
 1. **根发现（A）**：纳管根集合 = **已出现会话的根并集**，**不主动扫描磁盘**；`/cg roots` 可查看当前根清单。
-2. **子会话（A）**：subagent / 子会话**纳管压缩与审计，不写记忆**（不建记忆写路径、不注入 header）。**根归属：父根已知 → 继承父根（不新增根）；父根未知 → 按自身 cwd 推断；仍无法判定 → 按 session 级归属（`root-unresolved`），仍纳管压缩与审计、不写记忆**。
+2. **子会话（A）**：subagent / 子会话**纳管压缩与审计，不写记忆**（不建记忆写路径、默认不读父会话记忆、不注入 header）。**根归属：父根已知 → 继承父根（不新增根）；父根未知 → 按自身 cwd 推断；仍无法判定 → 按 session 级归属（`root-unresolved`），仍纳管压缩与审计、不写记忆**。
 3. **跨根查询（A）**：`mem_query` **默认只查本会话根**；**跨根查询 1.0 不做**（后续能力，**明确不做**，不留空）。
 4. **根限额（A）**：**不设硬上限**；根数超阈值（默认 16）**只告警、不拒绝**。
 5. **窗口口径**：`#lastSession` 取**本会话所属根内**最近会话，**跨根不混用**；**无窗口事件的会话（headless / CLI）→ `native=unknown`，不提前压**。
 6. **项目模板配置（可选）**：**每个纳管根各自读取** `<root>/.cg-policy.json`（仅显式存在时生效、默认没有），互不影响；无效文件不生效。
 7. **聚合维度**：记忆/账本聚合使用**根标识（路径 hash）**；`project` 字段**仅作展示名**、不用于区分（避免同名目录撞名）。
-8. **header**：按**当前会话根**取记忆；子会话按第 2 条（不写记忆、不注入）。
+8. **header**：按**当前会话（session id）**取指针，**只注入短行**（条数/字节上限，超限截断并审计），**不复制正文**、不解析项目文档；子会话按第 2 条（不写记忆、默认不读父记忆、不注入）。
 9. **根判定（2026-11-15 改）**：root 仅用于记忆/审计归属与项目默认值分组——cwd **realpath** 归一并大小写归一；**不要求 `.git`**；符号链接按 realpath；UNC 可用则纳管；**空 cwd 的非子会话 → `root-unresolved`（仍受治、审计，不静默）**。
-10. **状态与审计**：`/cg status` 增「全部纳管根」视图（根列表 + 各根记忆条数 / 审计末行）；审计按根存储，**跨根聚合只读**；根状态按 **profile** 隔离（`root-state-<profile>.json`）。
+10. **状态与审计**：`/cg status` 增「全部纳管根」视图（根列表 + 该根会话指针条数（聚合）/ 审计末行）；审计按根存储，**跨根聚合只读**；根状态按 **profile** 隔离（`root-state-<profile>.json`）。
 11. **卸载 / 回滚**：卸载**保留各根 memory**；回滚**不回写旧根**（旧根数据只读保留）。
 12. **多 profile**：每个 profile **各自安装、各自根状态**，不跨 profile 共享根状态。
 13. **验收（负向，多根后必须验）**：① A 根会话**不影响** B 根（记忆/审计/策略）；② 删除根状态文件 → 重新推断且可见（`inferred-fresh`）；③ 同根两会话并发写记忆 → 锁提示 / 串行，**不丢写**。
 14. **分层交付（用户 2026-10-26 拍板 A；2026-11-15 改口径）**：**全纳管 = 所有会话受治（尚未达成）**；根登记只影响记忆/审计分组与项目默认值。**P1 = 根登记 + 主根骨架**（不宣称全纳管）；**P2 = 多根记忆与审计**；**P3 = 全会话保护/回注**；**完成 P3 且 C36 过才可对外宣称「全纳管」**。
 15. **P1 `unmanaged` 诊断行（可选实现，四条限定）**：允许每根**最多一次**（或根状态变化时一次）`root-unmanaged` 诊断行；字段仅 `root` / `rootId` / `reason` / `count`；**不写 `sessionId`（全 id / 短 id 都不写）、不写正文**；root audit **按根汇总一条**（同根多会话只累计 `count`）；放**用户级 root audit**，**不写进任何根内 `audit.jsonl`**；该行只表示「跳过」，不代表已纳管。
 16. **功能闭环判据**：**P1 + P2 + P3 全部完成，且多根负向验收（第 13 条）全过 = 功能闭环**。~~当前不满足（只到 P1 骨架）~~ → **2026-10-26 已满足**（**仅指 P1/P2/P3 功能闭环；平台级会话覆盖面尚未达成，另按 C36 验收**）：P1/P2/P3 已签 + gap16 真机证据经审核裁定 ①②③ 有效（附加严格项不作否决）；证据包 `analysis/req-20261025-12/P4-drill-20261026-200123/gap16/`——`RESULT.md` sha256 `4A50DDFCB67861C7480ADFCD8F0A85741E2E17AC77983A6A0843FF28CB10D345`、`EVIDENCE-SHA256.txt` sha256 `98439AF955E899018715BBFD90DE1C4489955329DDE85BB7FDB7FC33702AB9B1`（26,425 B / 194 文件全匹配）；启动预算 **9/10**（8 有效 + 1 中止 0 证据）。
-17. **`mem_write` 根归属**：**默认写入本会话所属根**；**跨根写入一律拒绝**（不提供跨根写参数）——与第 3 条 `mem_query` 默认只查本会话根对称。
+17. **`mem_write` 归属**：**默认写入本会话指针库**（键=session id，不进项目根）；正文由人工/00 写文件、插件不代写；**跨会话/跨根写入一律拒绝**；跨会话共享只走显式 promote（审计 `memory-promoted`）。
 18. **多进程同根**：**不做跨进程合并**；同根第二个进程以**只读 / 锁提示**方式运行，**不双写**。
 19. **便携 / 移动盘**：移动盘或换机**视为新根**；旧状态留原路径、**不迁移**。
 
@@ -498,14 +498,16 @@
 | # | 位置 | 允许的数据 | 禁止 |
 |---|---|---|---|
 | ① | **用户级** `<profile home>/context-governance/` | 根状态、根审计、诊断日志（默认 `<home>/context-governance/logs/governance.log`） | — |
-| ② | **各纳管根内** `<root>/memory/governance/` | 记忆、根内审计 | 诊断日志（见下） |
+| ② | **会话级** `<home>/context-governance/sessions/<完整 sessionId>/` | 指针索引（`MEMORY.md`/`topics/`/`.id-watermark`）、会话审计 | 正文、项目文件 |
+| ③ | **共享级** `<home>/context-governance/shared/<rootId>/` | 显式 promote 的跨会话指针（带来源 sessionId） | 正文、自动复制 |
+| ④ | **legacy 只读** `<root>/memory/governance/`（标 `legacy-shared-v1`） | 存量只读、可经 `memory import` 显式导入 | 新写入、自动迁移 |
 
-**不得**在工作区根内创建其他文件；**不得修改、移动、删除**任何已有项目文件。硬性约束：
-- **写入侧 containment（每次写入都校验）**：写前对**实际目标文件路径**做 **realpath + `..` + 符号链接 / junction + UNC + 盘符大小写归一** 校验；**校验对象是实际写入路径**（必须落在上述两处内），不只是配置解析结果；
+**不得**在工作区根内创建其他文件（legacy 只读目录除外）；**不得修改、移动、删除**任何已有项目文件。硬性约束：
+- **写入侧 containment（每次写入都校验）**：写前对**实际目标文件路径**做 **realpath + `..` + 符号链接 / junction + UNC + 盘符大小写归一** 校验；**校验对象是实际写入路径**（必须落在上述白名单 ①-④ 内），不只是配置解析结果；
 - **fail-closed**：目标落在白名单外 / `memoryRoot` 为绝对或逃逸 → **拒绝并告警，不回退到别处写**（该根 fail-closed / 不纳入）；
 - **模型固定**：白名单只增不减、每类数据用途写死；未来新增缓存 / 临时数据 = **只加一项白名单**，不改模型。
 
-**`logFile` 严格两处（用户 2026-10-26 拍板）**：`diagnostics.logFile` 只允许 ① `<home>/context-governance/`（含默认 `<home>/context-governance/logs/governance.log`）或 ② `<root>/memory/governance/`；**`<root>/logs/` 不允许**。**白名单外 → `CONFIG` 拒绝 + 插件不加载该 profile（显式失败，不静默禁用）**；**迁移到 `<home>/context-governance/logs/governance.log` 才可用**；**多根下只有用户级路径安全**（根内路径只能 per-root sink，每根一份）。**破坏性变更**：现有 `D:\DS-PROJECT\DSH插件开发\logs\governance.log` 会被拒，须在 P1 / P4 文档披露。
+**`logFile` 严格两处（用户 2026-10-26 拍板）**：`diagnostics.logFile` 只允许 ① `<home>/context-governance/`（含默认 `<home>/context-governance/logs/governance.log`）；**`<root>/memory/governance/` 已是 legacy 只读、不再接受新日志；`<root>/logs/` 不允许**。**白名单外 → `CONFIG` 拒绝 + 插件不加载该 profile（显式失败，不静默禁用）**；**迁移到 `<home>/context-governance/logs/governance.log` 才可用**；**多根下只有用户级路径安全**（根内路径只能 per-root sink，每根一份）。**破坏性变更**：现有 `D:\DS-PROJECT\DSH插件开发\logs\governance.log` 会被拒，须在 P1 / P4 文档披露。
 
 **3A 豁免撤回（历史记录，不抹）**：用户 2026-10-26 拍板 B 时扩展的 3A 豁免（`no-project-root` 完全不碰）**经用户 2026-11-15 决定 A 正式撤回**；`root-unresolved` 会话**仍受治**（压缩、审计、保护/回注），仅记忆/项目分组标注并审计。仅"无 session id / cwd 不可用（降级）/ 显式关闭 / 宿主能力缺失"按 R-SCOPE 上列处置。
 
@@ -688,7 +690,7 @@
   - D1 决定：… (dec-012)
   [Note: If this state conflicts with AGENTS.md, follow AGENTS.md]
   ```
-- **六护栏**：预算；只取 `active` 且超 **14 天**（上限 30、可配）标 `[Old]` **仍注入**排末尾；**按当前会话根取记忆**；空记忆/无项目**零注入**；冲突声明；可关闭（`/cg header off`/项目/插件）；审计 `header-injected`；**子会话不注入**（见「多根通用性」第 2 条）。
+- **六护栏**：预算；只取 `active` 且超 **14 天**（上限 30、可配）标 `[Old]` **仍注入**排末尾；**按当前会话（session id）取指针**；空记忆/无项目**零注入**；冲突声明；可关闭（`/cg header off`/项目/插件）；审计 `header-injected`；**子会话不注入**（见「多根通用性」第 2 条）。
 - **子会话默认不注入**。
 
 #### “不重问”评测（非功能）——**已拆出 → `REQ-20261025-11`**
@@ -1195,6 +1197,7 @@ C 的初步证据：启动后本项目根 `audit.jsonl` 只有 `capability@ready
 | **C35** | **压缩后指令/目录一致性（宿主自愈验收，取代 C34）**（2026-11-15 用户批） | A | 新用例：压缩时零 rules 副本 + 下个 pre-step 证据；**真实压缩判定待重启后复验** | ①压缩后**不得**写 rules 副本（无 `source.form=surface-rebuild` 的 rules；仅 `latestUser` 一条可重建），不写 `baseline:true/baselineIdentity`；②`rule-injection` 审计为 `skip(reason=host-self-heal)`，压缩时**不得**计 fail/写 `compaction-loss(rule-injection)`；③**事件级判定 + digest 观察（2026-11-15 真机后回归，三处同字）**：窗口（`compaction/end` → 首个 `turn/start` → 该 `turn/end`）内出现该 kind 的**非治理新节点**（`type∈{user/message,system/message}`、`seq>compaction`、`plugin!=='context-governance'`、`form!=='surface-rebuild'`）⇒ **pass**；窗口结束仍无 ⇒ **fail + `compaction-loss(rule-injection, unacceptable)`**；**digest 仅观察**：baseline `source.changes[]` 有 `path`+`digest` 时按 `sha1(raw content)` 复算记录，不一致记 `self-heal-suspect` warn、读盘失败/字段缺失记 `self-heal-unverified` warn，**均不判 fail**（真机 cycle `76f00aed` 曾每轮假 15 条 `baseline-stale`——**`baseline-stale` 是历史假 fail 事件名，不是现行判据**；故 digest 不进判定）；skill-catalog 事件级即 pass；旧修订版由 `seq>`+非治理+窗口三重排除；digest 观察字段照记（`hashMatch`）；④本轮不重启，真实压缩判定标“待重启后复验”；⑤证据字段：`seq/kind/digest/form/plugin` |
 | **C36** | **平台级会话覆盖（2026-11-15 用户批 A，撤回 3A 豁免）** | A | 真机：两个指定无 `.git` 工作区各建会话 + 不同压缩比重启保留 | ①**无 `.git` 也受治**：在 `D:\DS-PROJECT\娱乐管理`、`D:\DS-PROJECT\绝地潜兵2工具开发` 各建会话（在该目录启动 DSH / 新建会话，cwd=该目录）→ 有治理审计、压缩策略、保护/回注；②**每会话压缩比**：两会话分别设 **0.55 / 0.65**（`/cg set` 或 UI）→ 重启 DSH 后各自保留，`/cg status` 显示各自 `at` 且 `source=A2`；③**层级取值**：`A1 > A2 > 项目模板（可选，`.cg-policy.json`） > plugin`（`profile`/`builtin` 为更下层默认），`/cg status` 与 `policy-resolved` 审计带 `source`（`builtin`/`profile`/`plugin`/`project`/`session:A1`/`session:A2`）与最终值，多层命中时以此可核；④**A2 落盘**：键=完整 session id、值含 `at/source/updatedAt/version`，位置在 `~/.dsh/context-governance/` 下（不写项目根），重启可读回；⑤**`root-unresolved` 不静默**：cwd 不可读/不可写/空 cwd → 审计 `root-unresolved{sessionId,cwd,reason}`，**每会话每 cycle 至少 1 条**（同 cycle 去重），**不参与 `compaction-loss` 分型**；⑥**负向**：显式关闭（`out-of-scope`）不干预但留审计；`observe-only` 属降级：**仍纳入**、只观不干预、仍写压缩事实/成本；⑦**证据边界**：现有两轮实测均在含 `.git` 根下采集，不覆盖无 `.git` 会话，本条必须真机补；⑧子会话仍不写记忆（沿用多根 #2）；⑫**A2 不依赖 root**：`root-unresolved`/无根会话仍可保存每会话压缩比并重启保留（键=session id，仅项目记忆不落）；⑬**项目模板两态**：无 `.cg-policy.json` → **无会话设置时**取 plugin 默认（`source=plugin`）；有且显式写了该字段 → `/cg status` 显示「项目模板 `<值>`」与 `source=project`；会话 A1/A2 覆盖模板；删文件后即不再生效；⑨**observe-only 仍写压缩事实/成本**（只是不干预/不主动压；真实压缩必须有成本行，取不到值写 null/unknown，不得因 observe-only 缺行）；⑩**`source` 字面固定**：`builtin` / `profile` / `plugin` / `project` / `session:A1` / `session:A2`（大小写敏感；禁 `session/A2`、`A2`、`persisted` 等别名），`/cg status` 与 `policy-resolved.source` 同一枚举；⑪**CP1「保护/回注」须有真实压缩证据**：一次真实压缩（手动 `/compact` 或阈值触发）后的 `protection-write`/`reinjection` 审计才算 pass；无真实压缩只判"已纳管"，不得判保护/回注 pass。 |
 | **C37** | **项目模板显式性（D，2026-11-15 用户批）** | A | 单测 + `/cg status` + 真机 | ①**无 `.cg-policy.json`** → 新会话按上层既有层（`profile`/`plugin`）取默认，**绝不出现 `source=project`**；`/cg status` 显示「无项目模板」（默认部署断言 `source=plugin`）；②**有文件且显式写字段** → `/cg status` 只读显示「项目模板 `<值>`（来源 `.cg-policy.json`）」且 `source=project`；③**会话 A1/A2 永远覆盖模板**（与 C27 一致）；④**删文件后立即不再生效**（后续解析回落 plugin，不缓存旧模板）；⑤**非法/缺版本/越界文件不生效** + `policy-invalid(source=project)` 审计，不执行任何内容；⑥**显式创建/清除**入口存在（命令或设置页），写审计 `project-template-set`/`project-template-cleared`；⑦存量 `G:\DS-HARNESS\.cg-policy.json` 视为显式模板，本会话仍 0.45 但必须可见。 |
+| **C38** | **会话级记忆隔离（合并方案 A：索引在插件、正文在文件、共享走 promote；2026-11-15 用户批 A）** | A | 单测 + 真机两会话 + 审计 | ①**指针层**：`MEM-<sessionShort8>-YYYYMMDD-NNNN` → `文件路径:行号` + 一句话摘要，存 `<home>/context-governance/sessions/<完整 sessionId>/`（`MEMORY.md`/`topics/`/`.id-watermark`），**不进项目根**；指针必须能解析到目标文件行（可核）；②**正文层**：`G:\DS-HARNESS\memory/OPEN.md`、`decisions/`、`DEFECTS.md`、`ARTIFACTS.md` 等人工文件为正文权威，插件**不读不写正文**；③**正文缺失/行漂移** → 指针标 `miss` 并审计 `memory-pointer-miss`，**不得静默**；**登记失败不阻塞正文写入**；④**header** 只注入短行（条数/字节上限），超限截断并审计 `header-truncated`，**不复制正文**；⑤**共享**：跨会话事实只经 `shared/<rootId>/` + 显式 `memory promote`（审计 `memory-promoted`，带来源 sessionId），默认不共享；⑥**隔离**：同根两会话各自独立指针库、互不可读；重启保留；`root-unresolved` 会话仍有指针库；⑦**子会话**不写、默认不读父记忆；⑧**两套边界**：项目自带 `memory/ARTIFACTS.md` 等仍人工权威，治理不解析不复述；`G:\DS-HARNESS\memory` 仅作指针目标；⑨**登记流程**：正文先由人工/00 写好 → 再显式登记指针（命令/工具）；登记失败只记 `memory-pointer-miss`+告警，**不回滚、不阻塞正文写入**；⑩**存量**：`<root>/memory/governance/` 原地标 `legacy-shared-v1`、**只读、默认不注入**；`memory import --from legacy --session <id>` 显式导入（生成新 id + 审计 `memory-imported`），**不自动迁移、不静默丢**。 |
 | **C11** | D2 层与生效提示（2026-11-15 修订） | A | 文案断言 | 界面必须同时写明：①**写的是哪一层**——主入口 = **A2 持久会话层（本会话，重启保留）**；设置页 = **plugin 全局层（影响所有会话）**；②**生效时点**（A1 运行时=重启失效；A2=重启保留；项目模板（可选）/plugin=重启仍有效；无项目模板时明示"无项目模板"）。**缺①或缺②即判不过** |
 | **C12** | A 主入口（输入框下条目） | A | 注册形状单测 + 渲染文本 | `conversation.composer.dock` 注册项形状正确（唯一 id、order、返回 React 节点）；渲染文本为 `压 NN%`，**数值与快照 `at` 一致**；快照失败时渲染 `压 —` 且不抛错 |
 | **C13** | A 气泡三行信息 | A | 渲染文本断言 | 气泡含「当前生效 / 来源层 / 生效时点」三行，值取自快照 `{at, source, effectiveAt}`，与 `/cg status` 口径一致；含"打开设置页"兜底链接 |
@@ -1289,6 +1292,8 @@ C 的初步证据：启动后本项目根 `audit.jsonl` 只有 `capability@ready
 >    - **重启暂缓**：C35 真实压缩判定标"待重启后复验"；本变更不以"已重启验证"为前提；范围仍为 1.1.0 剩余。
 
 > 24. **发布口径更正（2026-11-15 用户/00）：本期交付为 RC，不是 1.1.0 终版**：本轮以 **1.1.0-RC** 交付"修 bug + 压缩改进"（方案 A / C35 等）；**1.1.0 终版仍包含「分会话阈值设置」**（C24–C30 / R11 及持久会话层）——仍属 1.1.0 范围，**不得列到后续版本、不得标为已交付**；终版待该功能实现与验收后再走一轮。文档中不得把本轮写成"1.1.0 发布/完成"。
+
+> 25. **范围变更：记忆改会话级（合并方案 A，2026-11-15 用户批 A）**：指针层在插件（`MEM-<sessionShort8>-YYYYMMDD-NNNN` → `文件路径:行号` + 一句话摘要），存 `<home>/context-governance/sessions/<完整 sessionId>/`（`MEMORY.md`/`topics/`/`.id-watermark`），**不进项目根**；正文在人工文件（`G:\DS-HARNESS\memory/OPEN.md`、`decisions/`、`DEFECTS.md`、`ARTIFACTS.md`；插件不读不写），缺失/行漂移标 `miss` 并审计；共享只经 `shared/<rootId>/` + 显式 `memory promote`（审计 `memory-promoted`），默认不共享；子会话不读父记忆；存量 `<root>/memory/governance/` 标 `legacy-shared-v1` 只读、默认不注入、显式 `memory import` 导入（审计 `memory-imported`），不自动迁移、不静默丢；root 仅审计/压缩分组。新增 **C38**。范围 1.1.0 终版。
 
 **窗口物料（00 已备，2026-11-14 22:30；**本轮暂不使用**，重开窗口时再用；明细见 `G:\DS-HARNESS\tasks\TASK-20261114-02-本体升级-0.2.2-rc.3.md`）**：
 
