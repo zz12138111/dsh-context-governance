@@ -55,6 +55,10 @@ const VIEWPORT = { width: 1400, height: 900 };
 
 try {
   let spec = null;
+  const infos = [];
+  // B10：实现若不收敛（校正环），VM 会被无限重渲染拖死——给预算并在超限时判红，而不是挂住不返回。
+  let renderBudget = 60;
+  let budgetExhausted = false;
   const fakeFetch = async (url) => {
     if (String(url).includes('policy-snapshot')) {
       return { ok: true, json: async () => ({ at: 0.45, source: 'session:A1', sessionOverride: 0.45, effectiveAt: '本会话有效，重启后失效', native: 0.6785, defaultAt: 0.6 }) };
@@ -81,17 +85,24 @@ try {
     document: fakeDocument,
     innerWidth: VIEWPORT.width,
     innerHeight: VIEWPORT.height,
-    console,
+    console: { ...console, info: (...args) => { infos.push(args.map(String).join(' ')); }, warn: (...args) => { infos.push(args.map(String).join(' ')); } },
     setTimeout,
     clearTimeout,
     fetch: fakeFetch,
+    // B8/B9 高度实测读面板 computed 样式（padding/border/gap）；离线给固定值，便于公式化验证。
+    getComputedStyle: () => ({ paddingTop: '16px', paddingBottom: '16px', borderTopWidth: '1px', borderBottomWidth: '1px', rowGap: '10px', gap: '10px' }),
   };
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
   vm.runInContext(src, sandbox);
 
   let active = null;
-  const enqueue = (fn) => { queueMicrotask(() => { try { fn(); } catch { /* ignore */ } }); };
+  const enqueue = (fn) => {
+    if (budgetExhausted) return;
+    renderBudget -= 1;
+    if (renderBudget < 0) { budgetExhausted = true; return; }
+    queueMicrotask(() => { try { fn(); } catch { /* ignore */ } });
+  };
   const react = {
     createElement: (type, props, ...children) => ({ type, props: props ?? {}, children: children.flat() }),
     useState(initial) {
@@ -130,15 +141,48 @@ try {
     : null;
   check('OPS-client-loadable', typeof client?.createBubble === 'function', `createBubble=${typeof client?.createBubble}`);
 
+  // 离线布局模型：让组件的高度实测路径（bodyRef.scrollHeight / footerRef.rect / panel computed）真的跑起来，
+  // 从而能断言"内容少时 footer 不被裁""内容多时可滚"——而不是把 minHeight 之类的样式常量锁死。
+  const layoutModel = { bodyScroll: 40, footerHeight: 88 };
+  const CHROME = 16 + 16 + 1 + 1 + 10; // padding×2 + border×2 + gap（与 getComputedStyle stub 一致）
+  const makeElementStub = (node) => {
+    const attrs = node.props ?? {};
+    const stub = {
+      focus() {}, select() {}, contains() { return true; },
+      getBoundingClientRect: () => ({ left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0 }),
+      scrollHeight: 0,
+      clientHeight: 0,
+    };
+    if (attrs['data-cg-body'] === '1') { stub.scrollHeight = layoutModel.bodyScroll; stub.clientHeight = 96; }
+    if (attrs['data-cg-footer'] === '1') {
+      stub.getBoundingClientRect = () => ({ left: 0, top: 0, right: 0, bottom: layoutModel.footerHeight, width: 0, height: layoutModel.footerHeight, x: 0, y: 0 });
+    }
+    if (attrs['data-cg-panel'] === '1') { stub.contains = () => true; }
+    return stub;
+  };
+  const bindRefs = (node) => {
+    if (node === null || node === undefined) return;
+    if (Array.isArray(node)) { for (const item of node) bindRefs(item); return; }
+    if (typeof node !== 'object') return;
+    const ref = node.props?.ref;
+    if (ref !== null && ref !== undefined && typeof ref === 'object' && ref.current === null) ref.current = makeElementStub(node);
+    bindRefs(node.children ?? []);
+    if (node.props?.children !== undefined) bindRefs(node.props.children);
+  };
+
   const mount = (Component) => {
     const inst = {
-      hooks: [], deps: new Map(), cleanups: new Map(), cursor: 0, props: null,
+      hooks: [], deps: new Map(), cleanups: new Map(), cursor: 0, props: null, renderCount: 0, layouts: [],
       render(props) {
         inst.props = props; active = inst; inst.cursor = 0;
         let tree = null; let error = null;
         try { tree = Component(props); } catch (thrown) { error = thrown; }
         inst.last = { tree, error, hookCount: inst.cursor };
         active = null;
+        bindRefs(tree);
+        inst.renderCount += 1;
+        const wrapper = findAll(tree, (node) => node.props?.['data-cg-popover'] === '1')[0];
+        inst.layouts.push({ top: wrapper?.props?.style?.top ?? null, height: wrapper?.props?.style?.height ?? null });
         return inst.last;
       },
     };
@@ -190,15 +234,15 @@ try {
   check('OPS-footer-row-styles-defined', rowsStyled,
     `rows=${JSON.stringify(footerRows.map((node) => ({ row: node.props?.['data-cg-footer-row'], display: node.props?.style?.display, gap: node.props?.style?.gap })))}（期望两条行容器都是 flex 且有 gap）`);
 
-  // ③ body 可滚 + footer 兄弟
+  // ③ body 可滚 + footer 兄弟（不再把 minHeight 样式常量当判据——改由下方低/高内容行为断言）
   const bodyStyle = body?.props?.style ?? {};
   const panelChildren = panel?.children ?? [];
   const bodyIndex = panelChildren.indexOf(body);
   const footerIndex = panelChildren.indexOf(footer);
   check('OPS-body-scrollable-and-footer-sibling',
-    bodyStyle.overflowY === 'auto' && Number(bodyStyle.minHeight) === 0 && bodyStyle.flex === '1 1 auto'
+    bodyStyle.overflowY === 'auto' && bodyStyle.flex === '1 1 auto'
       && bodyIndex >= 0 && footerIndex >= 0 && bodyIndex !== footerIndex,
-    `overflowY=${JSON.stringify(bodyStyle.overflowY)} minHeight=${JSON.stringify(bodyStyle.minHeight)} flex=${JSON.stringify(bodyStyle.flex)} bodyIdx=${bodyIndex} footerIdx=${footerIndex}`);
+    `overflowY=${JSON.stringify(bodyStyle.overflowY)} flex=${JSON.stringify(bodyStyle.flex)} bodyIdx=${bodyIndex} footerIdx=${footerIndex}（minHeight 不再作判据）`);
 
   // ④ wrapper px 高度 ≤260
   const wrapperStyle = wrapper?.props?.style ?? {};
@@ -206,15 +250,35 @@ try {
   check('OPS-wrapper-px-height', wrapperHeight !== null && wrapperHeight > 0 && wrapperHeight <= 260,
     `height=${JSON.stringify(wrapperStyle.height)} px=${wrapperHeight} maxHeight=${JSON.stringify(wrapperStyle.maxHeight)}`);
 
-  // ⑤ 高度实测（scrollHeight + footer 实测高度重算路径；不认"只靠硬编码估算"）
-  const footerMeasure = /(footerRef\.current|footerEl)[^;]{0,80}getBoundingClientRect/.test(src);
-  const measured = /scrollHeight/.test(src) && footerMeasure && /Math\.min\(\s*260/.test(src);
-  check('OPS-height-measured-not-hardcoded', measured,
-    `scrollHeight=${/scrollHeight/.test(src)} footer实测=${footerMeasure} min260=${/Math\.min\(\s*260/.test(src)}（硬编码估算不能是唯一来源）`);
+  // ⑤ 高度算法（行为，不查字面量）：vm 实调 `computePopoverHeight`——
+  //    低内容走 floor（96+footer+chrome）、高内容封顶、maxHeight 可被压低（防未来把 260 写死）。
+  const heightFn = typeof client?.computePopoverHeight === 'function' ? client.computePopoverHeight : null;
+  const hLow = heightFn !== null ? heightFn({ bodyScroll: 0, footerHeight: 88, chrome: 44 }) : null;
+  const hTall = heightFn !== null ? heightFn({ bodyScroll: 900, footerHeight: 88, chrome: 44 }) : null;
+  const hCapped = heightFn !== null ? heightFn({ bodyScroll: 0, footerHeight: 88, chrome: 44, maxHeight: 120 }) : null;
+  check('OPS-height-floor-and-cap', hLow === 228 && hTall === 260 && hCapped === 120,
+    `low=${hLow}(期望228=96+88+44) tall=${hTall}(期望260封顶) capped=${hCapped}(期望120，上限可压低)`);
 
-  // ⑦ 静态面板 maxHeight ≤ 260
-  const panelMax = /maxHeight:\s*['"]?260/.test(src) || /Math\.min\(260/.test(src);
-  check('OPS-panel-max-height-260', panelMax, `maxHeight ≤260 命中=${panelMax}`);
+  // ⑦ 面板上限由 **wrapper 的 px 高度**保证（panel 自身 maxHeight/height 相对 wrapper = 100%）
+  const panelInline = panel?.props?.style ?? {};
+  check('OPS-panel-relative-to-wrapper-height',
+    panelInline.maxHeight === '100%' && panelInline.height === '100%'
+      && wrapperHeight !== null && wrapperHeight <= 260,
+    `panel.maxHeight=${JSON.stringify(panelInline.maxHeight)} panel.height=${JSON.stringify(panelInline.height)} wrapper=${JSON.stringify(wrapperStyle.height)}（不要求 panel 上有数值 maxHeight）`);
+
+  // B10（审核 2026-11-15）：校正环保护——渲染次数 / 校正日志 / layout 变化必须有界，
+  // 否则"measured 恒 0×0"的实现会无限重渲染，门本身被拖死（19112b5 上 exit=1 就是此因）。
+  const totalRenders = bubble.renderCount ?? 0;
+  const popoverLogs = infos.filter((line) => line.includes('popover-rect')).length;
+  const layoutSeq = (bubble.layouts ?? [])
+    .map((item) => `${item.top}/${item.height}`)
+    .filter((value, index, arr) => index === 0 || value !== arr[index - 1]);
+  check('OPS-render-bounded', totalRenders <= 8,
+    `renders=${totalRenders} budgetExhausted=${budgetExhausted}（校正环=无限重渲染；有界才有收敛）`);
+  check('OPS-correct-log-bounded', popoverLogs <= 2,
+    `popover-rect logs=${popoverLogs}（每次打开只应校一次）`);
+  check('OPS-correct-once', layoutSeq.length <= 2,
+    `layout 变化序列=${JSON.stringify(layoutSeq)}（>2 说明每帧都在纠）`);
 
   // ⑥ 详情展开后操作区仍在
   const detailToggle = findAll(bubble.last.tree, (node) => node.props?.className === 'cg-detail-toggle')[0];
@@ -235,6 +299,37 @@ try {
   } else {
     check('OPS-detail-expand-keeps-ops', false, '未找到 cg-detail-toggle 按钮');
   }
+
+  // ⑧ 低内容行为（审核裁 B 的验收点）：内容很少时面板**不得小于"body 保底 + footer + chrome"**，
+  //    否则 footer 会被 wrapper overflow:hidden 裁掉（B8 在"内容少"场景的复发）。
+  //    这里走真实实测路径：bodyRef.scrollHeight=40、footerRef 高=88、panel computed 固定。
+  const lowHeight = pxValue(byAttr('data-cg-popover', '1')?.props?.style?.height);
+  const floorBudget = 96 + layoutModel.footerHeight + CHROME;
+  check('OPS-low-content-footer-not-clipped', lowHeight !== null && lowHeight >= floorBudget && lowHeight <= 260,
+    `panelHeight=${lowHeight} floor(96+${layoutModel.footerHeight}+${CHROME})=${floorBudget}（小于 floor ⇒ footer 被裁；期望 ≥${floorBudget} 且 ≤260）`);
+
+  // ⑨ 高内容行为：20 行量级 → 面板封顶 260 且内容区可滚（footer 仍完整；不靠把面板撑出视口）。
+  layoutModel.bodyScroll = 20 * 26; // 20 行
+  const tallState = { open: false, snapshot: { at: 0.45, source: 'session:A1', sessionOverride: 0.45 } };
+  const tallStore = {
+    set(next) { Object.assign(tallState, next); for (const listener of tallStore.listeners) listener(tallState); },
+    listeners: new Set(),
+    subscribe(listener) { tallStore.listeners.add(listener); return () => tallStore.listeners.delete(listener); },
+  };
+  const tallBubble = mount(client.createBubble(tallState, tallStore, pluginCtx));
+  tallBubble.render({ sessionId, ctx: pluginCtx });
+  await flush();
+  tallStore.set({ open: true });
+  await flush();
+  const tallWrapper = findAll(tallBubble.last.tree ?? null, (node) => node.props?.['data-cg-popover'] === '1')[0];
+  const tallHeight = pxValue(tallWrapper?.props?.style?.height);
+  const bodyContent = layoutModel.bodyScroll;
+  const bodyViewport = tallHeight !== null ? tallHeight - layoutModel.footerHeight - CHROME : null;
+  check('OPS-tall-content-capped-and-scrollable',
+    tallHeight !== null && tallHeight <= 260
+      && bodyViewport !== null && bodyContent > bodyViewport
+      && tallHeight >= floorBudget,
+    `panelHeight=${tallHeight} bodyContent=${bodyContent} bodyViewport=${bodyViewport}（面板封顶 260、内容区可滚、footer 仍完整）`);
 
   console.log('INFO OPS-window-pending :: 输入框/4 按钮 rect 在视口内、无需滚动、elementFromPoint 命中、activeElement 聚焦、详情后仍成立——离线无真实布局，由 b6-window-probe.js 窗口层判，本门不计红');
 } catch (error) {

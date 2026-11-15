@@ -180,10 +180,11 @@ try {
   check('B8-footer-sibling-of-body', bodyIndex >= 0 && footerIndex >= 0 && bodyIndex !== footerIndex,
     `bodyIdx=${bodyIndex} footerIdx=${footerIndex}（footer 必须是 panel 的直接子、不得在 body 内）`);
 
-  // ② body 可滚前提
+  // ② body 可滚前提（B9 起 minHeight 不再是 0——保底展示由 computePopoverHeight 的 floor 承担；
+  //    故此门不再断言 minHeight，行为判据见 verify-ops-footer-pinned）
   const bodyStyle = body?.props?.style ?? {};
-  check('B8-body-scrollable', bodyStyle.overflowY === 'auto' && Number(bodyStyle.minHeight) === 0 && bodyStyle.flex !== '0 0 auto',
-    `overflowY=${JSON.stringify(bodyStyle.overflowY)} minHeight=${JSON.stringify(bodyStyle.minHeight)} flex=${JSON.stringify(bodyStyle.flex)}`);
+  check('B8-body-scrollable', bodyStyle.overflowY === 'auto' && bodyStyle.flex === '1 1 auto',
+    `overflowY=${JSON.stringify(bodyStyle.overflowY)} flex=${JSON.stringify(bodyStyle.flex)}`);
 
   // ③ wrapper 确定高度（px），不是只有 maxHeight
   const wrapperStyle = wrapper?.props?.style ?? {};
