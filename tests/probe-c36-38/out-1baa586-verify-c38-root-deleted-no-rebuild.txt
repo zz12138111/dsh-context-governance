@@ -1,0 +1,8 @@
+PASS C38-P4-precondition-store-existed :: storeExistedBefore=true
+PASS C38-P4-legacy-no-root-rebuild :: legacy: rebuilt=false attempts={"mem_write":{"error":"[NO_ROOT] no project root for this session"},"mem_query":{"error":"[NO_ROOT] no project root for this session"}}（期望 false）
+PASS C38-P4-legacy-root-unresolved-audited :: legacy: root-unresolved=[{"sessionId":"session-p4deleted-1111-2222-3333-444455556666","cwd":"C:\\Users\\19091\\AppData\\Local\\Temp\\cg-p4-JdGsZT\\proj","reason":"root-missing"}]（期望 ≥1 行带 sessionId/cwd/reason）
+INFO C38-P4-legacy-show-root-line :: "root: (root-unresolved)"（非门级）
+PASS C38-P4-pointer-no-root-rebuild :: pointer: rebuilt=false attempts={"mem_write":{"error":"[POINTER_ONLY] memory is pointer-based in this session: write the body to the human file, then register a pointer via /c"},"mem_query":{"ok":true,"id":null}}（期望 false）
+PASS C38-P4-pointer-root-unresolved-audited :: pointer: root-unresolved=[{"sessionId":"session-p4deleted-1111-2222-3333-444455556666","cwd":"C:\\Users\\19091\\AppData\\Local\\Temp\\cg-p4-JdGsZT\\proj","reason":"root-missing"},{"sessionId":"session-p4deleted-1111-2222-3333-444455556666","cwd":"C:\\Users\\19091\\AppData\\Local\\Temp\\cg-p4-JdGsZT\\proj","reason":"root-missing"}]（期望 ≥1 行；POINTER_ONLY 拒写也不得静默）
+
+C38 P4 根删后不重建 TOTAL 5/5 PASS

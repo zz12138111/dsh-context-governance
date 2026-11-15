@@ -1,0 +1,9 @@
+PASS C38-P3-miss-in-session-root :: rootB miss=12 ids=["MEM-p3b11112-20261115-0001","MEM-p3b11112-20261115-0002","MEM-p3b11112-20261115-0003"]
+PASS C38-P3-miss-not-in-primary-root :: rootA miss=0（期望 0）
+PASS C38-P3-header-injected-in-session-root :: rootB injected=1 sessionId=session-p3b-1111-2222-3333-444455556666
+PASS C38-P3-header-not-in-primary-root :: rootA injected=0 truncated=0（期望 0/0）
+PASS C38-P3-header-truncated-same-root-and-session :: rootB truncated=1 sid=session-p3b-1111-2222-3333-444455556666 injectedSid=session-p3b-1111-2222-3333-444455556666
+PASS C38-P3-lines-vs-pointers-separate :: lines=10 pointers=12 count=12（期望 lines=实际文本行、pointers=条数且两者分开）
+INFO C38-P3-non-session-events-in-primary :: userLevel=["persistence-identity","root-registered","memory-legacy-detected","policy-resolved","session-governed","memory-store-open"]（不带 sessionId 的事件仍在用户级主审计，开发声明有意为之）
+
+C38 P3 审计按会话根路由 TOTAL 6/6 PASS

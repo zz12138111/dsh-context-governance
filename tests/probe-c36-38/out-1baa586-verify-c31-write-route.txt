@@ -1,0 +1,13 @@
+PASS C31-3-same-origin-origin-no-token-allowed :: status=200 body={"ok":true,"at":0.5,"source":"session:A2","via":"origin"}（期望 200，不得再拒自家 UI）
+PASS C31-3-valid-token-allowed :: status=200 body={"ok":true,"at":0.5,"source":"session:A2","via":"origin"}（期望 200）
+PASS C31-3-valid-token-no-origin-allowed :: status=200 body={"ok":true,"at":0.5,"source":"session:A2","via":"token"}（期望 200；rc.10 未修时在此 403 missing-origin = P5，修后必须绿）
+PASS C31-3-no-proof-rejected :: status=403 body={"ok":false,"error":"missing-proof"}（期望 403，拒因 missing-proof 一类）
+PASS C31-3-bad-token-rejected :: status=403 body={"ok":false,"error":"missing-proof"}（期望 403）
+PASS C31-3-cross-origin-rejected :: status=403 body={"ok":false,"error":"cross-origin"}（期望 403 cross-origin）
+PASS C31-1-non-loopback-rejected :: status=403 body={"ok":false,"error":"not-loopback"}（期望 403，含 loopback）
+PASS C31-1-ipv6-loopback-allowed :: status=200 body={"ok":true,"at":0.5,"source":"session:A2","via":"origin"}（期望 200）
+PASS C31-1-ipv4-mapped-loopback-allowed :: status=200 body={"ok":true,"at":0.5,"source":"session:A2","via":"origin"}（期望 200）
+PASS C31-3-sec-fetch-site-allowed :: status=200 body={"ok":true,"at":0.5,"source":"session:A2","via":"sec-fetch"}（期望 200）
+PASS C31-3-write-callback-called :: writes=[{"sessionId":"session-c31-aaaa-1111-2222-333344445555","at":0.5,"via":"origin"}]（期望 1 次 {sessionId,at}）
+
+C31 写入路由安全 TOTAL 11/11 PASS
