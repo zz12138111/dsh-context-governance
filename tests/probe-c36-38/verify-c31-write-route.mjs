@@ -18,7 +18,12 @@
  * 只打 `createSessionPolicyHandler`（真实 handler + 假 req/res），不装、不联网、不碰真实 profile。
  * 用法：node tests\probe-c36-38\verify-c31-write-route.mjs
  */
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
 import { createSessionPolicyHandler, mountPluginPolicyRoute, mountSessionPolicyRoute, PLUGIN_POLICY_PATH, SESSION_POLICY_PATH } from '../../packages/dsh-context-governance/src/session-policy-route.js';
+import { createPluginPolicyStore } from '../../packages/dsh-context-governance/src/plugin-policy.js';
 
 const results = [];
 function check(id, ok, detail) { results.push({ id, ok }); console.log(`${ok ? 'PASS' : 'FAIL'} ${id} :: ${detail}`); }
@@ -59,7 +64,7 @@ async function post(req) {
 }
 
 /** 走真实挂载入口（mountPluginPolicyRoute）打 plugin 层写：验证 token 是否被挂载层转发。 */
-async function postPluginMounted(req) {
+async function postPluginMounted(req, { csrfToken = TOKEN } = {}) {
   const calls = [];
   let mounted = null;
   const fakeHost = {
@@ -67,7 +72,7 @@ async function postPluginMounted(req) {
     effect() { return () => {}; },
   };
   const ctx = { inject(services, fn) { fn(fakeHost); }, get() { return undefined; } };
-  mountPluginPolicyRoute(ctx, { writePluginAt: async (args) => { calls.push(args); return { ok: true }; }, csrfToken: TOKEN });
+  mountPluginPolicyRoute(ctx, { writePluginAt: async (args) => { calls.push(args); return { ok: true }; }, csrfToken });
   if (typeof mounted !== 'function') return { status: 0, body: null, calls, mounted: false };
   let status = 0;
   let payload = '';
@@ -187,18 +192,39 @@ try {
       out.calls.writes.length === 1 && out.calls.writes[0]?.sessionId === sid && out.calls.writes[0]?.at === 0.5,
       `writes=${JSON.stringify(out.calls.writes)}（期望 1 次 {sessionId,at}）`);
   }
-  // ⑪ plugin 层挂载入口必须转发 token：token-only 写 → 200（rc.11 曾漏传 csrfToken，被 origin 路径掩盖）
+  // ⑪ plugin 层挂载入口必须转发 token：token-only 写 → 200 + `via:"token"`（rc.11 曾漏传 csrfToken，被 origin 路径掩盖）
   {
     const out = await postPluginMounted(makePluginReq({ headers: { [CSRF_HEADER]: TOKEN } }));
     check('C31-plugin-route-token-only-allowed',
-      out.status === 200 && out.body?.ok === true && out.body?.source === 'plugin' && out.calls.length === 1,
-      `status=${out.status} body=${JSON.stringify(out.body)} calls=${JSON.stringify(out.calls)}（期望 200；403=挂载层没转发 csrfToken）`);
+      out.status === 200 && out.body?.ok === true && out.body?.source === 'plugin'
+      && out.body?.via === 'token' && out.calls.length === 1 && out.calls[0]?.via === 'token',
+      `status=${out.status} body=${JSON.stringify(out.body)} calls=${JSON.stringify(out.calls)}（期望 200 + via=token；403=挂载层没转发 csrfToken）`);
   }
   // ⑫ plugin 层无任何证明 → 403
   {
     const out = await postPluginMounted(makePluginReq());
     check('C31-plugin-route-no-proof-rejected', out.status === 403 && /missing-proof/.test(proofCode(out.body)),
       `status=${out.status} body=${JSON.stringify(out.body)}（期望 403 missing-proof）`);
+  }
+  // ⑫b 透传退化保护：mount 未配置 token 时，token-only 必须 403（防止将来又漏传）
+  {
+    const out = await postPluginMounted(makePluginReq({ headers: { [CSRF_HEADER]: TOKEN } }), { csrfToken: null });
+    check('C31-plugin-route-mount-token-not-configured-rejected',
+      out.status === 403 && /missing-proof/.test(proofCode(out.body)) && out.calls.length === 0,
+      `status=${out.status} body=${JSON.stringify(out.body)}（期望 403 missing-proof，写回落调不得触发）`);
+  }
+  // ⑫c `plugin-policy-persisted` 审计必须带 via:token（不记 token 值）
+  {
+    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'c31-plugin-audit-')), 'plugin-policy.json');
+    const rows = [];
+    const store = createPluginPolicyStore({ file, audit: (event, details) => rows.push({ event, details }) });
+    const wrote = store.writeAtIfChanged(0.55, 'token');
+    const persisted = rows.filter((row) => row.event === 'plugin-policy-persisted');
+    check('C31-plugin-policy-audit-via-token',
+      wrote === true && persisted.length === 1 && persisted[0].details?.via === 'token'
+        && !JSON.stringify(persisted[0].details).includes(TOKEN),
+      `wrote=${wrote} rows=${JSON.stringify(persisted)}（期望 1 行 via=token，且不含 token 值）`);
+    fs.rmSync(path.dirname(file), { recursive: true, force: true });
   }
   // ⑬ session 层挂载入口也必须转发 token：token-only 写 → 200
   {
