@@ -156,11 +156,13 @@ export class RootGuardPool {
     }
   }
 
+  /** @returns {boolean} 该根审计是否真的写成功（P4-b：失败让调用方回落根审计）。 */
   #auditRecord(record, event, details) {
     try {
-      record?.audit?.append?.(event, details);
+      return record?.audit?.append?.(event, details) === true;
     } catch {
-      /* per-root 审计失败不影响路由 */
+      /* per-root 审计失败不影响路由，但必须让调用方知道 */
+      return false;
     }
   }
 
@@ -476,11 +478,20 @@ export class RootGuardPool {
     } catch (error) {
       this.#logger?.warn?.(`[context-governance] root guard store release failed (${rootId}): ${String(error?.message ?? error)}`);
     }
-    this.#auditRecord(record, 'root-guard-disposed', {
+    // P4-b（rc.12a）：dispose 的审计**不得重建已删的根目录**。
+    // `AuditLog.append` 现在不建目录；写不进去（根被删/被移走）→ 回落根审计并显式标
+    // `root-unresolved{reason:'root-gone'}`，做到"不造根 + 不静默"。
+    if (this.#auditRecord(record, 'root-guard-disposed', {
       root: record.entry.root,
       rootId,
       reason,
-    });
+    }) !== true) {
+      this.#auditRoot('root-unresolved', {
+        root: record.entry.root,
+        rootId,
+        reason: 'root-gone',
+      });
+    }
     return true;
   }
 

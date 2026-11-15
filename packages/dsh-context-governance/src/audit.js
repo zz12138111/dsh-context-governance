@@ -507,6 +507,11 @@ export class AuditLog {  #file;
    * @param {string} event 事件名
    * @param {object} [details] 只允许白名单字段
    * @returns {boolean} 是否落盘成功（无文件时视为成功，只留内存）
+   *
+   * P4-b（rc.12a）：**append 绝不创建目录**。旧实现每次 append 都 `mkdirSync(dirname)`，
+   * 于是"受治根目录被删后，dispose 写 `root-guard-disposed`"会把 `<root>/memory/governance`
+   * 静默重建（真机 `12:39:20.202`，目录创建时间 = 审计时间 +1ms）。
+   * 现在目录/文件不在就只留内存记录并返回 false，由调用方决定是否回落主根。
    */
   append(event, details = {}) {
     if (this.#closed) return false;
@@ -522,7 +527,7 @@ export class AuditLog {  #file;
     const line = `${JSON.stringify(record)}\n`;
     const bytes = Buffer.byteLength(line, 'utf8');
     try {
-      fs.mkdirSync(path.dirname(this.#file), { recursive: true });
+      // 不 mkdir：目录不在（根被删/被移走）时 append 失败即可，绝不重建根。
       this.#rotateIfNeeded(bytes);
       fs.appendFileSync(this.#file, line, 'utf8');
       // P3-8：sizeBytes 必须是真实文件大小——外部进程也可能写/轮转，写后不靠自增计数。
