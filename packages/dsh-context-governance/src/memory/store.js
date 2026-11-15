@@ -107,6 +107,8 @@ export class MemoryStore {
   #entries = new Map();
   #protectionEntries = new Map();
   #journalEntries = new Map(); // cycleKey -> entry[]
+  /** D-MGMT-023：保护条 id 持久高水位（date → 已分配最大序号），防止同日 id 复用。 */
+  #idWatermark = new Map();
   #files = new Map(); // rel -> { type, hash, stamp, source: 'file' | 'backup' }
   #queue = Promise.resolve();
   #readOnly = false;
@@ -203,6 +205,8 @@ export class MemoryStore {
     try {
       await store.#loadAll();
       await store.#loadProtectionJournals();
+      // D-MGMT-023：重启后从磁盘高水位续号（并与已加载条目/journal 取并集）。
+      store.#loadIdWatermark();
     } catch (error) {
       store.#setReadOnly(
         `load-failed:${error?.code ?? 'ERR'}`,
@@ -254,7 +258,8 @@ export class MemoryStore {
   #counts() {
     const counts = { proposed: 0, active: 0, superseded: 0, expired: 0 };
     const seen = new Set();
-    for (const entry of [...this.#entries.values(), ...this.#protectionEntries.values()]) {
+    const pool = [...this.#entries.values(), ...this.#protectionEntries.values()];
+    for (const entry of pool) {
       if (seen.has(entry.id)) continue;
       seen.add(entry.id);
       if (Object.hasOwn(counts, entry.status)) counts[entry.status] += 1;
@@ -373,8 +378,9 @@ export class MemoryStore {
     const createdAt = now.toISOString();
     const date = localDateId(now);
     const used = new Set([...this.#entries.keys(), ...this.#protectionEntries.keys()]);
-    let counter = PROTECTION_ID_FLOOR;
     const entries = [];
+    const dedupedIds = [];
+    const cycleTitles = new Set();
     let skipped = 0;
     for (const item of items) {
       const detail = String(item?.detail ?? '').trim();
@@ -394,11 +400,7 @@ export class MemoryStore {
         confidence: 0.5,
         project: this.#project,
       }, { project: this.#project, now: this.#now });
-      let id;
-      do {
-        id = `MEM-${date}-${String(counter).padStart(4, '0')}`;
-        counter += 1;
-      } while (used.has(id));
+      const id = this.#takeProtectionId(date, used);
       used.add(id);
       // 1.0.3 准入（A 口径）：protectSync 是保护链路起点，坏条目在这里就挡住，
       // 绝不写进 journal（否则真机又只能靠"条目数变多"倒推）。
@@ -409,6 +411,16 @@ export class MemoryStore {
         this.#warnings.push(`protectSync cycle ${key}: skipped unreadable item ${id} (${admitted.reason})`);
         continue;
       }
+      // D-MGMT-023：同标题去重前移到 protectSync——被去重的条目仍进 journal（本周期回注不丢），
+      // 但打 `deduped` 标记、只计入 `dedupedIds`，不再进 `ids`/`moved` 对账口径。
+      const titleKey = normalizeTitleKey(draft.title);
+      const duplicate = titleKey !== ''
+        && (cycleTitles.has(titleKey) || this.#findRecentByTitle(draft.title) !== null);
+      if (titleKey !== '') cycleTitles.add(titleKey);
+      if (duplicate) {
+        entry.deduped = true;
+        dedupedIds.push(id);
+      }
       entries.push(entry);
     }
 
@@ -418,6 +430,7 @@ export class MemoryStore {
       compactionId,
       sessionId,
       createdAt,
+      dedupedIds,
       entries,
     };
     const dir = path.join(this.#rootDir, PROTECTION_DIR_NAME);
@@ -443,7 +456,68 @@ export class MemoryStore {
 
     this.#journalEntries.set(key, entries);
     for (const entry of entries) this.#protectionEntries.set(entry.id, entry);
+    // D-MGMT-023：分配完立刻落高水位，重启后从磁盘续号（即使本轮条目后续被去重/丢弃也不复用 id）。
+    this.#persistIdWatermark();
     return entries.map(cloneEntry);
+  }
+
+  #watermarkPath() {
+    return path.join(this.#rootDir, PROTECTION_DIR_NAME, '.id-watermark');
+  }
+
+  /** D-MGMT-023：读盘高水位，并与已加载条目/journal 里的最大序号取并集（兼容旧数据/丢文件）。 */
+  #loadIdWatermark() {
+    const map = new Map();
+    try {
+      const raw = fsSync.readFileSync(this.#watermarkPath(), 'utf8');
+      const data = JSON.parse(raw);
+      for (const [date, next] of Object.entries(data?.dates ?? {})) {
+        if (/^\d{8}$/.test(date) && Number.isInteger(next)) map.set(date, next);
+      }
+    } catch {
+      /* 无文件/损坏：从已加载数据重建 */
+    }
+    const bump = (id) => {
+      const match = /^MEM-(\d{8})-(\d{3,})$/.exec(String(id ?? ''));
+      if (match === null) return;
+      const date = match[1];
+      const seq = Number(match[2]);
+      if (!Number.isFinite(seq)) return;
+      map.set(date, Math.max(map.get(date) ?? 0, seq));
+    };
+    for (const id of this.#entries.keys()) bump(id);
+    for (const id of this.#protectionEntries.keys()) bump(id);
+    for (const list of this.#journalEntries.values()) {
+      for (const entry of list) bump(entry?.id);
+    }
+    this.#idWatermark = map;
+  }
+
+  #persistIdWatermark() {
+    try {
+      const dir = path.join(this.#rootDir, PROTECTION_DIR_NAME);
+      fsSync.mkdirSync(dir, { recursive: true });
+      const file = this.#watermarkPath();
+      const temp = `${file}.${process.pid}.${Date.now()}.tmp`;
+      const dates = {};
+      for (const [date, next] of this.#idWatermark.entries()) dates[date] = next;
+      fsSync.writeFileSync(temp, `${JSON.stringify({ version: 1, dates }, null, 2)}\n`, 'utf8');
+      fsSync.renameSync(temp, file);
+    } catch (error) {
+      this.#warnings.push(`protection id watermark could not be persisted: ${error?.message ?? error}`);
+    }
+  }
+
+  /** D-MGMT-023：同日单调分配（高水位 + 已用键），并推进内存高水位。 */
+  #takeProtectionId(date, used) {
+    let next = Math.max(PROTECTION_ID_FLOOR, (this.#idWatermark.get(date) ?? 0) + 1);
+    let id = `MEM-${date}-${String(next).padStart(4, '0')}`;
+    while (used.has(id)) {
+      next += 1;
+      id = `MEM-${date}-${String(next).padStart(4, '0')}`;
+    }
+    this.#idWatermark.set(date, next);
+    return id;
   }
 
   #journalPath(cycleKey) {
@@ -478,7 +552,7 @@ export class MemoryStore {
       if (error?.code === 'ENOENT') return;
       throw error;
     }
-    for (const name of names.filter((item) => item.endsWith('.json'))) {
+    for (const name of names.filter((item) => item.endsWith('.json') && !item.startsWith('.'))) {
       const file = path.join(dir, name);
       try {
         const journal = JSON.parse(await fs.readFile(file, 'utf8'));
@@ -550,14 +624,22 @@ export class MemoryStore {
     const result = await this.#transact(() => {
       const dirty = new Set();
       const ids = [];
+      const deduped = [];
       let skipped = 0;
       for (const entry of entries) {
-        ids.push(entry.id);
         this.#protectionEntries.delete(entry.id);
+        // D-MGMT-023：protectSync 已判定的同标题重复条不再参与落盘（只留在 journal 供回注）。
+        if (entry.deduped === true) {
+          deduped.push(entry.id);
+          continue;
+        }
         if (this.#entries.has(entry.id)) continue;
-        // 1.0.3 条款 3：同标题（归一化）在窗口内只保留 1 条——物化时跳过重复；
-        // 本周期回注已用 journal 里的指针，不受影响（否则会丢回注）。
-        if (this.#findRecentByTitle(entry.title) !== null) continue;
+        // 兼容旧 journal（无 deduped 标记，1.0.3 之前写下的）：仍按同标题去重兜底，
+        // 但这类旧条目会进 `skippedIds`，由运行时对账审计暴露，不再冒充 moved。
+        if (this.#findRecentByTitle(entry.title, { pending: false }) !== null) {
+          deduped.push(entry.id);
+          continue;
+        }
         // 1.0.3 准入（A 口径）：物化前过 `#admitEntry`，它同时是保护链路**唯一**写 `#entries` 的地方。
         const admitted = this.#admitEntry(entry, { commit: true });
         if (admitted.ok !== true) {
@@ -565,12 +647,13 @@ export class MemoryStore {
           this.#warnings.push(`skipped unreadable protection entry ${entry.id}: ${admitted.reason}`);
           continue;
         }
+        ids.push(entry.id);
         dirty.add(entry.type);
       }
       if (skipped > 0) {
         this.#warnings.push(`protection cycle ${key}: skipped ${skipped}/${entries.length} unreadable entries`);
       }
-      return { dirty, value: { moved: ids.length, ids, skipped } };
+      return { dirty, value: { moved: ids.length, ids, dedupedIds: deduped, skipped } };
     });
     try {
       await fs.rm(this.#journalPath(key), { force: true });
@@ -667,6 +750,7 @@ export class MemoryStore {
     this.#readOnlyReason = null;
     await this.#loadAll();
     await this.#loadProtectionJournals();
+    this.#loadIdWatermark();
     if (this.#lock === null) {
       const acquired = await acquireWriterLock(this.#rootDir, { project: this.#project, now: this.#now });
       if (acquired.ok) {
@@ -745,8 +829,12 @@ export class MemoryStore {
     }
   }
 
-  /** 1.0.3：同标题去重——归一化标题相同且在窗口内（含尚未物化的保护条目），返回既有条目。 */
-  #findRecentByTitle(title) {
+  /**
+   * 1.0.3：同标题去重——归一化标题相同且在窗口内，返回既有条目。
+   * D-MGMT-023：pending 默认含尚未物化的保护条（protectSync 用）；物化时只对已落盘条目比对
+   * （pending:false），否则别的周期还在 pending 的同标题会把本周期条目误判成重复。
+   */
+  #findRecentByTitle(title, { pending = true } = {}) {
     const windowDays = this.#dedupWindowDays;
     if (windowDays <= 0) return null;
     const key = normalizeTitleKey(title);
@@ -754,7 +842,8 @@ export class MemoryStore {
     const nowMs = this.#now().getTime();
     const windowMs = windowDays * 24 * 60 * 60 * 1000;
     const seen = new Set();
-    for (const entry of [...this.#entries.values(), ...this.#protectionEntries.values()]) {
+    const pool = pending ? [...this.#entries.values(), ...this.#protectionEntries.values()] : [...this.#entries.values()];
+    for (const entry of pool) {
       if (seen.has(entry.id)) continue;
       seen.add(entry.id);
       if (entry.status === 'expired') continue;
@@ -1033,3 +1122,7 @@ export class MemoryStore {
 }
 
 export { formatPointer, MemoryContractError, MemoryFormatError };
+
+
+
+
