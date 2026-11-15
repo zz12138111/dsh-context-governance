@@ -18,7 +18,7 @@
  * 只打 `createSessionPolicyHandler`（真实 handler + 假 req/res），不装、不联网、不碰真实 profile。
  * 用法：node tests\probe-c36-38\verify-c31-write-route.mjs
  */
-import { createSessionPolicyHandler, SESSION_POLICY_PATH } from '../../packages/dsh-context-governance/src/session-policy-route.js';
+import { createSessionPolicyHandler, mountPluginPolicyRoute, PLUGIN_POLICY_PATH, SESSION_POLICY_PATH } from '../../packages/dsh-context-governance/src/session-policy-route.js';
 
 const results = [];
 function check(id, ok, detail) { results.push({ id, ok }); console.log(`${ok ? 'PASS' : 'FAIL'} ${id} :: ${detail}`); }
@@ -56,6 +56,39 @@ async function post(req) {
   let body = null;
   try { body = JSON.parse(payload); } catch { body = null; }
   return { status, body, calls };
+}
+
+/** 走真实挂载入口（mountPluginPolicyRoute）打 plugin 层写：验证 token 是否被挂载层转发。 */
+async function postPluginMounted(req) {
+  const calls = [];
+  let mounted = null;
+  const fakeHost = {
+    webServer: { register({ handler }) { mounted = handler; return () => {}; } },
+    effect() { return () => {}; },
+  };
+  const ctx = { inject(services, fn) { fn(fakeHost); }, get() { return undefined; } };
+  mountPluginPolicyRoute(ctx, { writePluginAt: async (args) => { calls.push(args); return { ok: true }; }, csrfToken: TOKEN });
+  if (typeof mounted !== 'function') return { status: 0, body: null, calls, mounted: false };
+  let status = 0;
+  let payload = '';
+  const res = { writeHead(code) { status = code; }, end(chunk) { payload += chunk ?? ''; } };
+  await mounted(req, res);
+  let body = null;
+  try { body = JSON.parse(payload); } catch { body = null; }
+  return { status, body, calls, mounted: true };
+}
+
+function makePluginReq({ headers = {}, body = { at: 0.55 }, omit = [] } = {}) {
+  const payload = JSON.stringify(body);
+  const merged = { host: HOME_HOST, 'content-type': 'application/json', ...headers };
+  for (const key of omit) delete merged[key];
+  return {
+    method: 'POST',
+    url: PLUGIN_POLICY_PATH,
+    socket: { remoteAddress: '127.0.0.1' },
+    headers: merged,
+    [Symbol.asyncIterator]: async function* iterate() { yield Buffer.from(payload); },
+  };
 }
 
 const proofCode = (body) => String(body?.error ?? '');
@@ -129,6 +162,19 @@ try {
     check('C31-3-write-callback-called',
       out.calls.writes.length === 1 && out.calls.writes[0]?.sessionId === sid && out.calls.writes[0]?.at === 0.5,
       `writes=${JSON.stringify(out.calls.writes)}（期望 1 次 {sessionId,at}）`);
+  }
+  // ⑪ plugin 层挂载入口必须转发 token：token-only 写 → 200（rc.11 曾漏传 csrfToken，被 origin 路径掩盖）
+  {
+    const out = await postPluginMounted(makePluginReq({ headers: { [CSRF_HEADER]: TOKEN } }));
+    check('C31-plugin-route-token-only-allowed',
+      out.status === 200 && out.body?.ok === true && out.body?.source === 'plugin' && out.calls.length === 1,
+      `status=${out.status} body=${JSON.stringify(out.body)} calls=${JSON.stringify(out.calls)}（期望 200；403=挂载层没转发 csrfToken）`);
+  }
+  // ⑫ plugin 层无任何证明 → 403
+  {
+    const out = await postPluginMounted(makePluginReq());
+    check('C31-plugin-route-no-proof-rejected', out.status === 403 && /missing-proof/.test(proofCode(out.body)),
+      `status=${out.status} body=${JSON.stringify(out.body)}（期望 403 missing-proof）`);
   }
 } catch (error) {
   check('C31-window', false, `抛错：${String(error?.stack ?? error).slice(0, 400)}`);
