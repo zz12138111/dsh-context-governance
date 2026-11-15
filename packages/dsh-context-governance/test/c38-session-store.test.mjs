@@ -6,7 +6,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
 
-import { openSessionMemory } from '../src/memory/session-store.js';
+import { openSessionMemory, renderMemoryHeader } from '../src/memory/session-store.js';
 import { tempDir } from './helpers.mjs';
 
 async function bodyFile(dir, lines) {
@@ -73,6 +73,29 @@ test('C38 ①：id 会话隔离前缀 + 单调 + 子会话只读；登记不可�
     // 角色写死并可读回。
     assert.equal(store.setRole('dev').ok, true);
     assert.equal(store.meta().role, 'dev');
+  } finally {
+    await fs.rm(home, { recursive: true, force: true, maxRetries: 5 });
+    await fs.rm(work, { recursive: true, force: true, maxRetries: 5 });
+  }
+});
+
+test('C38 ④：header 只出短行、有上限、超限截断并审计，不复制正文', async () => {
+  const home = await tempDir('cg-c38-header-');
+  const work = await tempDir('cg-c38-header-body-');
+  try {
+    const file = path.join(work, 'BODY.md');
+    await fs.writeFile(file, '第一行正文\n第二行正文\n第三行正文\n', 'utf8');
+    const audits = [];
+    const store = openSessionMemory({ home, sessionId: 'session-cccc3333' });
+    store.append({ title: '第一条摘要', target: `${file}:1`, summary: '第一条摘要' });
+    store.append({ title: '第二条摘要', target: `${file}:2`, summary: '第二条摘要' });
+    store.append({ title: '第三条摘要', target: `${file}:3`, summary: '第三条摘要' });
+    const header = renderMemoryHeader(store, { maxLines: 2, maxBytes: 4096, audit: (event, details) => audits.push({ event, details }) });
+    assert.ok(header.text.includes('MEM-cccc3333-'));
+    assert.ok(header.text.includes('已截断'));
+    assert.equal(header.truncated, 1);
+    assert.ok(audits.some((row) => row.event === 'header-truncated' && row.details.count === 1));
+    assert.equal(header.text.includes('第一行正文'), false, 'header 不得复制正文');
   } finally {
     await fs.rm(home, { recursive: true, force: true, maxRetries: 5 });
     await fs.rm(work, { recursive: true, force: true, maxRetries: 5 });

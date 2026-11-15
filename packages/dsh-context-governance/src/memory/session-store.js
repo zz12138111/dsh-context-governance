@@ -74,6 +74,37 @@ export function parsePointerBlock(text) {
   return pointers;
 }
 
+/**
+ * C38 ④：header 渲染——只注入短行（id + 一句话摘要 + miss 标记），
+ * 有字节/条数上限；超限截断并发 `header-truncated`，**不复制正文**。
+ */
+export function renderMemoryHeader(store, { maxLines = 20, maxBytes = 2048, audit = null } = {}) {
+  const entries = typeof store?.query === 'function' ? store.query() : [];
+  const lines = ['## 会话记忆指针（C38）'];
+  let bytes = Buffer.byteLength(lines[0], 'utf8');
+  let truncated = 0;
+  const limitLines = Math.max(Number(maxLines) || 20, 1);
+  const limitBytes = Math.max(Number(maxBytes) || 2048, 64);
+  for (const entry of entries) {
+    if (lines.length - 1 >= limitLines) { truncated += 1; continue; }
+    const title = String(entry.title || entry.summary || '').replace(/\s+/g, ' ').trim().slice(0, 60);
+    const line = `- ${entry.id} · ${title === '' ? '(无摘要)' : title}${entry.miss === true ? ' [miss]' : ''}`;
+    const size = Buffer.byteLength(line, 'utf8') + 1;
+    if (bytes + size > limitBytes) { truncated += 1; continue; }
+    lines.push(line);
+    bytes += size;
+  }
+  if (truncated > 0) {
+    lines.push(`- … 已截断 ${truncated} 条（header 上限 ${limitLines} 行/${limitBytes} bytes）`);
+    try {
+      audit?.('header-truncated', { count: truncated, bytes: limitBytes, lines: limitLines });
+    } catch {
+      /* 审计失败不影响 header */
+    }
+  }
+  return { text: lines.join('\n'), bytes, truncated };
+}
+
 export function serializePointers(entries) {
   return entries.map((entry) => [
     `<!-- pointer:${entry.id} -->`,
