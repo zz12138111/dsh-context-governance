@@ -69,14 +69,21 @@ try {
     getBoundingClientRect: () => ({ left: 1100, top: 700, right: 1190, bottom: 728, width: 90, height: 28, x: 1100, y: 700 }),
     focus() {}, select() {}, closest: () => chipElement,
   };
-  const inputElement = {
-    getBoundingClientRect: () => ({ left: 300, top: 860, right: 1100, bottom: 900, width: 800, height: 40, x: 300, y: 860 }),
+  // B13：宿主**没有** `data-cg-composer`（Lexical contenteditable）；composer 卡片是 `[data-composer-card]`。
+  // 卡片带在 chip 上方（≈640–700），上弹 panel.bottom=chip.top−16 必然落进去 → 必须靠卡片 rect 避让。
+  const composerCardElement = {
+    getBoundingClientRect: () => ({ left: 200, top: 640, right: 1200, bottom: 700, width: 1000, height: 60, x: 200, y: 640 }),
     focus() {}, select() {},
   };
   const fakeDocument = {
     body: { appendChild() {} },
     documentElement: { clientWidth: VIEWPORT.width, clientHeight: VIEWPORT.height },
-    querySelector: (selector) => (String(selector).includes('chip') ? chipElement : (String(selector).includes('textarea') || String(selector).includes('composer') ? inputElement : null)),
+    querySelector: (selector) => {
+      const text = String(selector);
+      if (text.includes('data-cg-chip')) return chipElement;
+      if (text.includes('data-composer-card') || text.includes('data-lexical-editor')) return composerCardElement;
+      return null; // textarea / data-cg-composer 在宿主里都不存在（旧选择器必须落空 → 门才抓得住 B13）
+    },
     addEventListener() {},
     removeEventListener() {},
   };
@@ -213,17 +220,27 @@ try {
   check('OPS-structure-exists', wrapper !== undefined && panel !== undefined && body !== undefined && footer !== undefined,
     `wrapper=${wrapper !== undefined} panel=${panel !== undefined} body=${body !== undefined} footer=${footer !== undefined}`);
 
-  // ① footer 同时含输入框 + 四个按钮
+  // ① footer 同时含输入框 + 三个按钮（B12：删除「打开设置页」静默 no-op 后，控件 4 / 按钮 3）
   const footerInput = findAll(footer ?? null, (node) => node.type === 'input' || node.props?.type === 'text')[0];
   const footerButtons = findAll(footer ?? null, (node) => node.type === 'button');
   const buttonTexts = footerButtons.map((node) => textOf(node));
   const hasRestore = buttonTexts.some((text) => /恢复默认/.test(text));
   const hasResetGlobal = buttonTexts.some((text) => /恢复全局/.test(text));
   const hasSave = buttonTexts.some((text) => /保存/.test(text));
-  const hasSettings = buttonTexts.some((text) => /设置/.test(text));
   check('OPS-footer-has-input-and-buttons',
-    footerInput !== undefined && footerButtons.length >= 4 && hasRestore && hasResetGlobal && hasSave && hasSettings,
-    `input=${footerInput !== undefined} buttons=${JSON.stringify(buttonTexts)}（还需：恢复默认=${hasRestore} 恢复全局=${hasResetGlobal} 保存=${hasSave} 设置=${hasSettings}）`);
+    footerInput !== undefined && footerButtons.length === 3 && hasRestore && hasResetGlobal && hasSave,
+    `input=${footerInput !== undefined} buttons=${JSON.stringify(buttonTexts)}（B12：恰好 3 个——恢复默认=${hasRestore} 恢复全局=${hasResetGlobal} 保存=${hasSave}；不得有「打开设置页」）`);
+
+  // ①b B12：按钮集合**精确相等**（不是包含），且每个都有 onClick（防静默 no-op）
+  const expectedButton = [/恢复默认/, /恢复全局/, /保存/];
+  const setExact = footerButtons.length === 3
+    && expectedButton.every((pattern) => buttonTexts.some((text) => pattern.test(text)))
+    && buttonTexts.every((text) => expectedButton.some((pattern) => pattern.test(text)));
+  check('OPS-footer-button-set-exact', setExact,
+    `buttons=${JSON.stringify(buttonTexts)}（期望精确 {恢复默认, 恢复全局, 保存到本会话}，多一个「打开设置页」也红）`);
+  const silentButtons = footerButtons.filter((node) => typeof node.props?.onClick !== 'function');
+  check('OPS-footer-no-silent-noop', silentButtons.length === 0 && footerButtons.length === 3,
+    `无 onClick 的按钮=${JSON.stringify(silentButtons.map((node) => textOf(node)))}（B12 教训：不允许有按钮但点了没动作；若实现不了就删掉入口）`);
 
   // ② footer 布局样式（B11 扁平化后不再要求"两行容器"；footer 自身必须 flex + gap）
   const footerStyle = footer?.props?.style ?? {};
@@ -356,8 +373,8 @@ try {
     const insidePanel = footerBottom <= panelBottom;
     const insideViewport = footerTop >= 8 && footerBottom <= VIEWPORT.height - 8;
     const tag = `@${band.width}`;
-    check(`OPS-footer-button-count-4${tag}`, band.buttons.length === 4,
-      `buttons=${band.buttons.length} ${JSON.stringify(band.buttons.map((item) => item.text))}（精确 4 个）`);
+    check(`OPS-footer-button-count-3${tag}`, band.buttons.length === 3,
+      `buttons=${band.buttons.length} ${JSON.stringify(band.buttons.map((item) => item.text))}（B12：精确 3 个）`);
     check(`OPS-input-width-cap${tag}`, band.inputItem !== undefined && band.inputItem.width <= 72,
       `inputWidth=${band.inputItem === undefined ? 'missing' : Math.round(band.inputItem.width)}（期望 ≤72，目标 56）`);
     check(`OPS-footer-no-overflow${tag}`, !band.overflowHeight && !band.overflowWidth,
@@ -387,8 +404,8 @@ try {
   const extremeInsidePanel = extremeFooterBottom <= panelBottom;
   const extremeInsideViewport = extremeFooterBottom <= VIEWPORT.height - 8;
   check('OPS-footer-extreme-all-items-in-panel',
-    extreme.buttons.length === 4 && extreme.rows.length >= 5 && extremeInsidePanel && extremeInsideViewport,
-    `rows=${extreme.rows.length} footerHeight=${extreme.totalHeight} footerBottom=${extremeFooterBottom} panelBottom=${panelBottom} viewportH=${VIEWPORT.height}（5 控件必须全部在面板与视口内）`);
+    extreme.buttons.length === 3 && extreme.rows.length >= 4 && extremeInsidePanel && extremeInsideViewport,
+    `rows=${extreme.rows.length} footerHeight=${extreme.totalHeight} footerBottom=${extremeFooterBottom} panelBottom=${panelBottom} viewportH=${VIEWPORT.height}（B12：4 控件即 input+3 按钮，必须全部在面板与视口内）`);
   check('OPS-footer-extreme-no-overflow', !extreme.overflowWidth && !extreme.overflowHeight,
     `contentHeight=${extreme.totalHeight} footerClientHeight=${extreme.footerClientHeight} rows=${JSON.stringify(extreme.rowsDump)}（不许被 hidden 裁；可提高 clientHeight，body 滚动是合法结果）`);
   check('OPS-footer-extreme-body-scroll-allowed', String(body?.props?.style?.overflowY ?? '') === 'auto',
@@ -401,8 +418,9 @@ try {
   const extremePanel = heightFn !== null
     ? heightFn({ bodyScroll: layoutModel.bodyScroll, footerHeight: extreme.totalHeight, chrome: CHROME })
     : null;
-  check('OPS-footer-extreme-bodyFloor-dynamic', extremeFloor === 32 && extremePanel === 260,
-    `bodyFloor=${extremeFloor}(期望32=min(96,260−184−44)) panelHeight=${extremePanel}(期望260)`
+  const expectedExtremeFloor = Math.min(96, Math.max(0, 260 - extreme.totalHeight - CHROME));
+  check('OPS-footer-extreme-bodyFloor-dynamic', extremeFloor === expectedExtremeFloor && extremePanel === 260,
+    `bodyFloor=${extremeFloor}(期望${expectedExtremeFloor}=min(96,260−${extreme.totalHeight}−${CHROME})) panelHeight=${extremePanel}(期望260)`
     + `（body 保底随 footer 让位，不写死 96；此时 body.scrollHeight(${layoutModel.bodyScroll}) > clientHeight(${extremePanel === null ? '?' : extremePanel - extreme.totalHeight - CHROME}) 是合法结果）`);
   check('OPS-panel-height-le-260', wrapperHeightPx !== null && wrapperHeightPx <= 260,
     `wrapperHeight=${wrapperHeightPx}（极端档 panel 高度仍须 ≤260）`);
@@ -420,7 +438,7 @@ try {
     const heightAfter = pxValue(styleAfter.height);
     const topAfter = pxValue(styleAfter.top);
     check('OPS-detail-expand-keeps-ops',
-      inputAfter !== undefined && buttonsAfter.length >= 4
+      inputAfter !== undefined && buttonsAfter.length >= 3
         && heightAfter !== null && heightAfter <= 260 && topAfter !== null && topAfter + heightAfter <= VIEWPORT.height - 8,
       `inputAfter=${inputAfter !== undefined} buttonsAfter=${buttonsAfter.length} height=${JSON.stringify(styleAfter.height)} top=${JSON.stringify(styleAfter.top)} vh=${VIEWPORT.height}`);
   } else {
@@ -458,7 +476,59 @@ try {
       && tallHeight >= floorBudget,
     `panelHeight=${tallHeight} bodyContent=${bodyContent} bodyViewport=${bodyViewport}（面板封顶 260、内容区可滚、footer 仍完整）`);
 
-  console.log('INFO OPS-window-pending :: 输入框/4 按钮 rect 在视口内、无需滚动、elementFromPoint 命中、activeElement 聚焦、详情后仍成立——离线无真实布局，由 b6-window-probe.js 窗口层判，本门不计红');
+  // B13/C40 硬线：面板与 **composer 卡片** `[data-composer-card]` 交集必须为 0（容差 0，打印实测 rect）。
+  // 宿主没有 `data-cg-composer`（Lexical contenteditable）；旧选择器落空 → 避让死代码 → 上弹必落进卡片带
+  // （chip 在 dock 内、dock 贴卡片下方；panel.bottom=chip.top−16 ≈ card.bottom−12）。
+  const cardRect = composerCardElement.getBoundingClientRect();
+  const wrLeft = pxValue(wrapperStyle.left);
+  const wrTop = pxValue(wrapperStyle.top);
+  const wrWidth = pxValue(wrapperStyle.width);
+  const wrHeight = pxValue(wrapperStyle.height);
+  const panelRect = wrLeft !== null && wrTop !== null && wrWidth !== null && wrHeight !== null
+    ? { left: wrLeft, top: wrTop, right: wrLeft + wrWidth, bottom: wrTop + wrHeight }
+    : null;
+  const intersects = (a, b) => a !== null && a.right > b.left && a.left < b.right && a.bottom > b.top && a.top < b.bottom;
+  const overlapHeight = (a, b) => (a === null || b === null ? null : Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top)));
+  const chipRect = { left: 1100, top: 700, right: 1190, bottom: 728 };
+  check('OPS-panel-no-composer-intersection', panelRect !== null && !intersects(panelRect, cardRect),
+    `panel=[${panelRect?.top},${panelRect?.bottom}] card=[${cardRect.top},${cardRect.bottom}] overlap=${overlapHeight(panelRect, cardRect)}px`
+    + `（容差 0；写进 panel.top/panel.bottom/card.top/card.bottom 便于看量级）`);
+  check('OPS-panel-no-chip-intersection', panelRect !== null && !intersects(panelRect, chipRect),
+    `panel=${JSON.stringify(panelRect)} chip=${JSON.stringify(chipRect)}（允许相切：bottom==chip.top）`);
+
+  // B13 上弹/下弹两向（纯函数直调，不依赖实例状态）
+  const geometryFn = typeof client?.computePopoverRect === 'function' ? client.computePopoverRect : null;
+  if (geometryFn === null) {
+    check('OPS-panel-no-composer-intersection-up', false, 'client 未导出 computePopoverRect');
+    check('OPS-panel-no-composer-intersection-down', false, 'client 未导出 computePopoverRect');
+  } else {
+    const upRect = geometryFn({
+      chip: { x: 1100, y: 700, width: 90, height: 28 },
+      panel: { width: 320, height: 228 },
+      viewport: { width: 1400, height: 900 },
+      input: { x: 200, y: 640, width: 1000, height: 60 },
+    });
+    const upOverlap = upRect === null ? null : Math.max(0, Math.min(upRect.top + upRect.height, 700) - Math.max(upRect.top, 640));
+    check('OPS-panel-no-composer-intersection-up', upRect !== null && upOverlap === 0,
+      `up panel=[${upRect?.top},${upRect === null ? '?' : upRect.top + upRect.height}] card=[640,700] overlap=${upOverlap}px placement=${upRect?.placement}`);
+    const downRect = geometryFn({
+      chip: { x: 680, y: 500, width: 80, height: 26 },
+      panel: { width: 320, height: 180 },
+      viewport: { width: 900, height: 640 },
+      input: { x: 120, y: 440, width: 880, height: 60 },
+    });
+    const downOverlap = downRect === null ? null : Math.max(0, Math.min(downRect.top + downRect.height, 500) - Math.max(downRect.top, 440));
+    check('OPS-panel-no-composer-intersection-down', downRect !== null && downOverlap === 0,
+      `down panel=[${downRect?.top},${downRect === null ? '?' : downRect.top + downRect.height}] card=[440,500] overlap=${downOverlap}px placement=${downRect?.placement}`);
+  }
+
+  // B13 锚点静态：不得再用 `data-cg-composer`（宿主没有），必须用 `data-composer-card` 或 `data-lexical-editor`
+  const hasOldComposerSelector = src.includes('data-cg-composer');
+  const hasCorrectAnchor = src.includes('data-composer-card') || src.includes('data-lexical-editor');
+  check('OPS-composer-selector-correct', !hasOldComposerSelector && hasCorrectAnchor,
+    `data-cg-composer=${hasOldComposerSelector}(必须 false) 正确锚点(data-composer-card/data-lexical-editor)=${hasCorrectAnchor}`);
+
+  console.log('INFO OPS-window-pending :: 输入框/3 按钮 rect 在视口内、无需滚动、elementFromPoint 命中、activeElement 聚焦、详情后仍成立——离线无真实布局，由 b6-window-probe.js 窗口层判，本门不计红');
 } catch (error) {
   check('OPS-window', false, `抛错：${String(error?.stack ?? error).slice(0, 500)}`);
 }
