@@ -609,3 +609,19 @@ test('回滚点摘要未覆盖且保护条目未 materialize：仍判 fail（真
   assert.equal(check.coveredByProtection, undefined);
   assert.deepEqual(report.failures.map((item) => item.name), ['rollback-point']);
 });
+
+test('回滚点摘要未覆盖且 materialize 未记录（undefined）：不授予覆盖，仍判 fail（宁 fail 不放过）', () => {
+  const { report } = reportFor({
+    before: healthyMessages(),
+    summary: 'Current state: 批次 511/958 项完成。',
+    start: 2,
+    end: 11,
+    protectionCoverage: {
+      entries: [{ id: 'MEM-20261115-1002', kind: 'rollback', deduped: false }],
+    },
+  });
+  const check = report.checks.find((item) => item.name === 'rollback-point');
+  assert.equal(check.status, 'fail');
+  assert.equal(check.coveredByProtection, undefined);
+  assert.deepEqual(report.failures.map((item) => item.name), ['rollback-point']);
+});

@@ -2854,13 +2854,11 @@ export class CompressionGuard {
                   kind: state.protectionMeta?.[index]?.kind ?? null,
                 }))
                 .filter((entry) => typeof entry.id === 'string' && entry.kind !== null),
+              // 审核收紧：只有 materialize 结果**显式给出 ids** 才授予覆盖；
+              // `protectionMaterialized` 缺失/未跑 → 一律不授予（宁 fail 不放过，真丢不能被吞）。
               materializedIds: Array.isArray(state.protectionMaterialized?.ids)
                 ? state.protectionMaterialized.ids
-                : (state.protectionMaterialized === undefined || state.protectionMaterialized === null
-                  ? []
-                  : (Array.isArray(state.entries) ? state.entries : [])
-                    .filter((entry) => entry?.deduped !== true && typeof entry?.id === 'string')
-                    .map((entry) => entry.id)),
+                : [],
             },
             adapterKind: this.#adapter.kind,
             manual: state.manual ?? null,
