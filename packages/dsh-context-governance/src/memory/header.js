@@ -141,11 +141,13 @@ export function buildMemoryHeader(store, options = {}) {
  * rc.10 缺陷：`lines` 直接取 `built.count`（指针/条目条数），与真实注入的文本行数混用；
  * 一条指针渲染成一行时两者恰好相等，掩盖了问题，多行/带 Note 时读数失真。
  * 现在：`lines` = **实际注入文本的行数**，`pointers` = 条目数，两值各自可核对。
+ * P3-b：`sessionId` 必须随行落盘，否则两行 header 审计无法按会话归因。
  */
-export function headerInjectedFields(built, injection = {}) {
+export function headerInjectedFields(built, injection = {}, { sessionId = null } = {}) {
   const text = typeof built?.text === 'string' ? built.text : '';
   const count = Number.isFinite(built?.count) ? built.count : 0;
   return {
+    ...(typeof sessionId === 'string' && sessionId !== '' ? { sessionId } : {}),
     count,
     lines: text === '' ? 0 : text.split('\n').length,
     pointers: count,
@@ -222,10 +224,14 @@ export function registerMemoryHeader(ctx, store, options = {}) {
           const rendered = renderMemoryHeader({ query: () => pointers }, {
             maxLines: options.maxLines,
             maxBytes: Number.isFinite(options.maxBytes) ? options.maxBytes : options.maxChars,
-            // P3：把 session 一并透出，保证 `header-truncated` 与 `header-injected` **同根**。
+            // P3：把 session 一并透出，保证 `header-truncated` 与 `header-injected` **同根**；
+            // P3-b：`sessionId` 也要进 details，否则截断行无法按会话归因。
             audit: (event, details) => {
               try {
-                options.onTruncated?.(event, details, session);
+                const sessionId = typeof session?.id === 'string' ? session.id : null;
+                options.onTruncated?.(event,
+                  sessionId === null ? details : { ...details, sessionId },
+                  session);
               } catch {
                 /* 审计失败不影响 header */
               }

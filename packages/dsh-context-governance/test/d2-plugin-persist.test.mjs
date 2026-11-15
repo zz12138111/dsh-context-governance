@@ -157,7 +157,7 @@ test('C11② 路由：POST 成功回 source=plugin；405/400/403/413/409/503 齐
   const ok = makeRes();
   await handler(makeReq({ body: { at: 0.6 } }), ok);
   assert.equal(ok.status, 200);
-  assert.deepEqual(json(ok), { ok: true, at: 0.6, source: 'plugin' });
+  assert.deepEqual(json(ok), { ok: true, at: 0.6, source: 'plugin', via: 'origin' });
   assert.deepEqual(calls, [0.6]);
 
   const get = makeRes();

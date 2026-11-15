@@ -88,8 +88,8 @@ export function createPluginPolicyStore({ file, now = () => new Date(), audit = 
     read() {
       return load();
     },
-    /** 写持久值；值不合法 → false 且不落盘。 */
-    writeAt(at) {
+    /** 写持久值；值不合法 → false 且不落盘。`via` 只记来源类型（origin|sec-fetch|token），不记 token。 */
+    writeAt(at, via = null) {
       if (typeof file !== 'string' || file === '') return false;
       if (!Number.isFinite(at) || at < 0 || at > 1) return false;
       const payload = {
@@ -100,7 +100,9 @@ export function createPluginPolicyStore({ file, now = () => new Date(), audit = 
       };
       try {
         atomicWriteJson(file, payload);
-        emit('plugin-policy-persisted', { at: payload.at });
+        emit('plugin-policy-persisted', typeof via === 'string' && via !== ''
+          ? { at: payload.at, via }
+          : { at: payload.at });
         // 落盘后立刻失效缓存，下一次 read 必然读到新值（即使 mtime 粒度相同）。
         cache = { signature: null, value: null };
         return true;
@@ -110,11 +112,11 @@ export function createPluginPolicyStore({ file, now = () => new Date(), audit = 
       }
     },
     /** 仅当与持久值不同才写（避免每次读都刷盘/刷审计）。 */
-    writeAtIfChanged(at) {
+    writeAtIfChanged(at, via = null) {
       if (!Number.isFinite(at)) return false;
       const current = load();
       if (current !== null && current.at === Number(at)) return false;
-      return this.writeAt(at);
+      return this.writeAt(at, via);
     },
     clear() {
       if (typeof file !== 'string' || file === '') return false;

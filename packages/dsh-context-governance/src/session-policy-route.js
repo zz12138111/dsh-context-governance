@@ -88,6 +88,30 @@ export function sameOriginErrorCode(req) {
   return site === '' && hasOrigin !== true ? 'missing-origin' : 'cross-origin';
 }
 
+/**
+ * P5（rc.11 · 需求 29b）：放行凭据的**来源类型**——`origin` | `sec-fetch` | `token`，无凭据返回 null。
+ *
+ * 只回答"凭什么放行"，不回 token 值：`via` 会进 200 响应与 `policy-set` /
+ * `plugin-policy-persisted` 审计，**任何环节都不得出现 token 字面值**。
+ * 优先级：显式 Origin 同源（最能自证）→ `Sec-Fetch-Site: same-origin` → 宿主 token。
+ * 注意：调用方必须**先**用 `hasExplicitCrossOrigin` 拒显式跨源，再调本函数。
+ */
+export function successVia(req, token) {
+  const headers = req?.headers ?? {};
+  const origin = headers.origin;
+  const host = headers.host;
+  if (typeof origin === 'string' && origin !== '' && typeof host === 'string' && host !== '') {
+    try {
+      if (new URL(origin).host === host) return 'origin';
+    } catch {
+      /* Origin 不合法 → 继续看下一证 */
+    }
+  }
+  if (String(headers['sec-fetch-site'] ?? '').toLowerCase() === 'same-origin') return 'sec-fetch';
+  if (typeof token === 'string' && token !== '' && hasValidCsrf(req, token)) return 'token';
+  return null;
+}
+
 /** C31②：只接受 JSON 请求体（浏览器 fetch 会带 application/json）。 */
 function isJsonContentType(req) {
   const type = String(req?.headers?.['content-type'] ?? '').toLowerCase();
@@ -154,13 +178,12 @@ export function createSessionPolicyHandler({ writeSessionAt, resetSessionAt = nu
     }
     // C31③（需求 504cc15 按意图解释）：①合法 Origin ②Sec-Fetch-Site:same-origin ③宿主 token —— 三者任一即可。
     // 只拒"三者皆无"；loopback 强制已在上面，不变。
-    const tokenOk = typeof csrfToken === 'string' && csrfToken !== '' && hasValidCsrf(req, csrfToken);
-    const proof = tokenOk || isSameOriginRequest(req) === true;
-    if (proof !== true) {
+    // P5：`via` 记录**凭什么放行**（只记类型），随 200 响应与审计一起走，token 值不入日志/审计。
+    const via = successVia(req, csrfToken);
+    if (via === null) {
       send(403, { ok: false, error: 'missing-proof' });
       return;
     }
-    // C31②：只收 JSON。
     if (isJsonContentType(req) !== true) {
       send(415, { ok: false, error: 'json-required' });
       return;
@@ -193,9 +216,9 @@ export function createSessionPolicyHandler({ writeSessionAt, resetSessionAt = nu
     try {
       const result = wantsReset === true
         ? (typeof resetSessionAt === 'function'
-          ? await resetSessionAt({ sessionId })
+          ? await resetSessionAt({ sessionId, via })
           : { ok: false, error: 'reset-unavailable' })
-        : await writeSessionAt({ sessionId, at });
+        : await writeSessionAt({ sessionId, at, via });
       if (result?.ok !== true) {
         send(409, {
           ok: false,
@@ -204,7 +227,10 @@ export function createSessionPolicyHandler({ writeSessionAt, resetSessionAt = nu
         });
         return;
       }
-      send(200, wantsReset === true ? { ok: true, reset: true, source: 'plugin' } : { ok: true, at, source: 'session:A2' });
+      // P5：成功响应带 `via`（来源类型，不含 token），便于真机核对"哪一证放行"。
+      send(200, wantsReset === true
+        ? { ok: true, reset: true, source: 'plugin', via }
+        : { ok: true, at, source: 'session:A2', via });
     } catch (error) {
       try { onError?.(error); } catch { /* logger 自身失败不得影响响应 */ }
       send(500, { ok: false, error: 'internal' });
@@ -262,9 +288,9 @@ export function createPluginPolicyHandler({ writePluginAt, onError = null, maxBy
     }
     // C31③（需求 504cc15 按意图解释）：①合法 Origin ②Sec-Fetch-Site:same-origin ③宿主 token —— 三者任一即可。
     // 只拒"三者皆无"；loopback 强制已在上面，不变。
-    const tokenOk = typeof csrfToken === 'string' && csrfToken !== '' && hasValidCsrf(req, csrfToken);
-    const proof = tokenOk || isSameOriginRequest(req) === true;
-    if (proof !== true) {
+    // P5：`via` 记录**凭什么放行**（只记类型），随 200 响应与审计一起走，token 值不入日志/审计。
+    const via = successVia(req, csrfToken);
+    if (via === null) {
       send(403, { ok: false, error: 'missing-proof' });
       return;
     }
@@ -291,7 +317,7 @@ export function createPluginPolicyHandler({ writePluginAt, onError = null, maxBy
       return;
     }
     try {
-      const result = await writePluginAt({ at });
+      const result = await writePluginAt({ at, via });
       if (result?.ok !== true) {
         send(409, {
           ok: false,
@@ -300,7 +326,7 @@ export function createPluginPolicyHandler({ writePluginAt, onError = null, maxBy
         });
         return;
       }
-      send(200, { ok: true, at, source: 'plugin' });
+      send(200, { ok: true, at, source: 'plugin', via });
     } catch (error) {
       try { onError?.(error); } catch { /* logger 自身失败不得影响响应 */ }
       send(500, { ok: false, error: 'internal' });

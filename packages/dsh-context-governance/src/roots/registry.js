@@ -123,6 +123,8 @@ export class RootRegistry {
   #warnedLimit = false;
   #driftWarned = new Set();
   #unmanagedSeen = new Map();
+  /** rc.11：`no-session-id` 审计去重（cwd → 已记）——空会话反复探测不得刷审计。 */
+  #noSessionSeen = new Set();
   #unmanagedAudited = new Map();
 
   constructor({
@@ -200,6 +202,21 @@ export class RootRegistry {
     } catch {
       /* 根审计失败不影响登记 */
     }
+  }
+
+  /**
+   * rc.11（需求 `:454①`）：无 session id 的会话不得静默、更不得抛错。
+   * 每 cwd 只记一次（同一宿主可能反复用空会话探测），字段只有 cwd/reason，不含正文。
+   */
+  #noteNoSessionId(cwd) {
+    const key = typeof cwd === 'string' ? cwd : '';
+    if (this.#noSessionSeen.has(key)) return;
+    this.#noSessionSeen.add(key);
+    if (this.#noSessionSeen.size > 200) {
+      const first = this.#noSessionSeen.values().next().value;
+      if (first !== undefined) this.#noSessionSeen.delete(first);
+    }
+    this.#audit('no-session-id', { cwd: key, reason: 'no-session-id' });
   }
 
   #isManaged(entry) {
@@ -436,8 +453,15 @@ export class RootRegistry {
     const sid = sessionIdOf(session);
     const cwd = sessionCwd(session);
     const isSubagent = isSubagentSession(session);
-    const pinned = sid === null ? null : this.#pins.get(sid);
-    if (pinned !== undefined) {
+    // rc.11 修：无 session id 时旧实现 `pinned = null` 且判 `!== undefined` 成立 → 读
+    // `pinned.entry` 抛 TypeError（rc.10 真机 `root-guard-error{phase:resolve}`）。
+    // 现在显式收敛：不在会话作用域 → 不猜根、不崩，写 `no-session-id` 由上层显式处理。
+    if (sid === null || sid === '') {
+      this.#noteNoSessionId(cwd);
+      return { status: 'no-root', entry: null, source: null, isSubagent, cwd, reason: 'no-session-id' };
+    }
+    const pinned = this.#pins.get(sid);
+    if (pinned !== undefined && pinned !== null) {
       let drift = null;
       if (cwd !== '' && !cwdWithinRoot(cwd, pinned.entry.root)) {
         drift = { from: pinned.entry.root, cwd };

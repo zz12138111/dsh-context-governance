@@ -85,7 +85,7 @@ test('C29 ③：写路由支持 {reset:true} 且走 reset 链路（不是写值�
   const res = makeRes();
   await handler(req({ sessionId: 'session-c29', reset: true }), res);
   assert.equal(res.status, 200);
-  assert.deepEqual(JSON.parse(res.body), { ok: true, reset: true, source: 'plugin' });
+  assert.deepEqual(JSON.parse(res.body), { ok: true, reset: true, source: 'plugin', via: 'origin' });
   assert.deepEqual(calls.reset, [{ sessionId: 'session-c29' }]);
   assert.deepEqual(calls.set, [], 'reset 不得走写值路径');
 });

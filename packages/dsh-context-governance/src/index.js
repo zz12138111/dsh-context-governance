@@ -1390,10 +1390,10 @@ let policyState = buildPolicyState(mergePluginPolicy(config), {
     // C11③：会话级写路由（UI 保存 → A2）。只写会话层，校验/审计复用 `/cg set` 命令链。
     mountSessionPolicyRoute(ctx, {
       csrfToken,
-      resetSessionAt: async ({ sessionId }) => {
+      resetSessionAt: async ({ sessionId, via = null }) => {
         const writer = sessionWriteRef;
         if (writer === null || typeof writer.reset !== 'function') return { ok: false, error: 'command-unavailable' };
-        const result = await writer.reset({ sessionId });
+        const result = await writer.reset({ sessionId, via });
         if (result?.ok === true) {
           // 清完立刻刷新快照口径（chip/气泡回落 project/plugin）。
           try {
@@ -1403,10 +1403,10 @@ let policyState = buildPolicyState(mergePluginPolicy(config), {
         }
         return result;
       },
-      writeSessionAt: async ({ sessionId, at }) => {
+      writeSessionAt: async ({ sessionId, at, via = null }) => {
         const writer = sessionWriteRef;
         if (writer === null || typeof writer.setAt !== 'function') return { ok: false, error: 'command-unavailable' };
-        const result = await writer.setAt({ sessionId, at });
+        const result = await writer.setAt({ sessionId, at, via });
         // 写入成功后刷新快照口径：否则 chip/气泡刚保存完仍显示上一次解析的旧值。
         if (result?.ok === true) {
           try {
@@ -1423,10 +1423,10 @@ let policyState = buildPolicyState(mergePluginPolicy(config), {
     // 不依赖宿主 volatile 字段是否跨进程保留（那层只负责表单可编辑 / 即时投影）。
     mountPluginPolicyRoute(ctx, {
       csrfToken,
-      writePluginAt: ({ at }) => {
+      writePluginAt: ({ at, via = null }) => {
         const store = getPluginPolicyStore();
         if (store === null) return { ok: false, error: 'persist-unavailable' };
-        if (store.writeAt(at) !== true) return { ok: false, error: 'persist-failed' };
+        if (store.writeAt(at, via) !== true) return { ok: false, error: 'persist-failed' };
         try {
           rebuildPolicies();
         } catch (error) {
@@ -1719,7 +1719,11 @@ let policyState = buildPolicyState(mergePluginPolicy(config), {
       oldLimit: config.memoryHeader.oldLimit,
       onInjected: (built, injection = {}, info = {}) => {
         // P3：与 header-truncated 同根——按会话解析该会话根的审计，不写主根。
-        auditForSessionRoot(info.session ?? null)?.append?.('header-injected', headerInjectedFields(built, injection));
+        // P3-b：sessionId 随行落盘（两行 header 审计都要能按会话归因）。
+        const sessionId = typeof info?.sessionId === 'string' && info.sessionId !== ''
+          ? info.sessionId
+          : (typeof info?.session?.id === 'string' ? info.session.id : null);
+        auditForSessionRoot(info.session ?? null)?.append?.('header-injected', headerInjectedFields(built, injection, { sessionId }));
       },
     });
     if (header.registered) {
@@ -1824,20 +1828,20 @@ let policyState = buildPolicyState(mergePluginPolicy(config), {
     // 校验（下限 / 窗口上限 / <0.30 未确认）、审计（policy-set / policy-invalid）与 A1+A2 双写全部复用。
     sessionWriteRef = {
       // C29：恢复全局设置 = `/cg set reset` 同一条命令链（A1+A2 同清，桶不存在也清 A2）。
-      reset: async ({ sessionId }) => {
+      reset: async ({ sessionId, via = null }) => {
         const definition = commandRef.current?.definition ?? null;
         if (definition === null || typeof definition.handler !== 'function') {
           return { ok: false, error: 'command-unavailable' };
         }
         try {
-          const result = await definition.handler({ agent: { session: { id: sessionId } }, rawInput: 'set reset' });
+          const result = await definition.handler({ agent: { session: { id: sessionId } }, rawInput: 'set reset', via });
           if (result?.kind === 'success') return { ok: true, text: String(result.text ?? '') };
           return { ok: false, error: 'rejected', detail: String(result?.text ?? '').slice(0, 300) };
         } catch (error) {
           return { ok: false, error: 'internal', detail: String(error?.message ?? error).slice(0, 200) };
         }
       },
-      setAt: async ({ sessionId, at }) => {
+      setAt: async ({ sessionId, at, via = null }) => {
         const definition = commandRef.current?.definition ?? null;
         if (definition === null || typeof definition.handler !== 'function') {
           return { ok: false, error: 'command-unavailable' };
@@ -1847,6 +1851,7 @@ let policyState = buildPolicyState(mergePluginPolicy(config), {
           result = await definition.handler({
             agent: { session: { id: sessionId } },
             rawInput: `set compact.at=${at}`,
+            via,
           });
         } catch (error) {
           return { ok: false, error: 'internal', detail: String(error?.message ?? error).slice(0, 200) };

@@ -95,8 +95,8 @@ test('C11③ 写路由：合法 POST 调用会话写入口并回 session:A2', as
   const res = makeRes();
   await handler(makeReq({ body: { sessionId: 'ui-sess-1', at: 0.55 } }), res);
   assert.equal(res.status, 200);
-  assert.deepEqual(calls, [{ sessionId: 'ui-sess-1', at: 0.55 }]);
-  assert.deepEqual(json(res), { ok: true, at: 0.55, source: 'session:A2' });
+  assert.deepEqual(calls, [{ sessionId: 'ui-sess-1', at: 0.55, via: 'origin' }]);
+  assert.deepEqual(json(res), { ok: true, at: 0.55, source: 'session:A2', via: 'origin' });
   assert.equal(SESSION_POLICY_PATH, '/context-governance/session-policy');
 });
 

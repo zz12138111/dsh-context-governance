@@ -498,7 +498,11 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
     const tokens = String(argText ?? '').trim().split(/\s+/).filter(Boolean);
     const action = tokens[0] ?? 'show';
     if (action === 'show') {
-      const header = renderMemoryHeader(store, { audit: memoryAuditFor(audit) });
+      // P3-b：`memory show` 的截断审计同样带 sessionId，与 header 注入行同口径归因。
+      const header = renderMemoryHeader(store, {
+        audit: (event, details) => memoryAuditFor(audit)(event,
+          sessionId === null ? details : { ...details, sessionId }),
+      });
       const meta = store.meta();
       const lines = [
         'context-governance memory',
@@ -654,11 +658,16 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
     };
   };
   /** `/cg set key=value [key=value…] | /cg set reset`：会话层覆盖（最高优先级）。 */
-  const handleSet = (argText, sessionId = null) => {
+  const handleSet = (argText, sessionId = null, { via = null } = {}) => {
     const policy = policyFor(sessionId);
     const audit = auditFor(sessionId);
-    /** 本作用域的审计出口：sessionId 由 appendPolicySet 统一注入。 */
-    const emitPolicySet = (sink, details) => appendPolicySet(sink, sessionId, details);
+    /**
+     * 本作用域的审计出口：sessionId 由 appendPolicySet 统一注入。
+     * P5：UI 写入口（chip/气泡/设置页）走命令链时必须带 `via`（origin|sec-fetch|token），
+     * 否则真机无法回溯"哪一证放行"；token 值本身永不进审计。
+     */
+    const emitPolicySet = (sink, details) => appendPolicySet(sink, sessionId,
+      typeof via === 'string' && via !== '' ? { ...details, via } : details);
     if (policy === null || typeof policy.resolve !== 'function' || typeof policy.sessionValues !== 'function') {
       return { kind: 'error', text: '[context-governance] session layer is unavailable (policy not wired)' };
     }
@@ -960,7 +969,10 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
       }
       if (raw === 'set' || raw.startsWith('set ') || raw === 'reset') {
         try {
-          return handleSet(raw === 'reset' ? 'reset' : raw.slice(3).trim(), sessionId);
+          // P5：UI 写入口经 sessionWriteRef 调用本命令时带 `via`（来源类型），透传到 policy-set 审计。
+        return handleSet(raw === 'reset' ? 'reset' : raw.slice(3).trim(), sessionId, {
+          via: typeof invocation?.via === 'string' && invocation.via !== '' ? invocation.via : null,
+        });
         } catch (error) {
           return {
             kind: 'error',

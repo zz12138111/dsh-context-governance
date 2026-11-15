@@ -195,6 +195,10 @@ export const AUDIT_FIELD_WHITELIST = Object.freeze({
   value: 'text',
   // M1.2：能力探测双行只记服务名/类型，不记值。
   probe: 'text-array',
+  // P5（rc.11）：写入口成功凭据来源类型（origin|sec-fetch|token）——**只记类型，不记 token 值**。
+  via: 'text',
+  // P3-a（rc.11）：header 注入的条目数（与 `lines`=实际行数分账，两者都要落盘）。
+  pointers: 'number',
 });
 
 /** 已知审计事件（T5 正式化清单；未知事件仍记录，但只能带白名单字段）。 */
