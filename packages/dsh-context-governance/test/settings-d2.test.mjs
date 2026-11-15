@@ -579,7 +579,9 @@ test('C21 结构/关闭/无障碍/默认值来源：U2/U6/U7/U8/U10', async () =
   assert.match(source, /role: 'alert'/);
   assert.match(source, /aria-live/);
   assert.match(source, /var\(--[\w-]+, /, 'U10：CSS 变量必须带 fallback');
-  assert.match(source, /restoreDefault = \(\) => \{ setDraft/, 'U6：恢复默认只填值不保存');
+  // B14（rc.18a）：用户要求删除「恢复默认」按钮，U6 的"只填值不保存"随之取消——改为负向断言。
+  assert.equal(/restoreDefault/.test(source), false, 'B14：恢复默认按钮与其处理函数都已删除');
+  assert.equal(source.includes('footer-restore'), false, 'B14：footer 不得再有恢复默认按钮');
 });
 
 test('C22 输入清洗：全角/百分号/空格归一；非法不落到 set', async () => {

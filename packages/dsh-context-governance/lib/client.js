@@ -952,7 +952,6 @@ window.__ModuleLoader__.load({
         const result = computeSave(draft, view ?? {});
         setError(result.ok === true ? '' : result.reason);
       };
-      const restoreDefault = () => { setDraft(String(defaultPercentFor(view ?? null))); setError(''); };
       // C29：恢复全局设置（清本会话 A1+A2 → 回落 project/plugin），与服务端 /cg set reset 同一链路。
       const resetToGlobal = async () => {
         const result = await resetSessionAt({ sessionId });
@@ -1005,7 +1004,6 @@ window.__ModuleLoader__.load({
             onKeyDown: (event) => { if (event?.key === 'Enter') { event.preventDefault?.(); save(); } if (event?.key === 'Escape') { close(); } },
           }),
           h('span', { key: 'footer-unit', style: { ...S.metaLine, flexShrink: 0 } }, labels.unit),
-          h('button', { key: 'footer-restore', type: 'button', style: { ...S.button, ...S.popoverFooterButton }, onClick: restoreDefault, disabled: !canSaveSession }, `${labels.restore} ${model.defaultPercent}%`),
           h('button', {
             key: 'footer-reset-global',
             type: 'button',
