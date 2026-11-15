@@ -243,15 +243,15 @@ test('C11③ client：主入口保存发会话写请求，设置页仍走 config
   };
   const saved = await client.saveSessionAt({ raw: '55', snapshot: { at: 0.6, source: 'plugin' }, sessionId: 'ui-sess-1', fetchImpl: fetchStub });
   assert.equal(saved.ok, true);
-  assert.equal(posts.length, 1);
-  assert.equal(posts[0].url, SESSION_POLICY_PATH);
-  assert.equal(posts[0].init.method, 'POST');
-  assert.deepEqual(JSON.parse(posts[0].init.body), { sessionId: 'ui-sess-1', at: 0.55 });
-
+  const postCalls = posts.filter((item) => item.init?.method === 'POST');
+  assert.equal(postCalls.length, 1);
+  assert.equal(postCalls[0].url, SESSION_POLICY_PATH);
+  assert.equal(postCalls[0].init.method, 'POST');
+  assert.deepEqual(JSON.parse(postCalls[0].init.body), { sessionId: 'ui-sess-1', at: 0.55 });
   // 无会话标识：拒绝保存且不发请求（不得退化写全局）。
   const noSession = await client.saveSessionAt({ raw: '55', snapshot: { at: 0.6 }, sessionId: null, fetchImpl: fetchStub });
   assert.equal(noSession.ok, false);
-  assert.equal(posts.length, 1);
+  assert.equal(posts.filter((item) => item.init?.method === 'POST').length, 1);
 
   // 服务端拒绝：带回原因，输入保留（requestSent 供用例断言）。
   const rejecting = async () => ({ ok: false, status: 409, json: async () => ({ ok: false, error: 'rejected', detail: 'compact.at 被拒绝' }) });

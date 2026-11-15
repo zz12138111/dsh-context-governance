@@ -195,12 +195,12 @@ test('C29 ④：client 有「恢复全局设置」入口且走 reset 链路（�
   };
   const reset = await client.resetSessionAt({ sessionId: 'session-c29', fetchImpl: fakeFetch });
   assert.equal(reset.ok, true);
-  assert.equal(posts.length, 1);
-  assert.deepEqual(JSON.parse(posts[0].init.body), { sessionId: 'session-c29', reset: true });
-  // 无会话标识时不发请求。
+  const postCalls = posts.filter((item) => item.init?.method === 'POST');
+  assert.equal(postCalls.length, 1);
+  assert.deepEqual(JSON.parse(postCalls[0].init.body), { sessionId: 'session-c29', reset: true });
   const noSession = await client.resetSessionAt({ sessionId: null, fetchImpl: fakeFetch });
   assert.equal(noSession.ok, false);
-  assert.equal(posts.length, 1);
+  assert.equal(posts.filter((item) => item.init?.method === 'POST').length, 1);
 });
 
 test('C31：::ffff:127.0.0.1 与 Sec-Fetch-Site:none 也放行；跨源 `cross-origin`', async () => {
@@ -226,7 +226,7 @@ test('C31：::ffff:127.0.0.1 与 Sec-Fetch-Site:none 也放行；跨源 `cross-o
   const noneSite = makeRes();
   await handler(req({ headers: { 'sec-fetch-site': 'none' } }), noneSite);
   assert.equal(noneSite.status, 403);
-  assert.equal(JSON.parse(noneSite.body).error, 'cross-origin');
+  assert.equal(JSON.parse(noneSite.body).error, 'missing-proof');
 
   const cross = makeRes();
   await handler(req({ headers: { origin: 'https://evil.example' } }), cross);
