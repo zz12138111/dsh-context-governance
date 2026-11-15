@@ -239,10 +239,10 @@ test('0.2.0 /cg set：会话层覆盖最高优先级，policy show 可见', asyn
   const set = await command.handler({ rawInput: 'set compact.at=0.55' });
   assert.equal(set.kind, 'success');
   assert.match(set.text, /applied: compact\.at=0\.55/);
-  assert.match(set.text, /source=session/);
+  assert.match(set.text, /source=session:A1/);
   const show = await command.handler({ rawInput: 'policy show' });
   assert.match(show.text, /layers: plugin -> project \(empty\) -> session/);
-  assert.match(show.text, /compact\.at=0\.55 \(source=session\)/);
+  assert.match(show.text, /compact\.at=0\.55 \(source=session:A1\)/);
   assert.match(show.text, /session: compact\.at=0\.55/);
 });
 

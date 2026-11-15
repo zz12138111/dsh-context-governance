@@ -178,7 +178,7 @@ test('1b：会话显式 /cg set compact.at=0.50 赢过 profile review', async ()
   const set = await command.handler({ rawInput: 'set compact.at=0.50', agent: { session: { id: SID_A } } });
   assert.equal(set.kind, 'success');
   assert.equal(state.resolve(SID_A).values['compact.at'], 0.50);
-  assert.equal(state.resolve(SID_A).sources['compact.at'], 'session');
+  assert.equal(state.resolve(SID_A).sources['compact.at'], 'session:A1');
 });
 
 test('1b：/cg set profile= 仍按未知键拒绝（唯一入口是 /cg profile）', async () => {

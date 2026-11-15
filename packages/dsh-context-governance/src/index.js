@@ -18,6 +18,7 @@ import { MEMORY_ROOT_REL, memoryRootFor, resolveDiagnosticsPath, userLevelDir } 
 import { RootRegistry } from './roots/registry.js';
 import { RootStorePool } from './roots/store-pool.js';
 import { POLICY_FILE_MAX_BYTES, WINDOW_USABLE_MARGIN, atExceedsUsableWindow, nativeFromWindow, nativeRatio, profileLayer, resolvePolicy, shortSessionId, usableAtCeiling, validateLayer } from './policy.js';
+import { createA2Store } from './a2-store.js';
 import { detectHostVersion, normalizeBackendVersion } from './compress/adapters.js';
 import { CompressionGuard } from './compress/runtime.js';
 import { RootGuardPool } from './compress/root-guards.js';
@@ -338,6 +339,10 @@ export async function openStore(config, options = {}) {
  * @param {{readFile?: (file: string) => string, statSize?: (file: string) => number}} [deps]
  */
 export function buildPolicyState(config, deps = {}) {
+  // C36 ④：A2 持久会话层（由 apply 注入；单测可注入假 store）。
+  const a2Store = deps.a2Store ?? null;
+  const onPolicyResolved = typeof deps.onPolicyResolved === 'function' ? deps.onPolicyResolved : null;
+  const resolvedSeen = new Map();
   const realFs = typeof deps.readFile !== 'function';
   const readFile = typeof deps.readFile === 'function' ? deps.readFile : (target) => fs.readFileSync(target, 'utf8');
   const statSize = typeof deps.statSize === 'function'
@@ -387,7 +392,25 @@ export function buildPolicyState(config, deps = {}) {
     if (typeof sessionId !== 'string' || sessionId === '') return null;
     let entry = sessionLayers.get(sessionId);
     if (entry === undefined && create) {
-      entry = { values: {}, profile: null };
+      // C36 ④：会话层值对象带 A2 副作用——写 `compact.at` 即持久到 A2（UI 保存与 /cg set 同源），
+      // 删除即清 A2；A1（本对象）仍优先于 A2，重启后只剩 A2。
+      const baseValues = {};
+      const values = new Proxy(baseValues, {
+        set(target, key, value) {
+          if (key === 'compact.at' && a2Store !== null) {
+            const numeric = Number(value);
+            if (Number.isFinite(numeric) && numeric >= 0 && numeric <= 1) a2Store.write(sessionId, numeric);
+          }
+          target[key] = value;
+          return true;
+        },
+        deleteProperty(target, key) {
+          if (key === 'compact.at' && a2Store !== null) a2Store.clear(sessionId);
+          delete target[key];
+          return true;
+        },
+      });
+      entry = { values, profile: null };
       sessionLayers.set(sessionId, entry);
     }
     return entry ?? null;
@@ -433,10 +456,14 @@ export function buildPolicyState(config, deps = {}) {
     const effectiveProfile = sessionProfile ?? config.policy.profile;
     const effectiveProfileLayer = profileLayer(effectiveProfile);
     const baseLayers = layers.filter((layer) => !String(layer.source).startsWith('profile='));
-    const sessionLayer = { source: 'session', values: sessionValuesFor(sessionId) };
+    // C36 ③：层级 A1（运行时）> A2（会话持久）> cwd（项目）> plugin（全局）。
+    const a2Entry = a2Store === null ? null : a2Store.read(sessionId);
+    const a2Layer = { source: 'session:A2', values: a2Entry === null ? {} : { 'compact.at': a2Entry.at } };
+    const sessionLayer = { source: 'session:A1', values: sessionValuesFor(sessionId) };
     const filtered = [
       ...(effectiveProfileLayer === null ? [] : [effectiveProfileLayer]),
       ...baseLayers,
+      a2Layer,
       sessionLayer,
     ].map((layer) => {
       const values = { ...layer.values };
@@ -506,6 +533,25 @@ export function buildPolicyState(config, deps = {}) {
       ceiling: degenerate ? null : usableAtCeiling(checkNative),
       margin: WINDOW_USABLE_MARGIN,
     };
+    // C36 ③：policy-resolved 审计（source 字面 session:A1/session:A2/project/plugin；每会话按 source|at 去重）。
+    const atSource = resolved.sources?.['compact.at'] ?? 'builtin';
+    const effectiveAtForAudit = resolved.values['compact.at'];
+    if (onPolicyResolved !== null) {
+      const seenKey = `${atSource}|${effectiveAtForAudit}`;
+      const dedupeKey = `${sessionId ?? ''}`;
+      if (resolvedSeen.get(dedupeKey) !== seenKey) {
+        resolvedSeen.set(dedupeKey, seenKey);
+        if (resolvedSeen.size > 1000) {
+          const first = resolvedSeen.keys().next().value;
+          if (first !== undefined) resolvedSeen.delete(first);
+        }
+        try {
+          onPolicyResolved({ sessionId: sessionId ?? null, at: effectiveAtForAudit, source: atSource });
+        } catch {
+          /* 审计失败不影响解析 */
+        }
+      }
+    }
     return {
       ...resolved,
       earlyWindow,
@@ -539,10 +585,12 @@ export function buildPolicyState(config, deps = {}) {
     native,
     layers,
     invalid,
+    /** C36 ④：读该会话的 A2 持久值（无则 null；供 status/测试）。 */
+    a2For: (sessionId) => (a2Store === null ? null : a2Store.read(sessionId)),
     /** 1a：按会话读取覆盖值（create=false 不建桶；命令写入时 create=true）。 */
     sessionValues: sessionValuesFor,
     /** 1a：按会话取“会话层”形状（供 resolve/展示复用）。 */
-    sessionLayerFor: (sessionId) => ({ source: 'session', values: sessionValuesFor(sessionId) }),
+    sessionLayerFor: (sessionId) => ({ source: 'session:A1', values: sessionValuesFor(sessionId) }),
     /** 1b：按会话 profile 覆盖值（无则 null；不读全局）。 */
     sessionProfileFor,
     /** 1b：写会话 profile（null/'' = 清除；重启不持久）。 */
@@ -764,7 +812,24 @@ export async function apply(ctx, rawConfig = {}) {
     if (config.project === '') config.project = attachEntry?.project ?? path.basename(root);
     // 策略链只在 attach 时算：profile 标签 → 插件配置 → 项目 .cg-policy.json（命令侧只读它）。
     // 1.1.0 D2：设置页的 volatile 字段 `policy.at` 合入 plugin 层（实时读 `.get()`）。
-    let policyState = buildPolicyState(mergeSettingsAt(config));
+    // C36 ④：A2 会话持久层落在用户级 ~/.dsh/context-governance/session-policy.json。
+const a2File = path.join(process.env.USERPROFILE ?? process.env.HOME ?? '', '.dsh', 'context-governance', 'session-policy.json');
+// C36：A2/policy-resolved 事件写根审计（用户级，只读根审计也能落）。
+let a2AuditSink = (event, details) => {
+  try {
+    if (rootAudit?.append?.(event, details) === true) return;
+  } catch {
+    /* 审计失败不影响策略 */
+  }
+  ctx.logger?.info?.(`[context-governance] ${event}: ${JSON.stringify(details)}`);
+};
+const a2Store = createA2Store({ file: a2File, logger: ctx.logger, audit: (event, details) => a2AuditSink(event, details) });
+let policyState = buildPolicyState(mergeSettingsAt(config), {
+  a2Store,
+  onPolicyResolved: ({ sessionId, at, source }) => {
+    a2AuditSink('policy-resolved', { sessionId, at, source });
+  },
+});
     // P1：唯一归域入口 = registry（只主根 managed；其余 unmanaged/no-root 直接跳过）。
     const scopeOf = (session) => {
       if (registry === null) {
@@ -992,7 +1057,12 @@ export async function apply(ctx, rawConfig = {}) {
     if (hasSettingsService && typeof ctx.on === 'function') {
       ctx.on('app-boot/config-reload', () => {
         try {
-          policyState = buildPolicyState(mergeSettingsAt(config));
+          policyState = buildPolicyState(mergeSettingsAt(config), {
+  a2Store,
+  onPolicyResolved: ({ sessionId, at, source }) => {
+    a2AuditSink('policy-resolved', { sessionId, at, source });
+  },
+});
           for (const [rootId, rootConfig] of policyConfigs) {
             const next = buildPolicyState(mergeSettingsAt(rootConfig));
             policyCache.set(rootId, next);

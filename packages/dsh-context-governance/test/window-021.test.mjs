@@ -157,7 +157,7 @@ test('0.2.1 动态 native + conservative 校验：1M/128k 双会话下 at=0.6 �
   assert.equal(resolved.values['compact.at'], 0.30, '越界层被拒后回落到下一层');
   assert.equal(resolved.sources['compact.at'], 'plugin');
   assert.ok(resolved.invalid.some((item) =>
-    item.source === 'session' && item.reason === 'window-shrunk' && item.key === 'compact.at'));
+    String(item.source).startsWith('session') && item.reason === 'window-shrunk' && item.key === 'compact.at'));
   // 同一份 native 函数：status 的 pressure 分母也用 current
   assert.equal(resolved.window.currentTokens, 1_048_576);
 });
@@ -203,7 +203,7 @@ test('0.2.1 无观察：窗口 unknown + 允许设 at 但状态标未校验；�
   const set = await command.handler({ rawInput: 'set compact.at=0.5' });
   assert.equal(set.kind, 'success', '无观察时允许设 at');
   const show = await command.handler({ rawInput: 'policy show' });
-  assert.match(show.text, /compact\.at=0\.5 \(source=session\)/);
+  assert.match(show.text, /compact\.at=0\.5 \(source=session:A1\)/);
 });
 
 test('0.2.1 /cg set：有保守窗口时按 conservative 校验（0.55 > 0.375 被拒）', async () => {
@@ -266,7 +266,7 @@ test('0.2.1 退化口径 A（DEC-68）：W=128k O=256k → native unknown、at �
   assert.equal(resolved.window.nativeConservative, null);
   assert.equal(resolved.values['compact.at'], 0.60, '继承值保留但标 unverified-degenerate');
   assert.equal(state.validationNative(), null, '退化时校验 native 是 unknown（拒绝设置）');
-  assert.ok(resolved.invalid.some((item) => item.source === 'session' && item.reason === 'native-uncomputable'));
+  assert.ok(resolved.invalid.some((item) => String(item.source).startsWith('session') && item.reason === 'native-uncomputable'));
   assert.ok(resolved.invalid.some((item) => item.source === 'plugin' && item.reason === 'native-uncomputable'));
   const line = summarizeWindow(resolved.window);
   assert.match(line, /unknown \(degenerate: W=128k O=256k\)/);
@@ -283,7 +283,7 @@ test('0.2.1 退化口径 A（DEC-68）：W=128k O=256k → native unknown、at �
   const recovered = state.resolve(SESSION);
   assert.equal(recovered.window.degenerate, false);
   assert.equal(recovered.values['compact.at'], 0.6, '恢复后会话层 0.6 生效');
-  assert.equal(recovered.sources['compact.at'], 'session');
+  assert.equal(recovered.sources['compact.at'], 'session:A1');
   assert.ok(recovered.window.native > 0.6);
 });
 

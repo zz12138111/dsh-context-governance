@@ -75,7 +75,8 @@ function rejectedSessionKeys(resolved) {
     'over-native-runtime',
   ]);
   for (const item of resolved?.invalid ?? []) {
-    if (item?.source !== 'session' || item?.key !== 'compact.at') continue;
+    // C36：A1 层 source 现为 session:A1（兼容历史 session）。
+    if (!String(item?.source).startsWith('session') || item?.key !== 'compact.at') continue;
     if (reasonSet.has(item.reason)) keys.add('compact.at');
   }
   return keys;
@@ -542,7 +543,8 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
     const resolved = policy.resolve(sessionId);
     // P3-2：只判本次会话层引入的未确认（配置层本来就 0.25 时，不该连 /cg set compact.early 都挡住）。
     const blocking = resolved.invalid.find(
-      (item) => item.reason === 'low-threshold-unacked' && item.source === 'session',
+      // C36：A1 层 source 现为 session:A1（历史值 session 兼容）。
+      (item) => item.reason === 'low-threshold-unacked' && String(item.source).startsWith('session'),
     );
     if (blocking !== undefined) {
       for (const key of Object.keys(bucket)) delete bucket[key];

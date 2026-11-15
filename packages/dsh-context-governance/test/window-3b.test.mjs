@@ -89,7 +89,7 @@ test('3b /cg set：高于可用界拒绝 above-effective-window、不建桶、�
   assert.equal(rejected[0].source, 'session');
   assert.equal(rejected[0].reason, 'above-effective-window');
   const resolved = state.resolve(SESSION);
-  assert.ok(resolved.invalid.some((item) => item.source === 'session' && item.reason === 'above-effective-window'));
+  assert.ok(resolved.invalid.some((item) => String(item.source).startsWith('session') && item.reason === 'above-effective-window'));
 });
 
 test('3b 运行时收缩：合法层落入非可用区间 → 该层失效（window-shrunk），回落下一层', () => {
@@ -104,7 +104,7 @@ test('3b 运行时收缩：合法层落入非可用区间 → 该层失效（win
   const shrunk = state.resolve(SESSION);
   assert.equal(shrunk.values['compact.at'], 0.30, '越界层被拒后回落到下一层');
   assert.ok(shrunk.invalid.some((item) =>
-    item.source === 'session' && item.reason === 'window-shrunk' && item.key === 'compact.at'));
+    String(item.source).startsWith('session') && item.reason === 'window-shrunk' && item.key === 'compact.at'));
   assert.equal(shrunk.invalid.some((item) => item.reason === 'over-native-runtime'), false, '不再新写旧 reason');
 });
 

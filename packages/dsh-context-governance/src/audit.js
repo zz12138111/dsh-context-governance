@@ -100,6 +100,9 @@ export const AUDIT_FIELD_WHITELIST = Object.freeze({
   dedupedIds: 'id-array',
   missingIds: 'id-array',
   requested: 'number',
+  /** C36 ③：policy-resolved 的最终 at 与 A2 条目数。 */
+  at: 'number',
+  entries: 'number',
   missing: 'number',
   kinds: 'text-array',
   reason: 'text',
@@ -272,6 +275,11 @@ export const AUDIT_EVENTS = Object.freeze([
   'root-guard-disposed',
   /** C36 ⑤：会话无可用根（空/不可读/不可写 cwd）——仍受治，根归属标 root-unresolved。 */
   'session-governed',
+  /** C36 ④：A2 持久会话层淘汰（TTL/上限）与装载失败（损坏/未知版本）。 */
+  'a2-evicted',
+  'a2-load-failed',
+  /** C36 ③：策略解析来源审计（source 字面 session:A1/session:A2/project/plugin）。 */
+  'policy-resolved',
   'root-unresolved',
   'root-guard-error',
   'root-guard-limit-warn',

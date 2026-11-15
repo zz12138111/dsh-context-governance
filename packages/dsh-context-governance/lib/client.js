@@ -64,7 +64,13 @@ window.__ModuleLoader__.load({
 
     const toPercentText = (at) => (Number.isFinite(at) ? `${Math.round(Number(at) * 100)}%` : '—');
 
-    const effectiveTextFor = (source) => (source === 'session' ? '本会话有效，重启后失效' : '保存后生效、重启仍有效');
+    // C36：source 字面 session:A1（临时）/ session:A2（已保存，重启保留）/ project / plugin。
+const effectiveTextFor = (source) => {
+  const key = String(source ?? '');
+  if (key === 'session:A2') return '本会话已保存，重启保留';
+  if (key === 'session' || key === 'session:A1') return '本会话有效，重启后失效';
+  return '保存后生效、重启仍有效';
+};
     const WRITE_LAYER = '本次修改写入：plugin 层（profile patch）';
 
     /** 默认值单一来源 = 快照 `defaultAt`；缺字段才 fallback 并 **只 warn 一次**（模块级 flag，防刷屏）。 */

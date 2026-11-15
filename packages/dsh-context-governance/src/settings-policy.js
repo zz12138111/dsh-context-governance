@@ -17,9 +17,15 @@ import { POLICY_DEFAULTS } from './policy.js';
 export const PERSISTENT_LIFECYCLE_TEXT = '保存后生效、重启仍有效';
 export const SESSION_LIFECYCLE_TEXT = '本会话有效，重启后失效';
 
-/** 按来源层派生生命周期文案。 */
+/** C36：A2 持久会话层文案（重启保留）。 */
+export const SESSION_A2_LIFECYCLE_TEXT = '本会话已保存，重启保留';
+
+/** 按来源层派生生命周期文案（C36：session:A1=临时，session:A2=已保存）。 */
 export function lifecycleText(source) {
-  return source === 'session' ? SESSION_LIFECYCLE_TEXT : PERSISTENT_LIFECYCLE_TEXT;
+  const key = String(source ?? '');
+  if (key === 'session:A2') return SESSION_A2_LIFECYCLE_TEXT;
+  if (key === 'session' || key === 'session:A1') return SESSION_LIFECYCLE_TEXT;
+  return PERSISTENT_LIFECYCLE_TEXT;
 }
 
 /** 写入层静态文案（C11）：UI 只有一个写入口（profile Cordis patch → plugin 配置层）。 */
