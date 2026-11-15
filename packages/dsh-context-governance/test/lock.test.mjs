@@ -44,7 +44,7 @@ test('活进程持有的锁拒绝第二个写者，并给出 holder', async () =
     assert.equal(third.ok, true);
     await third.release();
   } finally {
-    await fs.rm(rootDir, { recursive: true, force: true });
+    await fs.rm(rootDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 30 });
   }
 });
 
@@ -58,7 +58,7 @@ test('损坏的锁文件不阻塞启动，覆盖前留 .bak', async () => {
     assert.equal(bak, 'not json');
     await acquired.release();
   } finally {
-    await fs.rm(rootDir, { recursive: true, force: true });
+    await fs.rm(rootDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 30 });
   }
 });
 
@@ -78,7 +78,7 @@ test('release 不会误删别人的锁', async () => {
     assert.notEqual(current.lock, null);
     assert.equal(current.lock.pid, 2147483647);
   } finally {
-    await fs.rm(rootDir, { recursive: true, force: true });
+    await fs.rm(rootDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 30 });
   }
 });
 
@@ -88,7 +88,7 @@ test('MemoryStore 使用的锁文件在 close 后删除', async () => {
   assert.ok(await fs.stat(path.join(rootDir, LOCK_FILE_NAME)).then(() => true, () => false));
   await store.close();
   assert.equal(await fs.stat(path.join(rootDir, LOCK_FILE_NAME)).then(() => true, () => false), false);
-  await fs.rm(rootDir, { recursive: true, force: true });
+  await fs.rm(rootDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 30 });
 });
 
 // rc.2：陈旧写者锁自愈（EPERM/超龄 + 心跳停摆），回收必须给 reclaimed 诊断。
@@ -115,7 +115,7 @@ test('rc.2 EPERM 且锁龄超阈值：回收锁并给 reclaimed 诊断', async (
     assert.equal(JSON.parse(stale).pid, 35560);
     await acquired.release();
   } finally {
-    await fs.rm(rootDir, { recursive: true, force: true });
+    await fs.rm(rootDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 30 });
   }
 });
 
@@ -134,7 +134,7 @@ test('rc.2 EPERM 但锁很新：不回收，仍返回 holder', async () => {
     assert.equal(acquired.holder.pid, 35560);
     assert.equal(acquired.reclaimed, undefined);
   } finally {
-    await fs.rm(rootDir, { recursive: true, force: true });
+    await fs.rm(rootDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 30 });
   }
 });
 
@@ -155,7 +155,7 @@ test('rc.2 可探测存活但心跳停摆超阈值（pid 复用）：回收，re
     assert.equal(acquired.reclaimed.reason, 'heartbeat-stale');
     await acquired.release();
   } finally {
-    await fs.rm(rootDir, { recursive: true, force: true });
+    await fs.rm(rootDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 30 });
   }
 });
 
@@ -175,7 +175,7 @@ test('rc.2 活写者心跳新鲜：不回收（即使锁龄很长）', async () 
     assert.equal(acquired.ok, false);
     assert.equal(acquired.holder.pid, 4242);
   } finally {
-    await fs.rm(rootDir, { recursive: true, force: true });
+    await fs.rm(rootDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 30 });
   }
 });
 
@@ -191,7 +191,7 @@ test('rc.2 心跳：持锁期间锁文件 heartbeatAt 会被刷新，release 后
     await acquired.release();
     assert.equal((await readWriterLock(rootDir)).lock, null);
   } finally {
-    await fs.rm(rootDir, { recursive: true, force: true });
+    await fs.rm(rootDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 30 });
   }
 });
 
@@ -211,6 +211,6 @@ test('rc.2 MemoryStore.open 回收死进程锁：status.lockReclaimed + warning 
     assert.equal(store.warnings.some((warning) => warning.includes('stale writer lock reclaimed')), true);
   } finally {
     await store.close();
-    await fs.rm(rootDir, { recursive: true, force: true });
+    await fs.rm(rootDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 30 });
   }
 });
