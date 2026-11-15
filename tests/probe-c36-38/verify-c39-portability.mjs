@@ -286,6 +286,12 @@ try {
   const statusPathsOk = statusText.includes(extHome) || statusText.includes(extHome.replace(/\\/g, '/'));
   check('C39-2-status-shows-resolved-paths', statusPathsOk,
     `statusLines=${JSON.stringify(statusText.split('\n').filter((line) => /user-store|root-audit|persistence-identity/.test(line)).map((line) => line.slice(0, 160)))}`);
+  // ② 落盘位置一律由宿主推导：status 的 user-store 必须等于 <profileContext.home>/context-governance
+  const userStoreLine = statusText.split('\n').find((line) => line.startsWith('user-store:')) ?? '';
+  const userStoreNormalized = userStoreLine.replace(/\//g, '\\');
+  check('C39-2-status-user-store-equals-derived-base',
+    userStoreNormalized.includes(path.join(extHome, 'context-governance')),
+    `line=${userStoreLine.slice(0, 200)} expected=${path.join(extHome, 'context-governance')}`);
   // 落盘文件里不得出现本机机器绑定路径（全部绝对路径应指向 temp base）
   const machineLeak = [];
   const outsideBase = [];
@@ -392,11 +398,6 @@ try {
     })(noneCase, 6);
     check('C39-4-empty-base-zero-user-store-dirs', strayDirs.length === 0,
       `stray=${JSON.stringify(strayDirs)}（cwd/配置根/temp 下不得新建 .dsh 或 context-governance）`);
-    // 审计行：身份不可得 → 没有用户级审计目标（root-audit 由 profileContext 推导）；有则必须落一行。
-    const userAuditFiles = walkAudit(noneCase).filter((file) => file.includes('context-governance'));
-    const auditRow = readRows(noneCase).find((row) => row.event === 'user-store-unavailable');
-    if (userAuditFiles.length === 0) skip('C39-4-empty-base-audit-row', '身份不可得 → 无用户级审计目标（root-audit 需 profileContext）；status 已显式，审计行记未覆盖');
-    else check('C39-4-empty-base-audit-row', auditRow !== undefined, `user-store-unavailable=${auditRow !== undefined} userAuditFiles=${userAuditFiles.length}`);
     // 审核口径：该状态下 `/cg set` 仍按 A1 临时生效、不报错（无持久层是预期）
     const setText = String((await cg.handler({ rawInput: 'set compact.at=0.5', agent: { session: { id: sid, cwd: proj } } })).text ?? '');
     check('C39-4-empty-base-set-still-works-a1', /applied:\s*compact\.at=0\.5(?:0)?/.test(setText),
@@ -416,6 +417,37 @@ try {
     const realLeak = findSessionDirOnDisk(path.join(realHome, 'context-governance'), sid) !== null;
     check('C39-4-empty-base-memory-no-write', cwdLeak && !realLeak,
       `cwdLeak=${!cwdLeak} realLeak=${realLeak}`);
+    // 空基座审计（00 约束：不得落 cwd / 用户级目录）：身份不可得 → 用户级审计不可用，
+    // 唯一可落点 = 根内 `<root>/memory/governance/audit.jsonl`；且进程内只写一次（多打几条命令仍 1 行）。
+    await cg.handler({ rawInput: 'status', agent: { session: { id: sid, cwd: proj } } });
+    await cg.handler({ rawInput: 'memory show', agent: { session: { id: sid, cwd: proj } } });
+    const unavailableRows = [];
+    for (const file of walkAudit(noneCase)) {
+      for (const line of readTextSafe(file).split(/\r?\n/)) {
+        if (!line.includes('user-store-unavailable')) continue;
+        try {
+          const row = JSON.parse(line);
+          if (row.event === 'user-store-unavailable') unavailableRows.push({ file, row });
+        } catch { /* 非 JSON 行：跳过 */ }
+      }
+    }
+    const locations = unavailableRows.map((item) => path.relative(noneCase, item.file).replace(/\\/g, '/'));
+    const badLocation = locations.filter((rel) => /(^|\/)\.dsh\/|(^|\/)context-governance\//.test(rel) || rel.startsWith('cwd/'));
+    check('C39-4-empty-base-audit-row', unavailableRows.length === 1 && badLocation.length === 0,
+      `rows=${unavailableRows.length} where=${JSON.stringify(locations)} bad=${JSON.stringify(badLocation)}（期望恰 1 行，落根审计，不落 cwd/用户级）`);
+    // 只写一次：再打同命令不新增行（进程内单次）
+    await cg.handler({ rawInput: 'memory show', agent: { session: { id: sid, cwd: proj } } });
+    const countUnavailable = () => {
+      let count = 0;
+      for (const file of walkAudit(noneCase)) {
+        for (const line of readTextSafe(file).split(/\r?\n/)) {
+          if (!line.includes('user-store-unavailable')) continue;
+          try { if (JSON.parse(line).event === 'user-store-unavailable') count += 1; } catch { /* skip */ }
+        }
+      }
+      return count;
+    };
+    check('C39-4-empty-base-audit-once', countUnavailable() === 1, `afterExtraCommands rows=${countUnavailable()}（期望 1，进程内只写一次）`);
   } catch (error) {
     check('C39-4-empty-base-apply', false, `apply 抛错：${String(error?.stack ?? error).slice(0, 400)}`);
   } finally {
@@ -585,6 +617,7 @@ fs.rmSync(base, { recursive: true, force: true, maxRetries: 5 });
 
 const failed = results.filter((item) => !item.ok);
 const skipped = results.filter((item) => item.skip);
-console.log(`\nC39 外发可移植性 TOTAL ${results.length - failed.length - 0}/${results.length} PASS · SKIP ${skipped.length} · FAIL ${failed.length}`);
+const passed = results.length - failed.length - skipped.length;
+console.log(`\nC39 外发可移植性 TOTAL ${results.length} 项 · PASS ${passed} · SKIP ${skipped.length} · FAIL ${failed.length}`);
 if (skipped.length > 0) console.log(`SKIP: ${skipped.map((item) => item.id).join(', ')}`);
 if (failed.length > 0) { console.log(`FAILED: ${failed.map((item) => item.id).join(', ')}`); process.exitCode = 1; }
