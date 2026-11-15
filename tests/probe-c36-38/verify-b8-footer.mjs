@@ -1,18 +1,9 @@
 /**
- * 开发自测 · B8+B9（rc.16）「操作区常驻」合并门（**只此一条，不再分两套**）。
+ * 开发自测 · B8+B9+B10（rc.16）「操作区常驻 + 无校正环」合并门（只此一条）。
  *
- * B8 根因（rc.14）：wrapper 只给 `maxHeight` 无确定 `height` → 面板按自然高度长、穿出窗口下沿被裁，
- *   按钮不可见且滚不动。B9 追加：百分比输入框 + `%` 也要在常驻区（用户不该为保存而滚动）。
- *
- * 判据：
- *  ① 静态：`data-cg-footer` 内含**输入框 + 4 个按钮**，且 footer 分两排（input / actions）；
- *     footer `maxHeight:88`、内容区 `minHeight:96`、面板 `maxHeight:100%`、
- *     wrapper px `height` + `overflow:hidden`、命中链 `pointerEvents:none → auto`；
- *     高度实测**不得硬编码 `+34`**（必须从 computed padding/border/gap 读）。
- *  ② vm：footer 与 body 是兄弟；输入框节点在 footer 内、不在 body 内；4 个按钮文本都在 footer；
- *     详情按钮仍在 body 内。
- *  ③ 几何：面板请求 400px 高 → 夹到 ≤260，四边 ≥8，且与 composer 输入框交集为 0；
- *     版面预算 `96(body) + 88(footer) + 44(chrome) ≤ 260`。
+ * B8：wrapper 只给 maxHeight 无确定 height → 面板按自然高度长、穿出窗口下沿被裁（按钮不可见/滚不动）。
+ * B9：百分比输入框 + `%` 必须与四按钮同处常驻 footer；footer ≤88、内容区保底 96、高度全实测且带下限。
+ * B10：校正 effect 必须有收敛保护（0×0 不校正 / 每次打开只校一次 / 同值返回 prev），否则无限重渲染。
  *
  * 用法：node tests\probe-c36-38\verify-b8-footer.mjs
  */
@@ -27,9 +18,8 @@ const pkg = path.resolve(import.meta.dirname, '..', '..', 'packages', 'dsh-conte
 const src = fs.readFileSync(path.join(pkg, 'lib', 'client.js'), 'utf8');
 const idx = (token) => src.indexOf(token);
 
-// ① 静态：结构
+// ---------- ① 静态：结构 ----------
 const footerAt = idx("'data-cg-footer'");
-// 只在 footer 之后找：同一段 aria-label / 按钮文本在设置页卡片里也出现，全局 indexOf 会误判。
 const afterFooter = footerAt < 0 ? '' : src.slice(footerAt);
 const inFooter = (token) => afterFooter.indexOf(token);
 const inputAt = inFooter("'aria-label': labels.percent");
@@ -40,27 +30,33 @@ const settingsAt = inFooter("className: 'cg-at-settings-link'");
 const detailToggleAt = idx("className: 'cg-detail-toggle'");
 check('B9-footer-has-input-and-4-buttons',
   footerAt > 0 && inputAt > 0 && saveAt > 0 && resetAt > 0 && restoreAt > 0 && settingsAt > 0,
-  `footer@${footerAt} footer内偏移 input@${inputAt} save@${saveAt} reset@${resetAt} restore@${restoreAt} settings@${settingsAt}`);
+  `footer@${footerAt} 之内 input@${inputAt} save@${saveAt} reset@${resetAt} restore@${restoreAt} settings@${settingsAt}`);
 check('B9-detail-toggle-stays-in-body', detailToggleAt > 0 && detailToggleAt < footerAt,
-  `detail-toggle@${detailToggleAt} < footer@${footerAt}（详情按钮留在可滚内容区）`);
+  `detail-toggle@${detailToggleAt} < footer@${footerAt}`);
 check('B9-footer-two-rows',
   /'data-cg-footer-row':\s*'input'/.test(src) && /'data-cg-footer-row':\s*'actions'/.test(src),
-  'footer 必须分两排：输入行 + 按钮行');
-
-// ① 静态：尺寸与滚动边界
-check('B9-footer-max-height-88', /popoverFooter:\s*\{[^}]*maxHeight:\s*88/.test(src), 'footer 总高 ≤88px');
-check('B9-body-min-height-96', /popoverBody:\s*\{[^}]*minHeight:\s*96/.test(src), '内容区最少保留 96px');
+  'footer 分两排：输入行 + 按钮行');
+check('B9-footer-max-height-88', /popoverFooter:\s*\{[^}]*maxHeight:\s*88/.test(src), 'footer ≤88px');
+check('B9-body-min-height-96', /popoverBody:\s*\{[^}]*minHeight:\s*96/.test(src), '内容区保底 96px');
 check('B9-wrapper-fixed-height',
   /height:\s*`\$\{layout\.height\}px`/.test(src) && /overflow:\s*'hidden'/.test(src),
-  'wrapper 必须 px 高度 + overflow:hidden');
+  'wrapper px 高度 + overflow:hidden');
 check('B9-panel-max-height-100', /maxHeight:\s*'100%'/.test(src), '面板 maxHeight:100%');
 check('B9-hit-chain', /pointerEvents:\s*'none'/.test(src) && /pointerEvents:\s*'auto'/.test(src),
-  'wrapper:none → panel:auto 命中链');
+  'wrapper:none → panel:auto');
 check('B9-height-measured-not-hardcoded',
-  /getComputedStyle/.test(src) && /paddingTop/.test(src) && !/\+\s*34;?\s*\/\/ padding/.test(src),
-  '高度实测必须读 computed padding/border/gap，不得再硬编码 +34');
+  /getComputedStyle/.test(src) && /paddingTop/.test(src) && !/96 \+ lines\.length \* 22 \+ 64/.test(src),
+  '高度读 computed padding/border/gap，且不再有 96+行数*22+64 猜测式');
 
-// ② vm：渲染结构
+// ---------- ① 静态：B10 环保护 ----------
+check('B10-uncorrectable-skip', /Number\(rect\.width\) < 1/.test(src) && /Number\(rect\.height\) < 1/.test(src),
+  '0×0（未布局/隐藏）时不得校正');
+check('B10-correct-once-per-open', /correctedOnceRef/.test(src) && /correctedOnceRef\.current = false/.test(src),
+  '每次打开重置、只校正一次');
+check('B10-same-rect-keeps-prev', /setLayout\(\(prev\) => \(samePopoverRect\(prev, corrected\) \? prev : corrected\)\)/.test(src),
+  '同值返回 prev，避免无意义重渲染');
+
+// ---------- ② vm：结构与纯函数 ----------
 const sandbox = { window: { __ModuleLoader__: { load: (spec) => { sandbox.__spec = spec; } } }, console, setTimeout, clearTimeout, document: { body: {} } };
 vm.createContext(sandbox);
 vm.runInContext(src, sandbox);
@@ -98,16 +94,15 @@ const findNode = (node, predicate) => {
   return null;
 };
 const isInput = (node) => node?.props?.type === 'text' && node?.props?.['aria-label'] !== undefined;
-const inputInFooter = findNode(footNode, isInput);
-const inputInBody = findNode(bodyNode, isInput);
-check('B9-vm-input-lives-in-footer', inputInFooter !== null && inputInBody === null,
-  `footer 内输入框=${inputInFooter !== null} body 内输入框=${inputInBody !== null}（期望 true / false）`);
+check('B9-vm-input-lives-in-footer',
+  findNode(footNode, isInput) !== null && findNode(bodyNode, isInput) === null,
+  '输入框在 footer 内、不在 body 内');
 const footerText = JSON.stringify(footNode ?? {});
 check('B9-vm-four-buttons-in-footer',
   ['保存到本会话', '恢复默认', '恢复全局设置', '打开设置页'].every((label) => footerText.includes(label)),
-  `footer 含四按钮=${['保存到本会话', '恢复默认', '恢复全局设置', '打开设置页'].map((label) => footerText.includes(label)).join('/')}`);
+  `四按钮在 footer=${['保存到本会话', '恢复默认', '恢复全局设置', '打开设置页'].map((label) => footerText.includes(label)).join('/')}`);
 
-// ③ 几何 + 版面预算
+// ---------- ③ 几何 + 高度算法 ----------
 const rect = client.computePopoverRect({
   chip: { x: 600, y: 500, width: 80, height: 26 },
   panel: { width: 320, height: 400 },
@@ -120,22 +115,28 @@ check('B9-geometry-clamped-and-no-composer-overlap',
   rect.height <= 260 && rect.top >= 8 && rect.left >= 8
   && rect.top + rect.height <= 594 - 8 && rect.left + rect.width <= 900 - 8
   && !(overlapX && overlapY),
-  `rect=${JSON.stringify(rect)}（高 ≤260、四边 ≥8、不压 composer）`);
-// ③-b 低内容场景（本次漏掉的场景）：内容区 CSS 保底 96 时，高度必须**以下限 228 出图**，
-// 否则面板 172 装不下 96+88+44 → wrapper overflow:hidden 会把 footer 裁掉（B8 复发）。
+  `rect=${JSON.stringify(rect)}`);
+
 const floorHeight = client.computePopoverHeight({ bodyScroll: 40, footerHeight: 88, chrome: 44 });
-const floorNeed = 96 + 88 + 44;
-check('B9-low-content-floor', floorHeight >= floorNeed && floorHeight <= 260,
-  `height=${floorHeight}（内容少时也必须 ≥ ${floorNeed}，否则 footer 被裁；且 ≤260）`);
 const tallHeight = client.computePopoverHeight({ bodyScroll: 900, footerHeight: 88, chrome: 44 });
-check('B9-high-content-capped', tallHeight === 260, `height=${tallHeight}（内容超高封顶 260，内容区滚动）`);
-check('B9-footer-inside-panel',
-  // 低内容/高内容两种情形，footer 底边都不得越过面板底边（算术等价：panelH ≥ 96+88+44 或内容滚动）
-  floorHeight >= 96 + 88 + 44 && tallHeight >= 96 + 88 + 44,
-  `footer.bottom ≤ panel.bottom 等价条件（两情形均 ≥ ${96 + 88 + 44}）`);
-check('B9-layout-budget', 96 + 88 + 44 <= 260,
-  '96(内容) + 88(footer) + 44(chrome) = 228 ≤ 260，两排操作区与内容区可共存');
+check('B9-low-content-floor', floorHeight >= 96 + 88 + 44 && floorHeight <= 260,
+  `height=${floorHeight}（内容少时 ≥ ${96 + 88 + 44}，否则 footer 被裁）`);
+check('B9-high-content-capped', tallHeight === 260, `height=${tallHeight}（超高封顶 260）`);
+check('B9-footer-inside-panel', floorHeight >= 96 + 88 + 44 && tallHeight >= 96 + 88 + 44,
+  '两种情形 footer.bottom ≤ panel.bottom 的等价条件均成立');
+check('B9-layout-budget', 96 + 88 + 44 <= 260, '96 + 88 + 44 = 228 ≤ 260');
+
+const sameRect = client.samePopoverRect(
+  { left: 10, top: 20, width: 320, height: 228, placement: 'up' },
+  { left: 10.6, top: 19.5, width: 320, height: 228, placement: 'up' },
+);
+const diffRect = client.samePopoverRect(
+  { left: 10, top: 20, width: 320, height: 228, placement: 'up' },
+  { left: 40, top: 60, width: 320, height: 228, placement: 'up' },
+);
+check('B10-same-rect-semantics', sameRect === true && diffRect === false,
+  `same=${sameRect} diff=${diffRect}（≤1px 视为同一个）`);
 
 const failed = results.filter((item) => !item.ok);
-console.log(`\nB8/B9 操作区常驻门 TOTAL ${results.length - failed.length}/${results.length} PASS`);
+console.log(`\nB8/B9/B10 操作区常驻+环保护门 TOTAL ${results.length - failed.length}/${results.length} PASS`);
 if (failed.length > 0) { console.log(`FAILED: ${failed.map((item) => item.id).join(', ')}`); process.exitCode = 1; }

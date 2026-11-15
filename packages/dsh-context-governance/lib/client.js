@@ -519,7 +519,18 @@ window.__ModuleLoader__.load({
       // 下限 = 内容区最小高度 + footer + chrome；上限 260。两者冲突时（视口极矮）宁可内容区滚动。
       return Math.min(maxHeight, wanted);
     };
-    /** C40 §2：**主视图**（气泡）= 至多三行短句，禁技术字段；细节走 `renderBubbleDetail`。 */
+    /**
+     * B10（rc.16）：校正环保护——两个矩形"够近"就视为同一个，返回 true 让调用方保留旧对象
+     * （`setLayout(prev => same ? prev : next)`），避免每次都给新对象触发无意义重渲染。
+     */
+    const samePopoverRect = (a, b) => {
+      if (a === null || a === undefined || b === null || b === undefined) return false;
+      const parts = ['left', 'top', 'width', 'height'];
+      return parts.every((key) => Math.abs(Number(a[key] ?? 0) - Number(b[key] ?? 0)) <= 1)
+        && String(a.placement ?? '') === String(b.placement ?? '');
+    };
+    /** C40 §2：**主视图**（气泡）= 至多三行短句，禁技术字段；细节走 enderBubbleDetail。 */
+
 
     const renderBubbleText = (snapshot = {}, labels = LABELS.zh, options = {}) => (
       compactBubbleLines(snapshot, options).join('\n')
@@ -753,8 +764,11 @@ window.__ModuleLoader__.load({
       const [layout, setLayout] = react.useState(null);
       const viewportRef = react.useRef(null);
       const chipRectRef = react.useRef(null);
+      // B10：每次打开只允许校正一次（否则测量持续失配会无限重渲染）。
+      const correctedOnceRef = react.useRef(false);
       const composerRectRef = react.useRef(null);
       react.useEffect(() => {
+        correctedOnceRef.current = false;
         if (!open) { setLayout(null); return; }
         const doc = globalThis.document ?? null;
         const toRect = (element) => {
@@ -788,8 +802,9 @@ window.__ModuleLoader__.load({
         chipRectRef.current = chipRect;
         composerRectRef.current = inputRect;
         const lines = compactBubbleLines(view ?? null, { lastAction });
-        // 面板高：三行文字 + 输入行 + 按钮行；上限 260（超出内部滚动）。
-        const desired = Math.min(260, 96 + lines.length * 22 + 64);
+        // B10：第一趟也走统一算法（不带旧的 96+行数*22+64 猜测式）：footer 先按上限 88 估，
+        // 第二趟再用实测覆盖。
+        const desired = computePopoverHeight({ bodyScroll: 0, footerHeight: 88, chrome: 44 });
         setLayout(computePopoverRect({ chip: chipRect, panel: { width: 320, height: desired }, viewport, input: inputRect }));
       }, [open, lastAction, view?.at, view?.source]);
       /**
@@ -799,14 +814,19 @@ window.__ModuleLoader__.load({
        */
       react.useEffect(() => {
         if (open !== true || layout === null) return;
+        // B10 ①：每次打开**只校正一次**（关闭/重开由首趟 effect 重置），否则偏移仍在时会无限重渲染。
+        if (correctedOnceRef.current === true) return;
         try {
           const rect = dialogRef.current?.getBoundingClientRect?.();
           if (rect === undefined || rect === null) return;
+          // B10 ②：**不可测就不校正**。元素未布局/隐藏（0×0）时校正只会把布局推到 0，进而无限循环。
+          if (Number(rect.width) < 1 || Number(rect.height) < 1) return;
           const corrected = correctPopoverRect({
             intended: layout,
             measured: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
             viewport: viewportRef.current ?? {},
           });
+          correctedOnceRef.current = true;
           // B6 诊断（只 info 一行，便于下次截图取证）：portal 生效后仍需要 >1px 校正，
           // 说明还有别的 containing block 在劫持，记下来别当遮羞布。
           try {
@@ -818,7 +838,8 @@ window.__ModuleLoader__.load({
               portaled: true,
             }));
           } catch { /* 诊断失败不影响定位 */ }
-          if (corrected !== null) setLayout(corrected);
+          // B10 ③：同值返回 prev，避免新对象触发无意义重渲染。
+          if (corrected !== null) setLayout((prev) => (samePopoverRect(prev, corrected) ? prev : corrected));
         } catch { /* 量不到就保持第一趟结果 */ }
       }, [layout, open]);
       /**
@@ -1131,6 +1152,7 @@ window.__ModuleLoader__.load({
       computePopoverRect,
       computePopoverHeight,
       correctPopoverRect,
+      samePopoverRect,
       compactBubbleLines,
       renderBubbleDetail,
       stateAfterReset,
