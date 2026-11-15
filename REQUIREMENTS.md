@@ -1180,7 +1180,7 @@ C 的初步证据：启动后本项目根 `audit.jsonl` 只有 `capability@ready
 | **R5** | 双插件共存不重复触发 | C | 真机窗口回归（`dsh-context@0.84.1` + 本插件同时在场） | 一次压缩只产生**一轮**保护写入/回注（按审计行计数：同 cycle 不出现双份 `memory-store-open`/`header-injected`）；升级前后各取一次基线对比 |
 | **R6** | 单写者锁不误判 | C | 同 G 根多会话并发 | `memory-store-readonly writer-lock:<pid>` **属设计内**（只读不写、不抢锁），**不得记缺陷**；真机能写回那次须成功 |
 | **B1** | 标题可读性主观 | B | 用户看真机窗口输出 | 用户判断（不计 A，不当阻断项） |
-| **C8** | D2 显示生效值+来源层+生命周期 | A | 渲染/组件单测 + 文案断言 | 界面必须同时给出：①**当前生效值**（百分比与比例可换算）②**来源层**（`builtin`/`profile=<name>`（如 `profile=batch`）/`plugin`/`project`/`session:A1`/`session:A2`）③**生命周期按层**：`session:A1`→「本会话·临时（重启失效）」；`session:A2`→「本会话·已保存（重启保留）」；`project`→「项目模板（可选）」；`plugin`→「全局（影响所有会话）」；`profile`/`builtin` 按持久层文案。**用户可读标签唯一映射、不得混用别名；命令输出采用「键名 + 中文」并列（如 `session:A2`（本会话·已保存（重启保留）））**，全文写死这一种。 |
+| **C8** | D2 显示生效值+来源层+生命周期 | A | 渲染/组件单测 + 文案断言 | 界面必须同时给出：①**当前生效值**（百分比与比例可换算）②**来源层**（`builtin`/`profile=<name>`（如 `profile=batch`）/`plugin`/`project`/`session:A1`/`session:A2`）③**生命周期按层**：`session:A1`→「本会话·临时（重启失效）」；`session:A2`→「本会话·已保存（重启保留）」；`project`→「项目模板（可选）」；`plugin`→「全局（影响所有会话）」；`profile=<name>`/`builtin` 按持久层文案。**用户可读标签唯一映射、不得混用别名；命令输出采用「键名 + 中文」并列（如 `session:A2`（本会话·已保存（重启保留）））**，全文写死这一种。 |
 | **C9** | D2 百分比换算与边界 | A | 单测（UI 层换算函数 + 校验） | `55 → 0.55`、`20 → 0.20` 通过；`19` 被拒；`<30` 且无 `lowThresholdAck` 被拒；项目模板写 `<45` 被拒；`> native−0.02` 被拒；拒绝文案与 `/cg set` 一致 |
 | **C10** | D2 不绕过安全边界 | A | 单测 + 写入口审查 | UI 写入必须经现有 `validateLayer` 同一路径；`compact.estimateSafety`/`compact.lowThresholdAck`/`armed` **在 UI 中不可写**；不存在"UI 特批"分支 |
 | **C24** | A2 持久会话层：写入与读回（2026-11-15 用户裁定 B 后重写） | A | 单测 + `/cg status` 核 | UI 保存写 **A2（持久会话层）**，落盘后该会话显示 `compact.at=<新值> (source=session:A2)`；**plugin 层/全局值不变**；另一会话读回**不受影响**；**重启后本会话仍为该值** |
