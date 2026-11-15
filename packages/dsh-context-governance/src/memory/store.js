@@ -114,6 +114,8 @@ export class MemoryStore {
   #warnings = [];
   #lock = null;
   #lockRelease = null;
+  /** rc.2：启动时回收陈旧写者锁的诊断（交给上层记审计，不静默）。 */
+  #lockReclaimed = null;
   #closed = false;
   /** 1.0.3：proposed 自动过期窗口（天，0=关闭）与同标题去重窗口（天，0=关闭）。 */
   #proposedTtlDays = 7;
@@ -179,6 +181,13 @@ export class MemoryStore {
       if (acquired.ok) {
         store.#lock = acquired.lock;
         store.#lockRelease = acquired.release;
+        if (acquired.reclaimed !== undefined) {
+          store.#lockReclaimed = acquired.reclaimed;
+          store.#warnings.push(
+            `stale writer lock reclaimed (${acquired.reclaimed.reason}; pid ${acquired.reclaimed.pid ?? '?'}, ` +
+            `age ${Math.round((acquired.reclaimed.lockAgeMs ?? 0) / 1000)}s); this instance is the writer now`,
+          );
+        }
       } else {
         store.#readOnly = true;
         store.#readOnlyReason = acquired.reason ?? `writer-lock:${acquired.holder?.pid ?? 'unknown'}`;
@@ -236,6 +245,8 @@ export class MemoryStore {
       counts: this.#counts(),
       warnings: this.warnings,
       lock: this.#lock === null ? null : { pid: this.#lock.pid, startedAt: this.#lock.startedAt },
+      /** rc.2：本次 open 回收的陈旧锁（reason/probe/pid/startedAt/lockAgeMs），无则为 null。 */
+      lockReclaimed: this.#lockReclaimed === null ? null : { ...this.#lockReclaimed },
       closed: this.#closed,
     };
   }

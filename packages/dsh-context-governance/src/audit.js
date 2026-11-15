@@ -75,6 +75,11 @@ export const AUDIT_FIELD_WHITELIST = Object.freeze({
   scanTo: 'text',
   lines: 'number',
   rotated: 'boolean',
+  /** rc.2：陈旧写者锁回收（pid/锁龄/探测结果/原 startedAt）。 */
+  pid: 'number',
+  lockProbe: 'text',
+  lockAgeMs: 'number',
+  startedAt: 'text',
   /** C35③：自愈节点观察字段（来源 kind/form/plugin、宿主给或不给的 digest）。 */
   form: 'text',
   plugin: 'text',
@@ -207,6 +212,8 @@ export const AUDIT_EVENTS = Object.freeze([
   'self-heal-verified',
   'self-heal-unverified',
   'self-heal-missing',
+  /** rc.2：启动时回收了陈旧写者锁（不静默）。 */
+  'stale-lock-reclaimed',
   /** D-MGMT-021 回滚开关：protection.rebuild.enabled=false 时整段跳过。 */
   'surface-rebuild-disabled',
   'prune-observed',
@@ -511,3 +518,4 @@ export function createRootAudit(identity, { maxBytes, now } = {}) {
     return null;
   }
 }
+

@@ -873,6 +873,19 @@ export async function apply(ctx, rawConfig = {}) {
       `entries=${store.status.counts.active + store.status.counts.proposed} active/proposed`,
     );
     for (const warning of store.warnings) ctx.logger?.warn?.(`[context-governance] ${warning}`);
+    // rc.2：陈旧写者锁被回收——必须留持久证据（根审计），不能只靠一行 warning。
+    const lockReclaimed = store.status.lockReclaimed ?? null;
+    if (lockReclaimed !== null) {
+      rootAudit?.append?.('stale-lock-reclaimed', {
+        root: config.memoryRoot,
+        project: config.project,
+        reason: lockReclaimed.reason ?? null,
+        lockProbe: lockReclaimed.probe ?? null,
+        pid: Number.isInteger(lockReclaimed.pid) ? lockReclaimed.pid : null,
+        startedAt: lockReclaimed.startedAt ?? null,
+        lockAgeMs: typeof lockReclaimed.lockAgeMs === 'number' ? lockReclaimed.lockAgeMs : null,
+      });
+    }
     // M3 T2（0.3.1）：新会话记忆 header 默认开；注册放在 guard 之后（窗口检查回调先入，保持 session/event 优先的顺序）。
     const ruleFilePresent = ['AGENTS.md', 'CLAUDE.md']
       .some((fileName) => fs.existsSync(path.join(config.projectRoot, fileName)));

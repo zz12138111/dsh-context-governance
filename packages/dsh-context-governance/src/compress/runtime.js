@@ -227,6 +227,8 @@ export class CompressionGuard {
     starts: 0,
     summaries: 0,
     ends: 0,
+    /** rc.2：宿主自己中止的压缩（`compaction/end` 带 `error`，如 shrink 检查拒绝）。 */
+    aborted: 0,
     /** 0.2.2：暂未接线（当前恒 0）；接线后由 compactNow 失败累加，勿当 bug。 */
     compactionFailures: 0,
     protectionFailures: 0,
@@ -2606,6 +2608,45 @@ export class CompressionGuard {
         }
         case 'compaction/end': {
           if (id === null) return;
+          // rc.2：宿主自己中止（如 compaction-basic 的 shrink 检查抛错）时，
+          // `compaction/end` 带 `error`（宿主声明 `error?: string`）。这不是治理的压缩，
+          // 不核对、不写 loss、不写 failed warn/诊断行；只记 skipped 报告，pending 直接丢弃。
+          const hostError = typeof event?.data?.error === 'string' ? event.data.error.trim() : '';
+          if (hostError !== '') {
+            this.#stats.aborted += 1;
+            this.#pending.delete(id);
+            const abortedEarly = this.#takeEarlyForSession(session, 'aborted');
+            if (abortedEarly !== null) {
+              this.#stats.earlyArchived += 1;
+              const cycleKey = abortedEarly.cycleKey;
+              queueMicrotask(() => {
+                try {
+                  const archived = this.#store?.archiveProtection?.(cycleKey, { reason: 'host-compaction-error' });
+                  if (archived !== null && archived !== undefined && typeof archived.catch === 'function') {
+                    archived.catch(() => {});
+                  }
+                } catch {
+                  /* 归档失败不影响主流程 */
+                }
+              });
+            }
+            this.#record({
+              compactionId: id,
+              adapterKind: this.#adapter.kind,
+              finishedAt: this.#now().toISOString(),
+              ok: true,
+              degraded: false,
+              skipped: true,
+              reason: 'host-compaction-error',
+              checks: [],
+              failures: [],
+            }, null);
+            this.#logger?.info?.(
+              `[context-governance] compaction aborted by host (compactionId=${id}): ` +
+              `${hostError.slice(0, 160)}; protection checks skipped`,
+            );
+            return;
+          }
           this.#stats.ends += 1;
           const isSubagent = this.#scopeOf(session).isSubagent === true;
           let state = this.#pending.get(id);
