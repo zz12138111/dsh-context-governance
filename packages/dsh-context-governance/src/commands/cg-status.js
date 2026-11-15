@@ -373,7 +373,9 @@ function rootsStatusLines({ rootsView = null, rootCounts = null }) {
  *
  * @param {{store?:object|null, guard?:object|null, getGuard?:() => object|null, audit?:object|null, now?:() => Date}} options
  */
-export function createStatusCommand({ store = null, guard = null, getGuard = null, audit = null, rootAudit = null, policy = null, now = () => new Date(), logger = null, getEarlyStatus = null, getEarlyStatusForSession = null, getPolicyForSession = null, getStoreForSession = null, getAuditForSession = null, sessionIdOf = defaultSessionIdOf, getRootInfo = null, getPersistenceIdentity = null, getRootsView = null, getRootCounts = null, getPoolStats = null, getDiagnosticsLogFile = null, getDiagnosticsError = null } = {}) {
+export function createStatusCommand({ store = null, guard = null, getGuard = null, audit = null, rootAudit = null, policy = null, now = () => new Date(), logger = null, getEarlyStatus = null, getEarlyStatusForSession = null, getPolicyForSession = null, getStoreForSession = null, getAuditForSession = null, sessionIdOf = defaultSessionIdOf, getRootInfo = null, getPersistenceIdentity = null, getRootsView = null, getRootCounts = null, getPoolStats = null, getDiagnosticsLogFile = null, getDiagnosticsError = null,
+  // rc.10：会话记忆审计共享去重器 + 会话根解析（`/cg memory` 的 root/rootId 与 miss 去重）+ home 可注入。
+  auditMemoryEvent = null, resolveSessionRoot = null, home = null } = {}) {
   const policyFor = (sessionId) => {
     if (typeof getPolicyForSession !== 'function') return policy;
     try {
@@ -432,23 +434,60 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
     return { value: number };
   };
   const sessionText = (sessionValues) => formatSession(sessionValues);
+  /**
+   * rc.10 必闭②：`/cg memory ...` 的根必须用**已解析的 root/rootId**。
+   * 旧实现读 `policy?.projectRoot`（policy 上根本没这个字段）→ rootId 恒 null，
+   * 于是 `memory show` 显示 `(root-unresolved)`，`shared` / `import --from legacy` 全部不可用。
+   */
   const memoryContext = (sessionId) => {
-    const policy = policyFor(sessionId);
-    const home = os.homedir();
-    const projectRoot = typeof policy?.projectRoot === 'string' ? policy.projectRoot : '';
-    const rootId = projectRoot === '' ? null : rootIdOf(projectRoot);
-    return { home, projectRoot, rootId, policy };
+    const homeDir = typeof home === 'string' && home !== '' ? home : os.homedir();
+    let projectRoot = '';
+    let rootId = null;
+    // ① 权威：该会话解析出的根（registry 的 entry）。
+    try {
+      const resolved = typeof resolveSessionRoot === 'function' ? resolveSessionRoot(sessionId) : null;
+      const entry = resolved?.entry ?? null;
+      const candidate = typeof entry?.root === 'string' && entry.root !== ''
+        ? { root: entry.root, rootId: entry.rootId }
+        : (typeof resolved?.root === 'string' && resolved.root !== '' ? { root: resolved.root, rootId: resolved.rootId } : null);
+      if (candidate !== null) {
+        projectRoot = candidate.root;
+        rootId = typeof candidate.rootId === 'string' && candidate.rootId !== '' ? candidate.rootId : rootIdOf(candidate.root);
+      }
+    } catch { /* 回落 getRootInfo */ }
+    // ② 回落：当前附加根（单根/无法归根时）。
+    if (projectRoot === '') {
+      try {
+        const info = typeof getRootInfo === 'function' ? getRootInfo() : null;
+        if (typeof info?.root === 'string' && info.root !== '') {
+          projectRoot = info.root;
+          rootId = typeof info.rootId === 'string' && info.rootId !== '' ? info.rootId : rootIdOf(info.root);
+        }
+      } catch { /* 保持 root-unresolved */ }
+    }
+    return { home: homeDir, projectRoot, rootId, policy: policyFor(sessionId) };
+  };
+  /**
+   * rc.10 必闭①：会话记忆审计走**共享去重器**（`mem_*`/header/`/cg memory show` 同一份），
+   * 否则同一条指针同一原因会在 `memory show` 再写一行。
+   */
+  const memoryAuditFor = (sink) => (event, details) => {
+    if (typeof auditMemoryEvent === 'function') {
+      auditMemoryEvent(event, details);
+      return;
+    }
+    try { sink?.append?.(event, details); } catch { /* 审计失败不影响记忆 */ }
   };
   /** C38：`/cg memory ...`（register/promote/import/show）。 */
   const handleMemoryCommand = (argText, sessionId = null) => {
     if (sessionId === null) return { kind: 'error', text: NO_SESSION_TEXT };
     const { home, projectRoot, rootId } = memoryContext(sessionId);
     const audit = auditFor(sessionId);
-    const store = openSessionMemory({ home, sessionId, audit: (event, details) => audit?.append?.(event, details) });
+    const store = openSessionMemory({ home, sessionId, audit: memoryAuditFor(audit) });
     const tokens = String(argText ?? '').trim().split(/\s+/).filter(Boolean);
     const action = tokens[0] ?? 'show';
     if (action === 'show') {
-      const header = renderMemoryHeader(store, { audit: (event, details) => audit?.append?.(event, details) });
+      const header = renderMemoryHeader(store, { audit: memoryAuditFor(audit) });
       const meta = store.meta();
       const lines = [
         'context-governance memory',
@@ -479,7 +518,7 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
       if (ids.length === 0) return { kind: 'error', text: 'Usage: /cg memory promote <id…>' };
       const result = promotePointers({
         home, rootId, sessionId, fromStore: store, ids,
-        audit: (event, details) => audit?.append?.(event, details),
+        audit: memoryAuditFor(audit),
       });
       if (result.ok !== true) {
         return { kind: 'error', text: `[context-governance] promote failed: ${result.reason ?? 'unknown'}` };
@@ -492,7 +531,7 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
     if (action === 'import') {
       const fromIndex = tokens.indexOf('--from');
       const fromRoleIndex = tokens.indexOf('--from-role');
-      const emit = (event, details) => audit?.append?.(event, details);
+      const emit = memoryAuditFor(audit);
       if (fromIndex >= 0 && tokens[fromIndex + 1] === 'legacy') {
         const result = importLegacy({
           legacyDir: projectRoot === '' ? '' : path.join(projectRoot, 'memory', 'governance'),
@@ -522,7 +561,7 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
     if (sessionId === null) return { kind: 'error', text: NO_SESSION_TEXT };
     const { home } = memoryContext(sessionId);
     const audit = auditFor(sessionId);
-    const store = openSessionMemory({ home, sessionId, audit: (event, details) => audit?.append?.(event, details) });
+    const store = openSessionMemory({ home, sessionId, audit: memoryAuditFor(audit) });
     const tokens = String(argText ?? '').trim().split(/\s+/).filter(Boolean);
     if (tokens[0] === 'set') {
       const role = tokens[1];

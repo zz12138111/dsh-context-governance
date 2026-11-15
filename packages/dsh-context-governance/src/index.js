@@ -37,6 +37,7 @@ import { createSnapshotHandler, createSnapshotPolicyResolver, mergeSettingsAt, p
 import { mountSessionPolicyRoute, mountPluginPolicyRoute } from './session-policy-route.js';
 import { rebuildPolicyStates } from './policy-rebuild.js';
 import { createPluginPolicyStore, pluginPolicyFile } from './plugin-policy.js';
+import { createDedupedMemoryAudit } from './memory-audit.js';
 
 export const name = 'dsh-context-governance';
 
@@ -910,21 +911,10 @@ let policyForEntryRef = null;
 // C11③：UI（chip / 气泡）的会话级保存写入口——复用 `/cg set compact.at=<at>` 同一条命令链。
 // 取值为 { setAt: async ({sessionId, at}) => {ok, error?, detail?} }，命令面未挂载时为 null。
 let sessionWriteRef = null;
-// C38：memory-pointer-miss 去重（sessionId|id|reason），避免 header 每步刷屏。
-const memoryMissSeen = new Set();
-const auditMemoryEvent = (event, details) => {
-  if (event === 'memory-pointer-miss') {
-    const sessionId = details?.sessionId ?? null;
-    const key = `${sessionId ?? ''}|${details?.id ?? ''}|${details?.reason ?? ''}`;
-    if (memoryMissSeen.has(key)) return;
-    memoryMissSeen.add(key);
-    if (memoryMissSeen.size > 2000) {
-      const first = memoryMissSeen.values().next().value;
-      if (first !== undefined) memoryMissSeen.delete(first);
-    }
-  }
-  try { primaryAudit?.append?.(event, details); } catch { /* 审计失败不影响记忆 */ }
-};
+// C38：memory-pointer-miss 去重（sessionId|id|reason）——**唯一一份**，mem_*/header/`/cg memory show` 共用。
+const auditMemoryEvent = createDedupedMemoryAudit({
+  sink: (event, details) => { try { primaryAudit?.append?.(event, details); } catch { /* 审计失败不影响记忆 */ } },
+});
 /**
  * C11②（实现②·保承诺）：plugin 层持久值。
  * volatile（设置页表单）有值 → 以它为准并幂等落盘；volatile 为空（重启后宿主未恢复表单值）
@@ -1731,6 +1721,16 @@ let policyState = buildPolicyState(mergePluginPolicy(config), {
       getGuardPoolStats: () => (guardPool === null ? null : guardPool.stats()),
       getDiagnosticsLogFile: () => config.diagnostics.logFile,
       getDiagnosticsError: () => rootInfo.diagnosticsError,
+      // rc.10：`/cg memory ...` 的 miss 审计与 `mem_*`/header 共用同一个去重器（同 key 只 1 行）。
+      auditMemoryEvent,
+      // rc.10：`/cg memory ...` 的根用**已解析的 root/rootId**（旧实现读 `policy.projectRoot`，该字段不存在）。
+      resolveSessionRoot: (sessionId) => {
+        try {
+          return registry?.resolveSessionRoot?.({ header: { id: sessionId } }) ?? null;
+        } catch {
+          return null;
+        }
+      },
     };
     const commandRef = { current: registerStatusCommand(ctx, commandOptions) };
     // C11③：UI（chip / 气泡）会话级保存的唯一写入口——直接跑 `/cg set compact.at=<at>` 同一条处理链，
