@@ -1313,6 +1313,7 @@ C 的初步证据：启动后本项目根 `audit.jsonl` 只有 `capability@ready
 > - **P5 UI 写路径被 C31 守卫拒 → 实现缺口 / BLOCKER，计入终版差距（2026-11-15 追加，审核真机 `cc1d19b`）**：真机气泡「恢复全局设置」等 UI 写入口返回 403 `missing-origin`——宿主自身同源 fetch 不带 `Origin`/`Sec-Fetch-Site`，被"缺头→403"拒；C11③（真做 A2 写入口，用户已明示不接受降级）与 C29（UI「恢复全局设置」）真机实际不可用，仅 `/cg set` 命令可写 A2 → **承诺未兑现，不是显示问题**。
 > - **C31③ 口径按意图解释（不改需求文字）**：`:1193③` 的「`Origin`（或 `Sec-Fetch-Site: same-origin`）非法/**缺失 → 403**」约束的是**"不得把无法验证来源的请求当可选放过"**，**不得**被实现成"缺 `Origin` 一刀切 403、把宿主自家 UI 也拒掉"。允许并要求的证明形式（任一成立即可放行）：①合法 `Origin`；②`Sec-Fetch-Site: same-origin`；③**宿主注入的 token/nonce**（页面侧可携带、本机脚本不可猜）。三者皆无 → 403。**不得**放宽成"无 `Origin` 一律放行"（审核底线，我认同）。①**仅 loopback** 不变、②POST+JSON≤4KB 不变、④⑤⑥ 不变。
 > - 计数更正：rc.10 终版差距 = 离线 **0** + 真机窗口新增 **4**（P2/P3/P4/P5）；**P5 为 BLOCKER**（UI 主入口不可用），修法须同时满足"宿主 UI 三类写成功 + curl 缺 token/跨源仍 403"。rc.10 保留不回滚、不重出（审核 `cc1d19b`）。
+> - **29b. 审核接受 C31③ 意图解释（2026-11-15，`cc1d19b` 线）**：口径=「①合法 `Origin` ②`Sec-Fetch-Site: same-origin` ③宿主注入 token/nonce，**三者任一 + loopback**」，**不改需求文字**、不上报改口径。两条硬条件进放行判据与 Release notes：①**`remoteAddress` loopback 强制不得放松**（`not-loopback` 仍 403）——这是唯一真边界；若 webServer 暴露到 LAN，Origin/token 都不构成防护，Release notes 必须写明"不要把监听暴露到非 loopback"；②**审计/错误码须区分证明来源**（如 `via: origin|sec-fetch|token`），拒因保持 **`missing-proof` / `cross-origin` / `not-loopback`** 三类，不合并成模糊码。**副作用（已纠正）**：开发侧"token 必填"作废（token 只是三种证明之一、非必需）；测试侧负向由"伪造同源→403"改为"**无任何证明→403**"。
 
 **窗口物料（00 已备，2026-11-14 22:30；**本轮暂不使用**，重开窗口时再用；明细见 `G:\DS-HARNESS\tasks\TASK-20261114-02-本体升级-0.2.2-rc.3.md`）**：
 
