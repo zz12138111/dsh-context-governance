@@ -26,7 +26,9 @@ const home = path.join(base, 'home');
 const proj = path.join(base, 'proj');
 fs.mkdirSync(home, { recursive: true });
 fs.mkdirSync(proj, { recursive: true });
-const file = pluginPolicyFile(home);
+// C39：`pluginPolicyFile(home)` 的 home 现在就是 DSH home（内部拼 `context-governance`）；
+// 本探针走 env fallback，宿主基座 = `<USERPROFILE>/.dsh`，所以要把 `.dsh` 显式传进去。
+const file = pluginPolicyFile(path.join(home, '.dsh'));
 const previousProfile = process.env.USERPROFILE;
 process.env.USERPROFILE = home; // apply 内部按 USERPROFILE 取用户级路径
 

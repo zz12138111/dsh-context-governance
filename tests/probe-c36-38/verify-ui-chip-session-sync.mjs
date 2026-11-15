@@ -124,7 +124,7 @@ check('C11-5-no-hardcoded-60', hardcoded60 === false, `client 硬编码 60%=${ha
       try { return JSON.parse(body); } catch { return null; }
     };
     const before = await readSnapshot();
-    const pluginFile = path.join(home2, '.dsh', 'context-governance', 'plugin-policy.json');
+    const pluginFile = path.join(home2, 'context-governance', 'plugin-policy.json');
     fs.mkdirSync(path.dirname(pluginFile), { recursive: true });
     fs.writeFileSync(pluginFile, JSON.stringify({ version: 1, at: 0.58, source: 'plugin', updatedAt: new Date().toISOString() }), 'utf8');
     for (const entry of handlers.filter((item) => item.event === 'app-boot/config-reload')) {

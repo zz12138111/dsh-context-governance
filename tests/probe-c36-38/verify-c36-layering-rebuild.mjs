@@ -28,9 +28,12 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const base = fs.mkdtempSync(path.join(os.tmpdir(), 'cg-rebuild-'));
 const home = path.join(base, 'home');
+// C39：用户级基座 = profileContext.home（env 仅 fallback）→ A2/plugin 预置也跟着这里走。
+const dshHome = path.join(base, 'dshhome');
+const userData = path.join(dshHome, 'context-governance');
 const rootA = path.join(base, 'rootA');
 const rootB = path.join(base, 'rootB');
-for (const dir of [home, rootA, rootB]) fs.mkdirSync(dir, { recursive: true });
+for (const dir of [home, dshHome, userData, rootA, rootB]) fs.mkdirSync(dir, { recursive: true });
 const previousProfile = process.env.USERPROFILE;
 process.env.USERPROFILE = home;
 
@@ -44,7 +47,7 @@ function makeCtx() {
     tools: { register: (d) => captured.tools.push(d) },
     get(name) {
       if (name === 'profileContext') {
-        return { name: 'iso-rebuild', dir: path.join(base, 'profile'), home: path.join(base, 'dshhome') };
+        return { name: 'iso-rebuild', dir: path.join(base, 'profile'), home: dshHome };
       }
       if (name === 'commands') return { register: (d) => captured.commands.push(d) };
       if (name === 'settings') return { subscribe: () => () => {} }; // 让 apply 注册 config-reload
@@ -68,7 +71,7 @@ const policyAt = (text) => (text.split('\n').find((line) => line.startsWith('pol
 try {
   const { ctx, captured } = makeCtx();
   // A2 必须在 apply 前落盘（插件 a2 store 在 apply 时加载；外部写入不会被重读）
-  const a2Seed = createA2Store({ file: path.join(home, '.dsh', 'context-governance', 'session-policy.json') });
+  const a2Seed = createA2Store({ file: path.join(userData, 'session-policy.json') });
   a2Seed.write(sidA, 0.62);
   a2Seed.write(sidB, 0.62);
   await apply(ctx, { projectRoot: rootA, project: 'iso-rebuild' });
@@ -103,7 +106,7 @@ try {
     `afterB=${policySource(afterB)} at=${policyAt(afterB)}（第二根 A2 0.62 不得因 rebuild 丢）`);
 
   // 用例 3：设置页保存 plugin（写 plugin-policy.json + rebuild）后 A2 会话不被降级（用 sidA：A2 已加载）
-  const pluginFile = path.join(home, '.dsh', 'context-governance', 'plugin-policy.json');
+  const pluginFile = path.join(userData, 'plugin-policy.json');
   fs.mkdirSync(path.dirname(pluginFile), { recursive: true });
   fs.writeFileSync(pluginFile, JSON.stringify({ version: 1, at: 0.58, source: 'plugin', updatedAt: new Date().toISOString() }), 'utf8');
   for (const entry of reload) { try { await entry.handler({}); } catch { /* 忽略 */ } }
@@ -125,7 +128,7 @@ try {
 
   // 用例 5（INFO，非门级）：多会话不串号（A2 store 在 apply 时加载，外部写入不被重读，此项为环境局限）
   const sidC = 'session-rebuild-cccc-1111-2222-333344445555';
-  const a2Seed2 = createA2Store({ file: path.join(home, '.dsh', 'context-governance', 'session-policy.json') });
+  const a2Seed2 = createA2Store({ file: path.join(userData, 'session-policy.json') });
   a2Seed2.write(sidC, 0.62);
   for (const entry of reload) { try { await entry.handler({}); } catch { /* 忽略 */ } }
   await sleep(120);
