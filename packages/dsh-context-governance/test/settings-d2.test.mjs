@@ -600,7 +600,8 @@ test('C23 渲染鲁棒：不读 ctx.fetch；React 错误边界拦子组件抛错
   const codeLines = source.split(/\r?\n/).filter((line) => { const trimmed = line.trim(); return !trimmed.startsWith('*') && !trimmed.startsWith('//') && !trimmed.startsWith('/*'); });
   assert.equal(codeLines.some((line) => /ctx\.fetch|ctx\?\.fetch/.test(line)), false, '代码中不得以任何形式读 ctx.fetch（注释除外）');
   assert.equal(source.includes('fetchSnapshot(ctx?.fetch'), false);
-  assert.match(source, /fetchSnapshot\(globalThis\.fetch\)/);
+  // rc.9：取数带会话上下文（session 或 scope=global），但依旧只用 globalThis.fetch
+  assert.match(source, /fetchSnapshot\(globalThis\.fetch, \{ (sessionId|scope: 'global')/);
   assert.equal(/inject = \['slots', 'locale', 'configForms'\]/.test(source), true, 'inject 面不变（不把 fetch 塞进去）');
 
   // ② 真 React 错误边界协议：getDerivedStateFromError + componentDidCatch + fallback

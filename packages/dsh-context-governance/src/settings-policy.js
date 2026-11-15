@@ -107,13 +107,54 @@ export function ratioToPercentText(at) {
 
 /**
  * C18②：快照取数工厂（生产与单测共用同一实现，禁止测试专用路径）。
- * 优先最近一次真实会话解析（保留 /cg set 的 session 层）；无会话历史退回全局 resolve(null)。
- * @param {{policyState?: object, readLatestSessionPolicy?: (() => object|null) | object|null}} deps
- * @returns {() => {values: object, sources: object}}
+ *
+ * rc.9 修复（断点 A/B）：
+ * - **接受 `{ sessionId, scope }`**：给了 sessionId 就按该会话解析（`resolveSession`），
+ *   而不是"最近一次任意会话"；`scope: 'global'` 明确要全局（设置页卡片用）。
+ * - **不闭包捕获 state**：`policyState` 支持传 getter（`getPolicyState`），
+ *   每次调用都取当前值——否则 `rebuildPolicies()` 只换外层变量，resolver 仍持旧对象，
+ *   设置页存了 0.58 也永远读到 0.6。
+ * @param {{policyState?: object, getPolicyState?: () => object|null,
+ *   readLatestSessionPolicy?: (() => object|null) | object|null,
+ *   resolveSession?: (sessionId: string) => {values: object, sources: object}|null}} deps
+ * @returns {(input?: {sessionId?: string|null, scope?: string}) => {values: object, sources: object}}
  */
-export function createSnapshotPolicyResolver({ policyState = null, readLatestSessionPolicy = null } = {}) {
+export function createSnapshotPolicyResolver({
+  policyState = null,
+  getPolicyState = null,
+  readLatestSessionPolicy = null,
+  resolveSession = null,
+} = {}) {
   const readLatest = () => (typeof readLatestSessionPolicy === 'function' ? readLatestSessionPolicy() : readLatestSessionPolicy);
-  return () => {
+  const currentState = () => {
+    if (typeof getPolicyState === 'function') {
+      try { return getPolicyState() ?? null; } catch { return null; }
+    }
+    return policyState ?? null;
+  };
+  return ({ sessionId = null, scope = null } = {}) => {
+    // ① 明确要全局（设置页卡片）：绝不落到"最近一次会话"。
+    if (scope === 'global') {
+      try {
+        const state = currentState();
+        if (state !== null && typeof state.resolve === 'function') return state.resolve(null);
+      } catch { /* fall through */ }
+      return { values: {}, sources: {} };
+    }
+    // ② 指定会话：按该会话解析（A1/A2/项目模板/plugin 全在 state 内生效）。
+    if (typeof sessionId === 'string' && sessionId !== '') {
+      if (typeof resolveSession === 'function') {
+        try {
+          const resolved = resolveSession(sessionId);
+          if (resolved !== null && resolved !== undefined) return resolved;
+        } catch { /* fall through 到通用解析 */ }
+      }
+      try {
+        const state = currentState();
+        if (state !== null && typeof state.resolve === 'function') return state.resolve(sessionId);
+      } catch { /* fall through */ }
+    }
+    // ③ 无会话参数：维持历史口径（最近一次真实会话 → 全局），兼容旧客户端。
     try {
       const latest = readLatest();
       if (latest !== null && latest !== undefined && typeof latest.resolvable?.resolve === 'function') {
@@ -121,9 +162,8 @@ export function createSnapshotPolicyResolver({ policyState = null, readLatestSes
       }
     } catch { /* fall through */ }
     try {
-      if (policyState !== null && policyState !== undefined && typeof policyState.resolve === 'function') {
-        return policyState.resolve(null);
-      }
+      const state = currentState();
+      if (state !== null && typeof state.resolve === 'function') return state.resolve(null);
     } catch { /* fall through */ }
     return { values: {}, sources: {} };
   };
@@ -131,7 +171,9 @@ export function createSnapshotPolicyResolver({ policyState = null, readLatestSes
 /**
  * 只读快照 HTTP handler（C10 单测直接调用；index 只负责注册）。
  * 仅 GET；非 GET → 405。只写阈值/来源 JSON，无记忆内容、无本机路径。
- * @param {{getPolicy: () => object, getNative: () => number|null, onError?: (error: object) => void}} deps
+ * rc.9：解析 `?session=<id>` / `?scope=global` 并传给 getPolicy。
+ * @param {{getPolicy: (input?: {sessionId?: string|null, scope?: string|null}) => object,
+ *   getNative: () => number|null, onError?: (error: object) => void}} deps
  */
 export function createSnapshotHandler({ getPolicy, getNative, onError = null }) {
   return (req, res) => {
@@ -141,7 +183,9 @@ export function createSnapshotHandler({ getPolicy, getNative, onError = null }) 
       return;
     }
     try {
-      const view = policySnapshot(getPolicy(), { native: typeof getNative === 'function' ? getNative() : null });
+      const query = parseSnapshotQuery(req?.url);
+      const policy = typeof getPolicy === 'function' ? getPolicy(query) : null;
+      const view = policySnapshot(policy, { native: typeof getNative === 'function' ? getNative() : null });
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
       res.end(JSON.stringify(view));
     } catch (error) {
@@ -150,5 +194,19 @@ export function createSnapshotHandler({ getPolicy, getNative, onError = null }) 
       res.writeHead(500, { 'content-type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify({ error: 'internal' }));
     }
+  };
+}
+
+/** 从请求 URL 取 `session` / `scope`（非法/缺失 → null；不解析路径）。 */
+export function parseSnapshotQuery(url) {
+  const text = typeof url === 'string' ? url : '';
+  const at = text.indexOf('?');
+  if (at < 0) return { sessionId: null, scope: null };
+  const params = new URLSearchParams(text.slice(at + 1));
+  const sessionId = params.get('session');
+  const scope = params.get('scope');
+  return {
+    sessionId: typeof sessionId === 'string' && /^[A-Za-z0-9._:-]{1,120}$/.test(sessionId) ? sessionId : null,
+    scope: scope === 'global' ? 'global' : null,
   };
 }

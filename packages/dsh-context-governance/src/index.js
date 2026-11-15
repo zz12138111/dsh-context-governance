@@ -35,6 +35,7 @@ import { SCOPE_SKIP, resolveScope } from './scope.js';
 import { MEM_QUERY_NAME, MEM_WRITE_NAME, registerMemoryTools } from './tools/mem-tools.js';
 import { createSnapshotHandler, createSnapshotPolicyResolver, mergeSettingsAt, policySnapshot, readVolatileAt, resolvePluginAt } from './settings-policy.js';
 import { mountSessionPolicyRoute, mountPluginPolicyRoute } from './session-policy-route.js';
+import { rebuildPolicyStates } from './policy-rebuild.js';
 import { createPluginPolicyStore, pluginPolicyFile } from './plugin-policy.js';
 
 export const name = 'dsh-context-governance';
@@ -350,6 +351,9 @@ export function buildPolicyState(config, deps = {}) {
   const a2Store = deps.a2Store ?? null;
   const onPolicyResolved = typeof deps.onPolicyResolved === 'function' ? deps.onPolicyResolved : null;
   const markActive = typeof deps.markActive === 'function' ? deps.markActive : null;
+  // rc.8 修复：A1（本进程会话覆盖）必须是**进程级共享**的分桶表——否则每次重建都拿到一份空的，
+  // `/cg set` 写的 A1 在设置页保存/热更新后消失（真机表现为 session:A1 掉成 session:A2）。
+  const sharedSessionLayers = deps.sessionLayers instanceof Map ? deps.sessionLayers : null;
   const resolvedSeen = new Map();
   const realFs = typeof deps.readFile !== 'function';
   const readFile = typeof deps.readFile === 'function' ? deps.readFile : (target) => fs.readFileSync(target, 'utf8');
@@ -398,7 +402,9 @@ export function buildPolicyState(config, deps = {}) {
   layers.push(project);
   // 1a：会话层按 sessionId 分桶（进程内存；重启清空）。读不建桶、写才建桶。
   // 1b：同一 registry 条目扩为 { values, profile }，不另起存储。
-  const sessionLayers = new Map();
+  // 1a：会话层按 sessionId 分桶（进程内存；重启清空）。读不建桶、写才建桶。
+  // rc.8 修复：注入共享表时复用同一份（多 state / 重建都不丢 A1）；单测不注入则各自独立。
+  const sessionLayers = sharedSessionLayers ?? new Map();
   const EMPTY_SESSION_VALUES = Object.freeze({});
   const ensureSessionEntry = (sessionId, { create = false } = {}) => {
     if (typeof sessionId !== 'string' || sessionId === '') return null;
@@ -1206,13 +1212,8 @@ let policyState = buildPolicyState(mergePluginPolicy(config), {
         memoryRoot: memory.memoryRoot ?? config.memoryRoot,
         project: entry?.project ?? (samePath(root, config.projectRoot) ? config.project : path.basename(root)),
       };
-      const state = buildPolicyState(mergePluginPolicy(rootConfig), {
-        a2Store,
-        markActive: markSessionActive,
-        onPolicyResolved: ({ sessionId, at, source }) => {
-          a2AuditSink('policy-resolved', { sessionId, at, source });
-        },
-      });
+      // 与主 state / rebuild 共用同一套依赖（A2 层不会因换入口而丢）。
+      const state = buildPolicyState(mergePluginPolicy(rootConfig), policyDeps());
       if (key !== null) {
         policyCache.set(key, state);
         policyTemplateSignatures.set(key, projectTemplateSignature(rootForSignature));
@@ -1243,19 +1244,35 @@ let policyState = buildPolicyState(mergePluginPolicy(config), {
       }
       return policyState;
     };
+    /**
+     * 策略层依赖（**唯一来源**）：每次 buildPolicyState 都必须带同一套，
+     * 否则会话层（A1/A2）会从该 state 里消失。rc.8 真机缺陷就是 per-root 重建漏传这套依赖。
+     */
+    // A1 分桶表：进程级共享，主 state / 每 root / 每次重建都用同一份。
+    const sharedSessionLayers = new Map();
+    const policyDeps = () => ({
+      a2Store,
+      markActive: markSessionActive,
+      sessionLayers: sharedSessionLayers,
+      onPolicyResolved: ({ sessionId, at, source }) => {
+        a2AuditSink('policy-resolved', { sessionId, at, source });
+      },
+    });
     // C11②（实现②·保承诺）：plugin 层值变更后统一重算（配置热更新 / 设置页保存都走这里）。
     // 逐 root（多根不串）重算并把新策略下发到该 root 的 guard，`policyForSession` 语义不变。
+    // 每个 state（主 + 每 root）都必须走 policyDeps()，漏一个就会丢掉该 root 的 A1/A2 层。
     const rebuildPolicies = () => {
-      policyState = buildPolicyState(mergePluginPolicy(config), {
-        a2Store,
-        onPolicyResolved: ({ sessionId, at, source }) => {
-          a2AuditSink('policy-resolved', { sessionId, at, source });
-        },
+      const { main, roots } = rebuildPolicyStates({
+        config,
+        rootConfigs: policyConfigs,
+        buildPolicyState,
+        mergePluginPolicy,
+        deps: policyDeps,
       });
-      for (const [rootId, rootConfig] of policyConfigs) {
-        const next = buildPolicyState(mergePluginPolicy(rootConfig));
-        policyCache.set(rootId, next);
-        guardPool?.updatePolicy?.(rootId, next.policy);
+      policyState = main;
+      for (const [rootId, state] of roots) {
+        policyCache.set(rootId, state);
+        guardPool?.updatePolicy?.(rootId, state.policy);
       }
       if (attachEntry !== null) policyCache.set(attachEntry.rootId, policyState);
     };
@@ -1278,10 +1295,18 @@ let policyState = buildPolicyState(mergePluginPolicy(config), {
         windowTokens: config.policy.windowTokens,
         reservedTokens: config.policy.reservedTokens,
       });
-      // C18②：会话感知——生产与单测共用同一工厂（优先最近会话解析，无历史退回全局）。
+      // C18②：会话感知——生产与单测共用同一工厂。
+      // rc.9：①每次动态取当前 policyState（`rebuildPolicies()` 后不会读到旧对象）；
+      //       ②按 `?session=` 走该会话解析（A1/A2 生效），`?scope=global` 才走全局。
       const resolveSnapshotPolicy = createSnapshotPolicyResolver({
-        policyState,
+        getPolicyState: () => policyState,
         readLatestSessionPolicy: () => lastSessionPolicy,
+        resolveSession: (sessionId) => {
+          const session = { id: sessionId, header: { id: sessionId } };
+          const state = policyForSession(session);
+          if (state !== null && typeof state.resolve === 'function') return state.resolve(sessionId);
+          return null;
+        },
       });
       mountSnapshotRoute(ctx, {
         getPolicy: resolveSnapshotPolicy,
@@ -1669,18 +1694,20 @@ let policyState = buildPolicyState(mergePluginPolicy(config), {
       rootAudit,
       policy: policyState,
       getPolicyForSession: (sessionId) => {
-  if (guardPool === null) return policyState;
-  // C37④：/cg status 的生效值必须每次按模板 stat 重建（不能拿 guard 创建时快照）。
-  try {
-    const resolved = registry?.resolveSessionRoot?.({ header: { id: sessionId } }) ?? null;
-    if (resolved?.entry !== null && resolved?.entry !== undefined && policyForEntryRef !== null) {
-      return policyForEntryRef(resolved.entry);
-    }
-  } catch {
-    /* 回退 guard 快照 */
-  }
-  return guardPool.policyForSessionId(sessionId) ?? policyState;
-},
+        if (guardPool === null) return policyState;
+        // C37④：/cg status 的生效值必须每次按模板 stat 重建（不能拿 guard 创建时快照）。
+        try {
+          const resolved = registry?.resolveSessionRoot?.({ header: { id: sessionId } }) ?? null;
+          if (resolved?.entry !== null && resolved?.entry !== undefined && policyForEntryRef !== null) {
+            return policyForEntryRef(resolved.entry);
+          }
+        } catch {
+          /* 回退主 state */
+        }
+        // rc.8 修复：未纳管根 / 无法归根的会话也必须拿到带 A2+A1 的 state。
+        // 之前回落到 guard 快照（按 null 会话解析的静态 policy），A2 直接丢成 builtin。
+        return policyState;
+      },
       getStoreForSession: (sessionId) => (guardPool === null ? store : (guardPool.storeForSessionId(sessionId) ?? store)),
       logger: ctx.logger,
       getEarlyStatus: () => {

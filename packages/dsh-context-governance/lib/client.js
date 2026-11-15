@@ -22,6 +22,9 @@ window.__ModuleLoader__.load({
 
     const ENTRY_ID = 'dsh-context-governance';
     const SNAPSHOT_PATH = '/context-governance/policy-snapshot';
+    /** rc.9：快照必须带会话上下文；设置页显式要全局。 */
+    const SNAPSHOT_PATH_SESSION = '/context-governance/policy-snapshot?session=';
+    const SNAPSHOT_PATH_GLOBAL = '/context-governance/policy-snapshot?scope=global';
     const SESSION_POLICY_PATH = '/context-governance/session-policy';
     const PLUGIN_POLICY_PATH = '/context-governance/plugin-policy';
     const AT_MIN = 0.2;
@@ -279,16 +282,30 @@ window.__ModuleLoader__.load({
       ].join('\n');
     };
 
+    /**
+     * rc.9：快照 URL 必须带会话上下文——chip/气泡显示的是**本会话**生效值，
+     * 设置页卡片显式要全局（`scope=global`），否则三处都只能看"最近一次任意会话/全局"。
+     */
+    const snapshotUrl = ({ sessionId = null, scope = null } = {}) => {
+      if (typeof sessionId === 'string' && sessionId !== '') return `${SNAPSHOT_PATH_SESSION}${encodeURIComponent(sessionId)}`;
+      if (scope === 'global') return SNAPSHOT_PATH_GLOBAL;
+      return SNAPSHOT_PATH;
+    };
+
     /** 拉取快照：失败 warn + 3 次退避（C19）；导出供假 fetch 序列单测。 */
-    const fetchSnapshotWithRetry = async (fetchImpl = globalThis.fetch, { attempts = 3, delays = [300, 1000], warn = console.warn } = {}) => {
+    const fetchSnapshotWithRetry = async (
+      fetchImpl = globalThis.fetch,
+      { attempts = 3, delays = [300, 1000], warn = console.warn, sessionId = null, scope = null } = {},
+    ) => {
       if (typeof fetchImpl !== 'function') {
         warn('[context-governance] snapshot fetch unavailable: fetch missing');
         return null;
       }
+      const url = snapshotUrl({ sessionId, scope });
       let reason = 'unknown';
       for (let index = 0; index < attempts; index += 1) {
         try {
-          const response = await fetchImpl(SNAPSHOT_PATH, { method: 'GET', headers: { accept: 'application/json' } });
+          const response = await fetchImpl(url, { method: 'GET', headers: { accept: 'application/json' } });
           if (response && response.ok === true) return await response.json();
           reason = response ? `HTTP ${response.status}` : 'no response';
           warn(`[context-governance] snapshot fetch failed: ${reason} (attempt ${index + 1}/${attempts})`);
@@ -301,7 +318,7 @@ window.__ModuleLoader__.load({
       warn(`[context-governance] snapshot fetch failed after ${attempts} attempts: ${reason}`);
       return null;
     };
-    const fetchSnapshot = (fetchImpl = globalThis.fetch) => fetchSnapshotWithRetry(fetchImpl);
+    const fetchSnapshot = (fetchImpl = globalThis.fetch, options = undefined) => fetchSnapshotWithRetry(fetchImpl, options);
 
     const h = react.createElement;
     const createViewState = () => ({ open: false, snapshot: null, listeners: new Set() });
@@ -361,7 +378,7 @@ window.__ModuleLoader__.load({
       react.useEffect(() => store.subscribe((next) => { setView(next.snapshot); setOpen(next.open); }), [store]);
       react.useEffect(() => {
         let alive = true;
-        const refresh = () => { fetchSnapshot(globalThis.fetch).then((snapshot) => { if (alive && snapshot) store.set({ snapshot }); }); };
+        const refresh = () => { fetchSnapshot(globalThis.fetch, { sessionId: sessionIdOf(props, ctx) }).then((snapshot) => { if (alive && snapshot) store.set({ snapshot }); }); };
         refresh();
         const focusTarget = globalThis.window ?? globalThis;
         if (typeof focusTarget?.addEventListener === 'function') {
@@ -435,7 +452,7 @@ window.__ModuleLoader__.load({
       react.useEffect(() => {
         if (!open) return undefined;
         let alive = true;
-        fetchSnapshot(globalThis.fetch).then((snapshot) => { if (alive && snapshot) store.set({ snapshot }); });
+        fetchSnapshot(globalThis.fetch, { sessionId }).then((snapshot) => { if (alive && snapshot) store.set({ snapshot }); });
         return () => { alive = false; };
       }, [open, ctx, store]);
       const close = () => { if (closeDecision('escape')) store.set({ open: false }); };
@@ -451,7 +468,7 @@ window.__ModuleLoader__.load({
         setError('');
         setSaved(true);
         setTimeout(() => setSaved(false), 1500);
-        const next = await fetchSnapshot(globalThis.fetch);
+        const next = await fetchSnapshot(globalThis.fetch, { sessionId });
         store.set(next ? { snapshot: next } : {});
       };
       const onBlurField = () => {
@@ -459,7 +476,7 @@ window.__ModuleLoader__.load({
         setError(result.ok === true ? '' : result.reason);
       };
       const restoreDefault = () => { setDraft(String(defaultPercentFor(view ?? null))); setError(''); };
-      const retry = () => { fetchSnapshot(globalThis.fetch).then((snapshot) => { if (snapshot) store.set({ snapshot }); }); };
+      const retry = () => { fetchSnapshot(globalThis.fetch, { sessionId }).then((snapshot) => { if (snapshot) store.set({ snapshot }); }); };
       return h('div', {
         role: 'dialog', 'aria-modal': 'true', 'aria-label': model.title, ref: dialogRef, style: S.dialog,
         tabIndex: -1,
@@ -506,7 +523,7 @@ window.__ModuleLoader__.load({
       react.useEffect(() => store.subscribe((next) => { setView(next.snapshot); }), [store]);
       react.useEffect(() => {
         let alive = true;
-        fetchSnapshot(globalThis.fetch).then((snapshot) => { if (alive && snapshot) store.set({ snapshot }); });
+        fetchSnapshot(globalThis.fetch, { scope: 'global' }).then((snapshot) => { if (alive && snapshot) store.set({ snapshot }); });
         return () => { alive = false; };
       }, [ctx, store]);
       const model = bubbleView(view ?? null);
@@ -517,7 +534,7 @@ window.__ModuleLoader__.load({
         setError('');
         setSaved(true);
         setTimeout(() => setSaved(false), 1500);
-        const next = await fetchSnapshot(globalThis.fetch);
+        const next = await fetchSnapshot(globalThis.fetch, { scope: 'global' });
         if (next) store.set({ snapshot: next });
       };
       return h('div', { style: { ...S.dialog, width: 'auto', boxShadow: 'none' } },
