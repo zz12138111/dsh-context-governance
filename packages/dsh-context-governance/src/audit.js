@@ -94,6 +94,11 @@ export const AUDIT_FIELD_WHITELIST = Object.freeze({
   moved: 'number',
   seq: 'number',
   ids: 'id-array',
+  /** D-MGMT-023：同标题重复、只回注不落盘的条 id；以及可解析性对账的缺条 id。 */
+  dedupedIds: 'id-array',
+  missingIds: 'id-array',
+  requested: 'number',
+  missing: 'number',
   kinds: 'text-array',
   reason: 'text',
   detail: 'text',
@@ -188,6 +193,8 @@ export const AUDIT_EVENTS = Object.freeze([
   'protection-write-failed',
   'protection-write-skipped',
   'protection-materialized',
+  /** D-MGMT-023：保护指针在对账时缺失（记了 id 却没落盘）。 */
+  'protection-entry-missing',
   'protection-materialize-failed',
   'protection-materialize-skipped',
   'b1-host-native-unprotected',
@@ -522,5 +529,6 @@ export function createRootAudit(identity, { maxBytes, now } = {}) {
     return null;
   }
 }
+
 
 

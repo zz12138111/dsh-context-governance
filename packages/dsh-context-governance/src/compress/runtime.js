@@ -579,14 +579,18 @@ export class CompressionGuard {
     }
     if (entries.length === 0) return { ok: false, reason: 'empty-snapshot' };
     const durationMs = Date.now() - writeStartedAt;
+    // D-MGMT-023：ids 只记“会落盘”的条；同标题重复条单独记 dedupedIds（回注仍用它们）。
+    const admittedEntries = entries.filter((entry) => entry.deduped !== true);
+    const dedupedEntries = entries.filter((entry) => entry.deduped === true);
     const auditOk = this.#auditEvent('protection-write', {
       sessionId,
       cycle: cycleKey,
       phase: 'early-prewrite',
       manual: false,
-      count: entries.length,
+      count: admittedEntries.length,
       durationMs,
-      ids: entries.map((entry) => entry.id),
+      ids: admittedEntries.map((entry) => entry.id),
+      dedupedIds: dedupedEntries.map((entry) => entry.id),
       kinds: built.meta.map((item) => item.kind),
     });
     if (!auditOk) {
@@ -2041,13 +2045,19 @@ export class CompressionGuard {
       state.protectionCycleKey = id;
       this.#stats.protectionWrites += 1;
       this.#stats.lastProtectionWriteMs = durationMs;
+      const admittedEntries = entries.filter((entry) => entry.deduped !== true);
+      const dedupedEntries = entries.filter((entry) => entry.deduped === true);
+      // D-MGMT-023：ids 只记“会落盘”的条；dedupedIds 是同标题重复条（只回注、不落盘）。
+      state.protectionWriteIds = admittedEntries.map((entry) => entry.id);
+      state.protectionDedupedIds = dedupedEntries.map((entry) => entry.id);
       this.#auditEvent('protection-write', {
         sessionId: state.sessionId,
         compactionId: id,
         manual: state.manual === true,
-        count: entries.length,
+        count: admittedEntries.length,
         durationMs,
-        ids: entries.map((entry) => entry.id),
+        ids: state.protectionWriteIds,
+        dedupedIds: state.protectionDedupedIds,
         kinds: built.meta.map((item) => item.kind),
       });
       // 落盘 journal 已完成；并入主题文件是异步的，不阻塞 start。
@@ -2121,10 +2131,32 @@ export class CompressionGuard {
     const promise = Promise.resolve(this.#store.materializeProtection(cycleKey))
       .then((result) => {
         if (state !== undefined) state.protectionMaterialized = result;
+        // D-MGMT-023：moved 只数真正落盘的条；dedupedIds 单列，供“ids 与落盘逐条对账”。
+        const expectedIds = Array.isArray(state?.protectionWriteIds) ? state.protectionWriteIds : [];
+        const writtenIds = Array.isArray(result?.ids) ? result.ids : [];
+        const moved = result?.moved ?? writtenIds.length;
         this.#auditEvent('protection-materialized', {
           compactionId: cycleKey,
-          moved: result?.moved ?? 0,
+          moved,
+          requested: expectedIds.length,
+          dedupedIds: Array.isArray(result?.dedupedIds) ? result.dedupedIds : [],
         });
+        const written = new Set(writtenIds);
+        const missingIds = expectedIds.filter((id) => !written.has(id));
+        if (missingIds.length > 0) {
+          // 记录里有、落盘没有：必须显式报警（审核 N3 fail 判据：moved 与落盘差 ≥1 且无审计）。
+          this.#auditEvent('protection-entry-missing', {
+            compactionId: cycleKey,
+            requested: expectedIds.length,
+            moved,
+            missing: missingIds.length,
+            missingIds,
+          });
+          this.#logger?.warn?.(
+            `[context-governance] ${missingIds.length} protection pointer(s) not materialized ` +
+            `(cycle=${cycleKey}): ${missingIds.join(',')}`,
+          );
+        }
       })
       .catch((error) => {
         this.#stats.materializeFailures += 1;
