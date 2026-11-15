@@ -1315,6 +1315,8 @@ C 的初步证据：启动后本项目根 `audit.jsonl` 只有 `capability@ready
 > - 计数更正：rc.10 终版差距 = 离线 **0** + 真机窗口新增 **4**（P2/P3/P4/P5）；**P5 为 BLOCKER**（UI 主入口不可用），修法须同时满足"宿主 UI 三类写成功 + curl 缺 token/跨源仍 403"。rc.10 保留不回滚、不重出（审核 `cc1d19b`）。
 > - **29b. 审核接受 C31③ 意图解释（2026-11-15，`cc1d19b` 线）**：口径=「①合法 `Origin` ②`Sec-Fetch-Site: same-origin` ③宿主注入 token/nonce，**三者任一 + loopback**」，**不改需求文字**、不上报改口径。两条硬条件进放行判据与 Release notes：①**`remoteAddress` loopback 强制不得放松**（`not-loopback` 仍 403）——这是唯一真边界；若 webServer 暴露到 LAN，Origin/token 都不构成防护，Release notes 必须写明"不要把监听暴露到非 loopback"；②**审计/错误码须区分证明来源**（如 `via: origin|sec-fetch|token`），拒因保持 **`missing-proof` / `cross-origin` / `not-loopback`** 三类，不合并成模糊码。**副作用（已纠正）**：开发侧"token 必填"作废（token 只是三种证明之一、非必需）；测试侧负向由"伪造同源→403"改为"**无任何证明→403**"。
 
+> - **30. 放行判据补一条：门必须覆盖真实挂载路径（2026-11-15，因 rc.11 `1baa586` 事故）**：`mountPluginPolicyRoute` 未把 `csrfToken` 传入 handler → plugin 层 token-only 写仍 403 `missing-proof`；开发门直调 `createPluginPolicyHandler`（未走 mount）→ 17/17 全绿掩盖缺口，直到审核出包后发现。**此后同类修复的验收必须含"经真实挂载路径的一次真实写"**（不是直调工厂函数），并对 `create*Handler(` 全量 grep 参数透传；**另加负向**：故意不传该参数 → 应 403，防止回归。教训：绿门只覆盖单一路径 = 不算覆盖。rc.11 `1baa586` 包与回执、覆盖页均作废（`1248b63`），待新 commit 重出。
+
 **窗口物料（00 已备，2026-11-14 22:30；**本轮暂不使用**，重开窗口时再用；明细见 `G:\DS-HARNESS\tasks\TASK-20261114-02-本体升级-0.2.2-rc.3.md`）**：
 
 | 项 | 值 |
