@@ -121,10 +121,19 @@ try {
   const Bubble = client.createBubble(state, store, pluginCtx);
   const renderTree = () => { cursor = 0; return Bubble({ sessionId, ctx: pluginCtx }); };
 
-  let tree = renderTree();
-  await flush();
-  tree = renderTree();
-  await flush();
+  let tree = null;
+  let renderError = null;
+  try {
+    tree = renderTree();
+    await flush();
+    tree = renderTree();
+    await flush();
+  } catch (error) {
+    renderError = error;
+  }
+  check('B2-render-bubble-without-throw', renderError === null && tree !== null,
+    `err=${renderError === null ? 'none' : String(renderError.message).slice(0, 160)}（B4：client.js 缺声明会在此抛 ReferenceError）`);
+  if (renderError !== null) { throw renderError; }
   const beforeText = textOf(tree);
   const beforeInput = findAll(tree, (node) => node.type === 'input')[0]?.props?.value ?? null;
   check('B2-before-reset-shows-session-a1',
