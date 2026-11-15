@@ -71,6 +71,7 @@
 - 回注遵守一条硬规则：**详情永不回注**；摘要不可读时只放 ID+状态。
 - 压缩沿用宿主或 context-zip，不写第二个压缩引擎，也**不替换** `ctx.compaction`。
 - **1.1 会话级记忆与多根**：root 只作审计/压缩分组；**指针库在用户级** `<home>/context-governance/sessions/<sessionId>/`（`MEMORY.md`/`topics/`/`.id-watermark`），**不进项目根**；共享只经 `shared/<rootId>/` + 显式 `memory promote`；legacy `<root>/memory/governance/` 标 `legacy-shared-v1` **只读**。**已知限制**：显式配置根内多根隔离不完整（v3 冻结口径，不是 bug）。
+> **当前 RC 过渡说明**：C38 完整落地前，`mem_*` 工具仍读写根级记忆；C38 完成后切到会话指针库（以发布说明为准）。
 
 ### 隐私边界（准确口径）
 
