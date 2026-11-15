@@ -130,6 +130,8 @@ export async function acquireWriterLock(rootDir, {
   heartbeatMs = LOCK_HEARTBEAT_MS,
   probe = probePid,
   heartbeat = true,
+  // 测试注入口：默认用真实原子写；用例可注入"可控/挂起"的写来构造确定性竞态（B15）。
+  writeFile = atomicWriteFile,
 } = {}) {
   const file = path.join(rootDir, LOCK_FILE_NAME);
   const violation = lockContainment(rootDir, file);
@@ -163,34 +165,51 @@ export async function acquireWriterLock(rootDir, {
   }
   const writeViolation = lockContainment(rootDir, file);
   if (writeViolation !== null) return { ok: false, reason: writeViolation };
-  await atomicWriteFile(file, JSON.stringify(mine, null, 2) + '\n', { backup: false });
+  await writeFile(file, JSON.stringify(mine, null, 2) + '\n', { backup: false });
   const touchLock = async () => {
+    if (released === true) return; // release 已开始：不再写锁（防 unlink 后复活）
     try {
       if (lockContainment(rootDir, file) !== null) return;
       const current = await readWriterLock(rootDir);
+      if (released === true) return; // B15：读盘期间可能已 release
       if (current.lock === null) return;
       if (current.lock.pid !== pid || current.lock.startedAt !== startedAt) return;
       const next = { ...mine, heartbeatAt: now().toISOString() };
-      await atomicWriteFile(file, JSON.stringify(next, null, 2) + '\n', { backup: false });
+      if (released === true) return; // B15：写盘前最后一道闸（防 unlink 后复活）
+      await writeFile(file, JSON.stringify(next, null, 2) + '\n', { backup: false });
     } catch {
       /* 心跳失败不打断主流程；下一次心跳重试 */
     }
   };
   let timer = null;
+  // CI 竞态（lock.test:182）：心跳是**不等待的异步写**，release 只 clearInterval 不等在途写，
+  // 于是"心跳写入 unlink 之后落盘"会把锁文件写回来（与 P4「删了又被写回」同类）。
+  // 现在：release 先置 released 停掉后续心跳 → await 在途串行队列 → 再删 → 删后复核。
+  let released = false;
+  let inflight = Promise.resolve();
   if (heartbeat === true) {
-    timer = setInterval(() => { void touchLock(); }, heartbeatMs);
+    timer = setInterval(() => {
+      inflight = inflight.then(() => touchLock()).catch(() => {});
+    }, heartbeatMs);
     if (typeof timer?.unref === 'function') timer.unref();
   }
   const release = async () => {
+    released = true;
     if (timer !== null) {
       clearInterval(timer);
       timer = null;
     }
+    // 等待所有已在途的心跳写入落定，避免它们在 unlink 之后复活锁文件。
+    try { await inflight; } catch { /* 心跳自身已吞错，这里兜底 */ }
     if (lockContainment(rootDir, file) !== null) return;
     const current = await readWriterLock(rootDir);
-    if (current.lock === null) return;
-    if (current.lock.pid !== pid || current.lock.startedAt !== startedAt) return;
+    if (current.lock !== null && (current.lock.pid !== pid || current.lock.startedAt !== startedAt)) return;
     await fs.rm(file, { force: true });
+    // 删后复核：若同名锁又被写回**且仍是我们这把**，再删一次（有界一次，不循环）。
+    const after = await readWriterLock(rootDir);
+    if (after.lock !== null && after.lock.pid === pid && after.lock.startedAt === startedAt) {
+      await fs.rm(file, { force: true });
+    }
   };
   return { ok: true, lock: mine, release, ...(reclaimed === null ? {} : { reclaimed }) };
 }

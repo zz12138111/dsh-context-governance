@@ -5,6 +5,7 @@ import test from 'node:test';
 
 import { MemoryStore } from '../src/memory/store.js';
 import { LOCK_FILE_NAME, acquireWriterLock, isPidAlive, readWriterLock } from '../src/memory/lock.js';
+import { atomicWriteFile } from '../src/memory/atomic.js';
 import { tempDir } from './helpers.mjs';
 
 test('死进程留下的锁视为陈旧，可被覆盖', async () => {
@@ -189,6 +190,84 @@ test('rc.2 心跳：持锁期间锁文件 heartbeatAt 会被刷新，release 后
     const second = (await readWriterLock(rootDir)).lock.heartbeatAt;
     assert.notEqual(second, first);
     await acquired.release();
+    assert.equal((await readWriterLock(rootDir)).lock, null);
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 30 });
+  }
+});
+
+/**
+ * CI 回归（GitHub run 43684661666 / commit 47b1e9b）：`lock.test:182` 偶发红——
+ * release 时**在途心跳**在 `fs.rm` 之后落盘，把锁文件写回来（heartbeatAt 是新的）。
+ * 修法：release 先置 released → await 在途串行队列 → 删 → 删后复核。
+ * 本用例以极小心跳间隔连续压 20 轮，release 后**立即**断言无锁（不给"轮询等待"掩盖竞态）。
+ */
+test('rc.18a 心跳在途写不得在 release 后复活锁文件（CI 竞态回归）', async () => {
+  const rootDir = await tempDir();
+  try {
+    for (let round = 0; round < 20; round += 1) {
+      const acquired = await acquireWriterLock(rootDir, { project: 'p', heartbeatMs: 1 });
+      assert.equal(acquired.ok, true, `round ${round} 取锁失败`);
+      // 让若干心跳进入/接近在途，再立刻 release（最大化与 unlink 的竞态窗口）
+      await new Promise((resolve) => setTimeout(resolve, round % 3 === 0 ? 1 : 5));
+      await acquired.release();
+      const afterRelease = (await readWriterLock(rootDir)).lock;
+      assert.equal(afterRelease, null, `round ${round}: release 后锁文件被心跳写回（heartbeatAt=${afterRelease?.heartbeatAt}）`);
+    }
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 30 });
+  }
+});
+
+/**
+ * B15 确定性竞态用例（审核要求"别只留靠 setTimeout 撞的那条"）：
+ * 注入一个**可控挂起**的写函数，把心跳写卡在"已通过 read 检查、正准备写盘"的位置，
+ * 其间调用 release()，再放行写入 → 断言 release 结束时锁文件为 null，且 200ms 后仍为 null。
+ */
+test('B15 慢心跳：release 等待在途写，放行后也不复活锁文件', async () => {
+  const rootDir = await tempDir();
+  try {
+    let gate = null;
+    let heartbeatWrites = 0;
+    const controlledWrite = async (file, text, options) => {
+      heartbeatWrites += 1;
+      // 第 1 次是初始写（必须立即完成）；之后的心跳写挂起，等测试放行。
+      if (heartbeatWrites > 1 && gate !== null) await gate.promise;
+      await atomicWriteFile(file, text, options);
+    };
+    const acquired = await acquireWriterLock(rootDir, {
+      project: 'p', heartbeatMs: 5, probe: () => 'alive', writeFile: controlledWrite,
+    });
+    assert.equal(acquired.ok, true);
+    // 让至少一次心跳进入"挂起待写"状态
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    let releaseGate = null;
+    gate = { promise: new Promise((resolve) => { releaseGate = resolve; }) };
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const releasing = acquired.release();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    // 放行挂起的心跳写（模拟"写盘已经开始、release 已删文件"的最坏时序）
+    releaseGate();
+    await releasing;
+    assert.equal((await readWriterLock(rootDir)).lock, null, 'release 完成后不得有锁文件');
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.equal((await readWriterLock(rootDir)).lock, null, '200ms 后仍不得复活');
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 30 });
+  }
+});
+
+/** B15：release 之后立即重取必须成功（这正是"新鲜心跳锁挡住 45s"的真问题）。 */
+test('B15 release 后立即重取：acquire 必须 ok:true', async () => {
+  const rootDir = await tempDir();
+  try {
+    const first = await acquireWriterLock(rootDir, { project: 'p', heartbeatMs: 1 });
+    assert.equal(first.ok, true);
+    await new Promise((resolve) => setTimeout(resolve, 20)); // 期间会有多次心跳
+    await first.release();
+    const second = await acquireWriterLock(rootDir, { project: 'p', heartbeatMs: 1 });
+    assert.equal(second.ok, true, 'release 后立即重取被挡 ⇒ 锁文件被心跳写回');
+    await second.release();
     assert.equal((await readWriterLock(rootDir)).lock, null);
   } finally {
     await fs.rm(rootDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 30 });
