@@ -105,6 +105,8 @@ export const AUDIT_FIELD_WHITELIST = Object.freeze({
   entries: 'number',
   missing: 'number',
   kinds: 'text-array',
+  /** D：项目模板写入涉及的配置键名。 */
+  keys: 'text-array',
   reason: 'text',
   detail: 'text',
   source: 'text',
@@ -280,6 +282,9 @@ export const AUDIT_EVENTS = Object.freeze([
   'a2-load-failed',
   /** C36 ③：策略解析来源审计（source 字面 session:A1/session:A2/project/plugin）。 */
   'policy-resolved',
+  /** D：项目模板显式创建/清除（仅经 /cg project-template 入口）。 */
+  'project-template-set',
+  'project-template-cleared',
   'root-unresolved',
   'root-guard-error',
   'root-guard-limit-warn',

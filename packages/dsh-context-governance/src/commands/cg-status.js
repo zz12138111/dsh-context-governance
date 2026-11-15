@@ -120,6 +120,17 @@ function statusText({ store, guard, audit, rootAudit = null, rootsView = null, r
   if (policy !== null && typeof policy.resolve === 'function') {
     resolvedPolicy = policy.resolve(sessionId);
     lines.push(`policy: ${summarizePolicy(resolvedPolicy)}`);
+    // D：项目模板可见性（默认没有；仅显式存在时显示）。
+    if (policy.projectTemplate !== null && policy.projectTemplate !== undefined) {
+      try {
+        const template = policy.projectTemplate;
+        lines.push(template.exists()
+          ? `project-template: ${JSON.stringify(template.values())} (source=.cg-policy.json)`
+          : 'project-template: none');
+      } catch {
+        lines.push('project-template: unavailable');
+      }
+    }
     // 1b：本会话生效 profile 与来源（不持久化；重启回配置/默认）。
     if (typeof policy.profileInfo === 'function') {
       const info = policy.profileInfo(sessionId);
@@ -401,6 +412,70 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
     return { value: number };
   };
   const sessionText = (sessionValues) => formatSession(sessionValues);
+  /** D：项目模板显式入口 `/cg project-template [show|create key=value…|clear]`。 */
+  const handleProjectTemplate = (argText, sessionId = null) => {
+    const policy = policyFor(sessionId);
+    const audit = auditFor(sessionId);
+    if (policy === null || policy.projectTemplate === null || policy.projectTemplate === undefined) {
+      return { kind: 'error', text: '[context-governance] project template is unavailable' };
+    }
+    const template = policy.projectTemplate;
+    const tokens = String(argText ?? '').trim().split(/\s+/).filter(Boolean);
+    const action = tokens[0] === undefined ? 'show' : tokens[0];
+    if (action === 'show') {
+      return {
+        kind: 'success',
+        text: [
+          'context-governance project-template',
+          template.exists()
+            ? `项目模板 ${JSON.stringify(template.values())}（来源 .cg-policy.json）`
+            : '无项目模板',
+        ].join('\n'),
+      };
+    }
+    if (action === 'clear') {
+      const cleared = template.clear();
+      if (cleared.ok !== true) {
+        return { kind: 'error', text: `[context-governance] clear failed: ${cleared.reason ?? 'unknown'}` };
+      }
+      audit?.append?.('project-template-cleared', { path: cleared.path });
+      return { kind: 'success', text: `context-governance project-template\ncleared: ${cleared.path}` };
+    }
+    if (action !== 'create') {
+      return { kind: 'error', text: 'Usage: /cg project-template [show|create compact.at=0.5|clear]' };
+    }
+    const next = { ...template.values() };
+    const pairs = tokens.slice(1);
+    for (const token of pairs) {
+      const index = token.indexOf('=');
+      if (index <= 0) return { kind: 'error', text: `[context-governance] 需要 key=value（收到 ${token}）` };
+      const key = token.slice(0, index).trim();
+      const parsed = parseValue(key, token.slice(index + 1).trim());
+      if (parsed.error !== undefined) return { kind: 'error', text: parsed.error };
+      const checked = validateLayer(
+        { [key]: parsed.value },
+        { source: 'project', native: typeof policy.validationNative === 'function' ? policy.validationNative() : undefined, projectLayer: true },
+      );
+      if (checked.invalid.length > 0) {
+        const item = checked.invalid[0];
+        return { kind: 'error', text: `context-governance project-template: ${key} 被拒绝: ${item.reason}` };
+      }
+      next[key] = parsed.value;
+    }
+    const written = template.write(next);
+    if (written.ok !== true) {
+      return { kind: 'error', text: `[context-governance] write failed: ${written.reason ?? 'unknown'}` };
+    }
+    audit?.append?.('project-template-set', { path: written.path, keys: Object.keys(next) });
+    return {
+      kind: 'success',
+      text: [
+        'context-governance project-template',
+        `written: ${written.path}` ,
+        `values: ${JSON.stringify(next)}` ,
+      ].join('\n'),
+    };
+  };
   /** `/cg set key=value [key=value…] | /cg set reset`：会话层覆盖（最高优先级）。 */
   const handleSet = (argText, sessionId = null) => {
     const policy = policyFor(sessionId);
@@ -678,6 +753,9 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
           return { kind: 'success', text: `context-governance compact\narmed: ${arg === 'arm' ? 'on' : 'off'} (source=session)` };
         }
         return { kind: 'error', text: 'Usage: /cg compact [status|arm|disarm]' };
+      }
+      if (raw === 'project-template' || raw.startsWith('project-template ')) {
+        return handleProjectTemplate(raw.slice('project-template'.length).trim(), sessionId);
       }
       if (raw === 'set' || raw.startsWith('set ') || raw === 'reset') {
         try {

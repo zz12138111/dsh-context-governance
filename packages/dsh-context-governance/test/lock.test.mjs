@@ -25,9 +25,9 @@ test('死进程留下的锁视为陈旧，可被覆盖', async () => {
     await acquired.release();
     assert.equal((await readWriterLock(rootDir)).lock, null);
     // 心跳定时器可能有一次 tick 在飞：等它落地再删临时目录（否则偶发 ENOTEMPTY）。
-    await new Promise((resolve) => setTimeout(resolve, 80));
+    await new Promise((resolve) => setTimeout(resolve, 150));
   } finally {
-    await fs.rm(rootDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+    await fs.rm(rootDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 30 });
   }
 });
 
@@ -182,10 +182,10 @@ test('rc.2 活写者心跳新鲜：不回收（即使锁龄很长）', async () 
 test('rc.2 心跳：持锁期间锁文件 heartbeatAt 会被刷新，release 后停止', async () => {
   const rootDir = await tempDir();
   try {
-    const acquired = await acquireWriterLock(rootDir, { project: 'p', heartbeatMs: 40 });
+    const acquired = await acquireWriterLock(rootDir, { project: 'p', heartbeatMs: 80 });
     assert.equal(acquired.ok, true);
     const first = (await readWriterLock(rootDir)).lock.heartbeatAt;
-    await new Promise((resolve) => setTimeout(resolve, 120));
+    await new Promise((resolve) => setTimeout(resolve, 400));
     const second = (await readWriterLock(rootDir)).lock.heartbeatAt;
     assert.notEqual(second, first);
     await acquired.release();

@@ -19,6 +19,7 @@ import { RootRegistry } from './roots/registry.js';
 import { RootStorePool } from './roots/store-pool.js';
 import { POLICY_FILE_MAX_BYTES, WINDOW_USABLE_MARGIN, atExceedsUsableWindow, nativeFromWindow, nativeRatio, profileLayer, resolvePolicy, shortSessionId, usableAtCeiling, validateLayer } from './policy.js';
 import { createA2Store } from './a2-store.js';
+import { parseProjectTemplate, serializeProjectTemplate } from './project-template.js';
 import { detectHostVersion, normalizeBackendVersion } from './compress/adapters.js';
 import { CompressionGuard } from './compress/runtime.js';
 import { RootGuardPool } from './compress/root-guards.js';
@@ -368,10 +369,14 @@ export function buildPolicyState(config, deps = {}) {
       if (size !== null && size > POLICY_FILE_MAX_BYTES) {
         invalid.push({ source: 'project', key: '*', reason: 'too-large', detail: `> ${POLICY_FILE_MAX_BYTES} bytes` });
       } else {
-        const parsed = JSON.parse(String(readFile(target)));
-        const validated = validateLayer(parsed, { source: 'project', native, projectLayer: true });
-        project.values = validated.values;
-        invalid.push(...validated.invalid);
+        const parsed = parseProjectTemplate(String(readFile(target)));
+        if (parsed.ok !== true) {
+          invalid.push({ source: 'project', key: '*', reason: parsed.reason ?? 'invalid-template' });
+        } else {
+          const validated = validateLayer(parsed.values, { source: 'project', native, projectLayer: true });
+          project.values = validated.values;
+          invalid.push(...validated.invalid);
+        }
       }
     } catch (error) {
       if (error?.code !== 'ENOENT') {
@@ -585,6 +590,36 @@ export function buildPolicyState(config, deps = {}) {
     native,
     layers,
     invalid,
+    /** D：项目模板 `.cg-policy.json` 的显式读写入口（创建/清除只经命令）。 */
+    projectTemplate: {
+      get path() { return path.join(path.resolve(config.projectRoot), config.policy.projectFile); },
+      exists() { try { return fs.existsSync(this.path); } catch { return false; } },
+      values() {
+        try {
+          const parsed = parseProjectTemplate(fs.readFileSync(this.path, 'utf8'));
+          return parsed.ok === true ? { ...parsed.values } : {};
+        } catch {
+          return {};
+        }
+      },
+      write(values) {
+        try {
+          fs.mkdirSync(path.dirname(this.path), { recursive: true });
+          fs.writeFileSync(this.path, serializeProjectTemplate(values), 'utf8');
+          return { ok: true, path: this.path };
+        } catch (error) {
+          return { ok: false, reason: String(error?.message ?? error).slice(0, 200) };
+        }
+      },
+      clear() {
+        try {
+          fs.rmSync(this.path, { force: true });
+          return { ok: true, path: this.path };
+        } catch (error) {
+          return { ok: false, reason: String(error?.message ?? error).slice(0, 200) };
+        }
+      },
+    },
     /** C36 ④：读该会话的 A2 持久值（无则 null；供 status/测试）。 */
     a2For: (sessionId) => (a2Store === null ? null : a2Store.read(sessionId)),
     /** 1a：按会话读取覆盖值（create=false 不建桶；命令写入时 create=true）。 */
