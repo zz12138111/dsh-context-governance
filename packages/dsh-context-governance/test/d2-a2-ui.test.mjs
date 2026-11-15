@@ -262,3 +262,37 @@ test('C11③ client：主入口保存发会话写请求，设置页仍走 config
   assert.equal(settingsSave.ok, true);
   assert.deepEqual(writes, [['policy.at', 0.55]]);
 });
+
+test('C38/真机归因：policy-set 审计必须带当前 sessionId（/cg set、/cg header、/cg profile）', async () => {
+  const a2 = fakeA2(new Map());
+  const config = resolveConfig({ projectRoot: 'D:/tmp/ui-a2-project2' });
+  const state = buildPolicyState(config, {
+    readFile: () => { throw new Error('no project file'); },
+    a2Store: a2,
+    onPolicyResolved: () => {},
+  });
+  const rows = [];
+  const command = createStatusCommand({
+    policy: state,
+    audit: { append: (event, details) => rows.push({ event, details }) },
+    now: () => new Date('2026-11-15T00:00:00Z'),
+  });
+  const run = (rawInput, id = 'ui-sess-1') => command.handler({ agent: { session: { id } }, rawInput });
+
+  assert.equal((await run('set compact.at=0.55')).kind, 'success');
+  const setRow = rows.filter((row) => row.event === 'policy-set').at(-1);
+  assert.equal(setRow.details.sessionId, 'ui-sess-1', 'A2 写入必须能归因到会话');
+  assert.equal(setRow.details.key, 'compact.at');
+
+  assert.equal((await run('header off')).kind, 'success');
+  assert.equal(rows.filter((row) => row.event === 'policy-set').at(-1).details.sessionId, 'ui-sess-1');
+
+  assert.equal((await run('profile batch')).kind, 'success');
+  const profileRow = rows.filter((row) => row.event === 'policy-set').at(-1);
+  assert.equal(profileRow.details.sessionId, 'ui-sess-1');
+  assert.equal(profileRow.details.key, 'profile');
+
+  // 另一个会话的写入不得串号（归因必须区分 A/B）。
+  assert.equal((await run('set compact.at=0.65', 'ui-sess-2')).kind, 'success');
+  assert.equal(rows.filter((row) => row.event === 'policy-set').at(-1).details.sessionId, 'ui-sess-2');
+});

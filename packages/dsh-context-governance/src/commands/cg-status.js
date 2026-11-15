@@ -44,6 +44,18 @@ function defaultSessionIdOf(invocation) {
 const NO_SESSION_TEXT = '[context-governance] 会话级不可用：宿主未提供会话标识（agent.session.id），已拒绝；' +
   '不会退化为进程级覆盖';
 
+/**
+ * 会话级写入的唯一审计出口（C38 真机归因）：`sessionId` 只在这里注入，
+ * 新增会话键只要走这里就不会漏；调用方只传业务字段。
+ */
+function appendPolicySet(sink, sessionId, details) {
+  try {
+    sink?.append?.('policy-set', { ...details, sessionId });
+  } catch {
+    /* 审计失败不影响写入结果 */
+  }
+}
+
 function costLine(status) {
   const cost = status?.lastCost ?? null;
   if (cost === null) return 'last-cost: none';
@@ -592,6 +604,8 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
   const handleSet = (argText, sessionId = null) => {
     const policy = policyFor(sessionId);
     const audit = auditFor(sessionId);
+    /** 本作用域的审计出口：sessionId 由 appendPolicySet 统一注入。 */
+    const emitPolicySet = (sink, details) => appendPolicySet(sink, sessionId, details);
     if (policy === null || typeof policy.resolve !== 'function' || typeof policy.sessionValues !== 'function') {
       return { kind: 'error', text: '[context-governance] session layer is unavailable (policy not wired)' };
     }
@@ -614,7 +628,7 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
       for (const key of Object.keys(sessionValues)) delete sessionValues[key];
       // 清空覆盖 = 该会话的 transient 拒绝也应消失（不跨会话、不留残影）。
       policy.clearSessionRejections?.(sessionId);
-      audit?.append?.('policy-set', { source: 'session', key: '*', value: 'reset' });
+      emitPolicySet(audit, { source: 'session', key: '*', value: 'reset' });
       return { kind: 'success', text: `context-governance set\ncleared: ${count} session override(s)` };
     }
     // 解析 `key=value` 或 `key value` 两种写法。
@@ -745,7 +759,7 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
     }
     for (const [key] of pairs) policy.clearSessionRejections?.(sessionId, key);
     for (const [key, rawValue] of pairs) {
-      audit?.append?.('policy-set', { source: 'session', key, value: String(rawValue) });
+      emitPolicySet(audit, { source: 'session', key, value: String(rawValue) });
     }
     return {
       kind: 'success',
@@ -770,6 +784,11 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
       const sessionId = typeof resolvedSessionId === 'string' && resolvedSessionId !== '' ? resolvedSessionId : null;
       const rootInfo = typeof getRootInfo === 'function' ? getRootInfo() : null;
       const identity = typeof getPersistenceIdentity === 'function' ? getPersistenceIdentity() : null;
+      /**
+       * 会话级写入的**唯一**审计出口（C38 真机归因）：sessionId 在这里统一注入，
+       * 新增会话键只要走这里就不会漏；调用方只给业务字段。
+       */
+      const emitPolicySet = (sink, details) => appendPolicySet(sink, sessionId, details);
       // 1b：profile 按会话（入口为本命令；不持久化，重启回配置/默认）。
       if (raw === 'profile' || raw.startsWith('profile ')) {
         const policy = policyFor(sessionId);
@@ -789,7 +808,7 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
         if (sessionId === null) return { kind: 'error', text: NO_SESSION_TEXT };
         if (arg === 'reset' || arg === 'none') {
           policy.setSessionProfile(sessionId, null);
-          audit?.append?.('policy-set', { source: 'session', key: 'profile', value: 'reset' });
+          emitPolicySet(audit, { source: 'session', key: 'profile', value: 'reset' });
           // 不硬编码 none：清除后生效值可能是配置 profile（如 research），必须重新取。
           const info = policy.profileInfo(sessionId);
           return {
@@ -804,7 +823,7 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
           };
         }
         policy.setSessionProfile(sessionId, arg);
-        audit?.append?.('policy-set', { source: 'session', key: 'profile', value: arg });
+        emitPolicySet(audit, { source: 'session', key: 'profile', value: arg });
         return { kind: 'success', text: `context-governance profile\nprofile: ${arg} (source=session)` };
       }
       if (raw === 'header' || raw.startsWith('header ')) {
@@ -833,7 +852,7 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
           if (sessionId === null) return { kind: 'error', text: NO_SESSION_TEXT };
           const sessionValues = policy.sessionValues(sessionId, { create: true });
           sessionValues['header.enabled'] = arg === 'on';
-          audit?.append?.('policy-set', { source: 'session', key: 'header.enabled', value: arg });
+          emitPolicySet(audit, { source: 'session', key: 'header.enabled', value: arg });
           return { kind: 'success', text: `context-governance header\nheader: ${arg} (source=session)` };
         }
         return { kind: 'error', text: 'Usage: /cg header [status|on|off]' };
