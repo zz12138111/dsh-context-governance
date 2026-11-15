@@ -37,6 +37,12 @@ export const AUDIT_FIELD_WHITELIST = Object.freeze({
   backupPath: 'text',
   violation: 'text',
   target: 'text',
+  /** C38：导入/继承来源。 */
+  from: 'text',
+  fromSessionId: 'text',
+  originSessionId: 'text',
+  originRole: 'text',
+  importedAt: 'text',
   subagent: 'boolean',
   name: 'text',
   dir: 'text',
@@ -288,6 +294,10 @@ export const AUDIT_EVENTS = Object.freeze([
   /** C38：会话级记忆指针（正文缺失/行漂移/登记失败）与角色元数据。 */
   'memory-pointer-miss',
   'session-role-set',
+  'memory-import-no-source',
+  'memory-imported-role',
+  'memory-imported',
+  'memory-promoted',
   'root-unresolved',
   'root-guard-error',
   'root-guard-limit-warn',

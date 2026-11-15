@@ -121,11 +121,14 @@ export function serializePointers(entries) {
  * @param {{home:string, sessionId:string, now?:()=>Date, audit?:(event:string,details:object)=>void,
  *   subagent?:boolean}} options
  */
-export function openSessionMemory({ home, sessionId, now = () => new Date(), audit = null, subagent = false } = {}) {
+export function openSessionMemory({ home, sessionId, now = () => new Date(), audit = null, subagent = false, sharedRootId = null } = {}) {
   if (typeof home !== 'string' || home === '') throw new Error('session memory needs a home dir');
-  if (typeof sessionId !== 'string' || sessionId === '') throw new Error('session memory needs a session id');
-  const short8 = shortSessionIdOf(sessionId);
-  const dir = path.join(path.resolve(home), 'context-governance', 'sessions', sessionId);
+  const isShared = typeof sharedRootId === 'string' && sharedRootId !== '';
+  if (!isShared && (typeof sessionId !== 'string' || sessionId === '')) throw new Error('session memory needs a session id');
+  const short8 = isShared ? `sh${String(sharedRootId).replace(/[^A-Za-z0-9]/g, '').slice(0, 6)}` : shortSessionIdOf(sessionId);
+  const dir = isShared
+    ? path.join(path.resolve(home), 'context-governance', 'shared', String(sharedRootId))
+    : path.join(path.resolve(home), 'context-governance', 'sessions', sessionId);
   const indexFile = path.join(dir, 'MEMORY.md');
   const topicsDir = path.join(dir, 'topics');
   const watermarkFile = path.join(dir, '.id-watermark');
@@ -288,6 +291,21 @@ export function openSessionMemory({ home, sessionId, now = () => new Date(), aud
       emit('session-role-set', { sessionId, role });
       return { ok: true, role };
     },
+    /** C38 ⑬：记录最近活跃信息（role/rootId/lastActiveAt），供 --from-role 找源会话。 */
+    touchMeta({ rootId = null, role = undefined } = {}) {
+      const meta = this.meta();
+      if (role !== undefined) meta.role = role;
+      if (rootId !== null) meta.rootId = rootId;
+      meta.lastActiveAt = now().toISOString();
+      meta.updatedAt = meta.lastActiveAt;
+      try {
+        writeAtomic(metaFile, `${JSON.stringify(meta, null, 2)}\n`);
+        return { ok: true };
+      } catch (error) {
+        return { ok: false, reason: String(error?.message ?? error).slice(0, 200) };
+      }
+    },
+
     meta() {
       try {
         const raw = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
