@@ -1295,6 +1295,8 @@ C 的初步证据：启动后本项目根 `audit.jsonl` 只有 `capability@ready
 
 > 25. **范围变更：记忆改会话级（合并方案 A，2026-11-15 用户批 A）**：指针层在插件（`MEM-<sessionShort8>-YYYYMMDD-NNNN` → `文件路径:行号` + 一句话摘要），存 `<home>/context-governance/sessions/<完整 sessionId>/`（`MEMORY.md`/`topics/`/`.id-watermark`），**不进项目根**；正文在人工文件（`G:\DS-HARNESS\memory/OPEN.md`、`decisions/`、`DEFECTS.md`、`ARTIFACTS.md`；插件不读不写），缺失/行漂移标 `miss` 并审计；共享只经 `shared/<rootId>/` + 显式 `memory promote`（审计 `memory-promoted`），默认不共享；子会话不读父记忆；存量 `<root>/memory/governance/` 标 `legacy-shared-v1` 只读、默认不注入、显式 `memory import` 导入（审计 `memory-imported`），不自动迁移、不静默丢；root 仅审计/压缩分组。**用户批 B 追加（2026-11-15）**：允许按角色显式继承（`memory import --from-role <role>`，复制到本会话、新 id、带 origin、审计 `memory-imported-role`；原记忆不动），默认不继承；角色用显式 role id（写入会话元数据+审计），标题/角色卡仅展示；无上一会话报错+审计。新增 **C38**。范围 1.1.0 终版。
 
+> 26. **用户定调（2026-11-15，四方同文）**：终版 = **一会话一百分比设置、UI 跟随会话**；**C11③ 必须真做 A2 写入口，不接受降级/隐藏/警示替代**；C32 四层标签同批。**rc.4 装机待 C11③**；终版门 = C11③+C32 探针 **11/11**。若宿主能力不支持 A2，**按"被宿主卡住"上报，不得自行降级**；开发完整后统一报，期间不再经 00 转装机请示。
+
 **窗口物料（00 已备，2026-11-14 22:30；**本轮暂不使用**，重开窗口时再用；明细见 `G:\DS-HARNESS\tasks\TASK-20261114-02-本体升级-0.2.2-rc.3.md`）**：
 
 | 项 | 值 |
