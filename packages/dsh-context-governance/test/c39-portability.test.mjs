@@ -153,3 +153,59 @@ test('C39 ③：无根时显式 root-unresolved，不静默降级', async () => 
   // 根解析入口在 registry；这里只锁"空根不会被猜成 cwd"。
   assert.equal(typeof os.tmpdir(), 'string');
 });
+
+test('C39 ③/P3：无 profileContext 且无 USERPROFILE/HOME → fail-closed：不写盘、status 显 unavailable、/cg set 退化为 A1', async () => {
+  const base = await tempDir('cg-c39-nohome-');
+  const savedProfile = process.env.USERPROFILE;
+  const savedHome = process.env.HOME;
+  try {
+    const root = path.join(base, 'proj');
+    fs.mkdirSync(root, { recursive: true });
+    delete process.env.USERPROFILE;
+    delete process.env.HOME;
+
+    const captured = { commands: [], handlers: [], warns: [] };
+    const ctx = {
+      commands: captured.commands,
+      tools: { register() {} },
+      get(name) {
+        if (name === 'commands') return { register: (definition) => captured.commands.push(definition) };
+        if (name === 'settings') return { subscribe: () => () => {} };
+        return undefined; // profileContext 缺失
+      },
+      on(event, handler) { captured.handlers.push({ event, handler }); return () => {}; },
+      logger: { info() {}, warn: (line) => captured.warns.push(String(line)), error() {} },
+    };
+
+    await apply(ctx, { projectRoot: root, project: 'nohome' });
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    const command = captured.commands.find((definition) => definition.name === 'cg');
+    assert.ok(command !== undefined, '/cg 必须仍然注册（不能因缺基座拒绝装载）');
+
+    const sessionId = 'session-c39-nohome';
+    const status = await command.handler({ rawInput: 'status', agent: { session: { id: sessionId } } });
+    assert.equal(status.kind, 'success', status.text);
+    assert.match(status.text, /user-store: unavailable \(profileContext\)/, status.text);
+
+    // 记忆命令：显式报错，不建目录、不抛
+    const memory = await command.handler({ rawInput: 'memory show', agent: { session: { id: sessionId } } });
+    assert.equal(memory.kind, 'error');
+    assert.match(memory.text, /user-store unavailable/);
+    const role = await command.handler({ rawInput: 'role set coding', agent: { session: { id: sessionId } } });
+    assert.equal(role.kind, 'error');
+
+    // /cg set：A1 临时生效（A2 不落盘），不抛
+    const sessionSet = await command.handler({ rawInput: 'set compact.at=0.55', agent: { session: { id: sessionId } } });
+    assert.equal(sessionSet.kind, 'success', sessionSet.text);
+
+    // 不写盘：root 下除 memory/governance 的显式目录外无用户级文件；cwd/根/tmp 下无 context-governance
+    assert.equal(fs.existsSync(path.join(root, 'context-governance')), false, '根下不得出现用户级目录');
+    assert.equal(fs.existsSync(path.join(process.cwd(), 'context-governance')), false, '进程 cwd 不得出现用户级目录');
+    assert.equal(fs.existsSync(path.join(os.tmpdir(), 'context-governance')), false, 'tmp 不得出现用户级目录');
+    assert.equal(captured.warns.some((line) => /user-level store unavailable/.test(line)), true, '必须留下可见 warn');
+  } finally {
+    if (savedProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = savedProfile;
+    if (savedHome === undefined) delete process.env.HOME; else process.env.HOME = savedHome;
+    await fsp.rm(base, { recursive: true, force: true, maxRetries: 5 });
+  }
+});

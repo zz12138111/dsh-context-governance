@@ -485,6 +485,10 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
   const handleMemoryCommand = (argText, sessionId = null) => {
     if (sessionId === null) return { kind: 'error', text: NO_SESSION_TEXT };
     const { home, projectRoot, rootId } = memoryContext(sessionId);
+    // C39 P3：用户级基座不可得 → 显式报错，不建不写（`/cg set` 仍以 A1 临时生效）。
+    if (typeof home !== 'string' || home === '') {
+      return { kind: 'error', text: '[context-governance] user-store unavailable (profileContext)；会话/共享记忆不可用（不写盘）' };
+    }
     const audit = auditFor(sessionId);
     const store = openSessionMemory({ home, sessionId, audit: memoryAuditFor(audit) });
     const tokens = String(argText ?? '').trim().split(/\s+/).filter(Boolean);
@@ -563,6 +567,9 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
   const handleRoleCommand = (argText, sessionId = null) => {
     if (sessionId === null) return { kind: 'error', text: NO_SESSION_TEXT };
     const { home } = memoryContext(sessionId);
+    if (typeof home !== 'string' || home === '') {
+      return { kind: 'error', text: '[context-governance] user-store unavailable (profileContext)；角色元数据不可写（不写盘）' };
+    }
     const audit = auditFor(sessionId);
     const store = openSessionMemory({ home, sessionId, audit: memoryAuditFor(audit) });
     const tokens = String(argText ?? '').trim().split(/\s+/).filter(Boolean);
