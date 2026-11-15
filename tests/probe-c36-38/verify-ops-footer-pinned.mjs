@@ -476,9 +476,7 @@ try {
       && tallHeight >= floorBudget,
     `panelHeight=${tallHeight} bodyContent=${bodyContent} bodyViewport=${bodyViewport}（面板封顶 260、内容区可滚、footer 仍完整）`);
 
-  // B13/C40 硬线：面板与 **composer 卡片** `[data-composer-card]` 交集必须为 0（容差 0，打印实测 rect）。
-  // 宿主没有 `data-cg-composer`（Lexical contenteditable）；旧选择器落空 → 避让死代码 → 上弹必落进卡片带
-  // （chip 在 dock 内、dock 贴卡片下方；panel.bottom=chip.top−16 ≈ card.bottom−12）。
+  // B13：**用户 2026-11-15 裁定豁免**（不要求气泡避让 composer，接受现状形态）→ 只打 INFO 备查，不计红。
   const cardRect = composerCardElement.getBoundingClientRect();
   const wrLeft = pxValue(wrapperStyle.left);
   const wrTop = pxValue(wrapperStyle.top);
@@ -487,46 +485,36 @@ try {
   const panelRect = wrLeft !== null && wrTop !== null && wrWidth !== null && wrHeight !== null
     ? { left: wrLeft, top: wrTop, right: wrLeft + wrWidth, bottom: wrTop + wrHeight }
     : null;
-  const intersects = (a, b) => a !== null && a.right > b.left && a.left < b.right && a.bottom > b.top && a.top < b.bottom;
   const overlapHeight = (a, b) => (a === null || b === null ? null : Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top)));
+  console.log(`INFO OPS-panel-composer-overlap :: panel=[${panelRect?.top},${panelRect?.bottom}] card=[${cardRect.top},${cardRect.bottom}] overlap=${overlapHeight(panelRect, cardRect)}px`
+    + '（用户裁定的豁免项，非缺陷；只记录形态）');
   const chipRect = { left: 1100, top: 700, right: 1190, bottom: 728 };
-  check('OPS-panel-no-composer-intersection', panelRect !== null && !intersects(panelRect, cardRect),
-    `panel=[${panelRect?.top},${panelRect?.bottom}] card=[${cardRect.top},${cardRect.bottom}] overlap=${overlapHeight(panelRect, cardRect)}px`
-    + `（容差 0；写进 panel.top/panel.bottom/card.top/card.bottom 便于看量级）`);
+  const intersects = (a, b) => a !== null && a.right > b.left && a.left < b.right && a.bottom > b.top && a.top < b.bottom;
   check('OPS-panel-no-chip-intersection', panelRect !== null && !intersects(panelRect, chipRect),
     `panel=${JSON.stringify(panelRect)} chip=${JSON.stringify(chipRect)}（允许相切：bottom==chip.top）`);
 
-  // B13 上弹/下弹两向（纯函数直调，不依赖实例状态）
+  // B13 上弹/下弹两向：同样归为 INFO 备查（用户豁免，不判红）
   const geometryFn = typeof client?.computePopoverRect === 'function' ? client.computePopoverRect : null;
-  if (geometryFn === null) {
-    check('OPS-panel-no-composer-intersection-up', false, 'client 未导出 computePopoverRect');
-    check('OPS-panel-no-composer-intersection-down', false, 'client 未导出 computePopoverRect');
-  } else {
+  if (geometryFn !== null) {
     const upRect = geometryFn({
       chip: { x: 1100, y: 700, width: 90, height: 28 },
       panel: { width: 320, height: 228 },
       viewport: { width: 1400, height: 900 },
       input: { x: 200, y: 640, width: 1000, height: 60 },
     });
-    const upOverlap = upRect === null ? null : Math.max(0, Math.min(upRect.top + upRect.height, 700) - Math.max(upRect.top, 640));
-    check('OPS-panel-no-composer-intersection-up', upRect !== null && upOverlap === 0,
-      `up panel=[${upRect?.top},${upRect === null ? '?' : upRect.top + upRect.height}] card=[640,700] overlap=${upOverlap}px placement=${upRect?.placement}`);
     const downRect = geometryFn({
       chip: { x: 680, y: 500, width: 80, height: 26 },
       panel: { width: 320, height: 180 },
       viewport: { width: 900, height: 640 },
       input: { x: 120, y: 440, width: 880, height: 60 },
     });
-    const downOverlap = downRect === null ? null : Math.max(0, Math.min(downRect.top + downRect.height, 500) - Math.max(downRect.top, 440));
-    check('OPS-panel-no-composer-intersection-down', downRect !== null && downOverlap === 0,
-      `down panel=[${downRect?.top},${downRect === null ? '?' : downRect.top + downRect.height}] card=[440,500] overlap=${downOverlap}px placement=${downRect?.placement}`);
+    console.log(`INFO OPS-panel-composer-overlap-pure :: up=[${upRect?.top},${upRect === null ? '?' : upRect.top + upRect.height}] placement=${upRect?.placement}`
+      + ` down=[${downRect?.top},${downRect === null ? '?' : downRect.top + downRect.height}] placement=${downRect?.placement}（豁免项备查）`);
   }
 
-  // B13 锚点静态：不得再用 `data-cg-composer`（宿主没有），必须用 `data-composer-card` 或 `data-lexical-editor`
-  const hasOldComposerSelector = src.includes('data-cg-composer');
-  const hasCorrectAnchor = src.includes('data-composer-card') || src.includes('data-lexical-editor');
-  check('OPS-composer-selector-correct', !hasOldComposerSelector && hasCorrectAnchor,
-    `data-cg-composer=${hasOldComposerSelector}(必须 false) 正确锚点(data-composer-card/data-lexical-editor)=${hasCorrectAnchor}`);
+  // B13 锚点静态：同样只备查（`data-cg-composer` 死代码登记 1.1.1「只删不修」）
+  console.log(`INFO OPS-composer-selector :: data-cg-composer=${src.includes('data-cg-composer')}`
+    + ` 正确锚点(data-composer-card/data-lexical-editor)=${src.includes('data-composer-card') || src.includes('data-lexical-editor')}（豁免项备查）`);
 
   console.log('INFO OPS-window-pending :: 输入框/3 按钮 rect 在视口内、无需滚动、elementFromPoint 命中、activeElement 聚焦、详情后仍成立——离线无真实布局，由 b6-window-probe.js 窗口层判，本门不计红');
 } catch (error) {
