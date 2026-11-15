@@ -169,6 +169,9 @@ export class CompressionGuard {
   #auditFile = '';
   /** C35③：压缩后待宿主下个 pre-step 自愈的类别（agent-instructions / skill-catalog）登记。 */
   #pendingHeals = new Map();
+  /** C36 裁定 3：policy-resolved 按 compactionId 去重（每 cycle 1 条）。 */
+  #policyResolvedSeen = new Set();
+  #resolvePolicy = null;
   /** S1：已写完保护/回注、可供 early 审计读取的本 cycle 报告 id。 */
   #readyReports = new Set();
   /** S1.2：等待本 cycle 报告的 early 接线（最多 `EARLY_REPORT_WAIT_MS`，当前 60000ms）。 */
@@ -2536,6 +2539,27 @@ export class CompressionGuard {
             cost: this.#newCost(event.data?.sourceCommandId != null ? 'manual' : 'auto', session),
           };
           this.#pending.set(id, state);
+          // C36③ + 裁定 3：每个压缩 cycle 首次解析写一条 policy-resolved（带 source/at）。
+          if (this.#resolvePolicy !== null && !this.#policyResolvedSeen.has(id)) {
+            this.#policyResolvedSeen.add(id);
+            if (this.#policyResolvedSeen.size > 500) {
+              const first = this.#policyResolvedSeen.values().next().value;
+              if (first !== undefined) this.#policyResolvedSeen.delete(first);
+            }
+            try {
+              const resolved = this.#resolvePolicy(session);
+              if (resolved !== null && resolved !== undefined) {
+                this.#auditEvent('policy-resolved', {
+                  sessionId: state.sessionId ?? null,
+                  compactionId: id,
+                  at: resolved.values?.['compact.at'] ?? null,
+                  source: resolved.sources?.['compact.at'] ?? 'builtin',
+                });
+              }
+            } catch {
+              /* 策略解析失败不影响压缩 */
+            }
+          }
           this.#attachPrunesToState(state, session);
           if (early === null) {
             this.#protectBeforeSummary(session, state, id);

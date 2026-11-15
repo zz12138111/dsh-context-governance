@@ -1068,16 +1068,34 @@ let policyState = buildPolicyState(mergeSettingsAt(config), {
     let guardPool = null;
     let primaryEntry = attachEntry;
     const policyCache = new Map();
+    /** C37 ④：rootId → 项目模板 stat 签名（mtimeMs:size；absent=无文件）。 */
+    const policyTemplateSignatures = new Map();
     /** 1.1.0 D2：rootId → 该 root 的配置快照（热更新时逐 root 重算，多根不串）。 */
     const policyConfigs = new Map();
+    // C37 ④：项目模板不缓存旧值——每次解析先比 stat(mtimeMs:size)，变了就重建。
+    const projectTemplateSignature = (root) => {
+      try {
+        const target = path.join(path.resolve(root), config.policy.projectFile);
+        const stat = fs.statSync(target);
+        return `${stat.mtimeMs}:${stat.size}`;
+      } catch {
+        return 'absent';
+      }
+    };
     // 主根 policy 复用 attach 时算好的链（含 /cg set 会话层与 window provider）。
     if (attachEntry !== null) {
       policyCache.set(attachEntry.rootId, policyState);
       policyConfigs.set(attachEntry.rootId, config);
+      policyTemplateSignatures.set(attachEntry.rootId, projectTemplateSignature(attachEntry.root));
     }
     const policyForEntry = (entry) => {
       const key = entry?.rootId ?? null;
-      if (key !== null && policyCache.has(key)) return policyCache.get(key);
+      const rootForSignature = entry?.root ?? config.projectRoot;
+      if (key !== null && policyCache.has(key)) {
+        const currentSignature = projectTemplateSignature(rootForSignature);
+        if (policyTemplateSignatures.get(key) === currentSignature) return policyCache.get(key);
+        policyCache.delete(key);
+      }
       const root = entry?.root ?? config.projectRoot;
       const memory = memoryRootFor(root, config.memoryRootRel ?? config.memoryRoot);
       const rootConfig = {
@@ -1086,9 +1104,16 @@ let policyState = buildPolicyState(mergeSettingsAt(config), {
         memoryRoot: memory.memoryRoot ?? config.memoryRoot,
         project: entry?.project ?? (samePath(root, config.projectRoot) ? config.project : path.basename(root)),
       };
-      const state = buildPolicyState(mergeSettingsAt(rootConfig));
+      const state = buildPolicyState(mergeSettingsAt(rootConfig), {
+        a2Store,
+        markActive: (sessionId) => { if (typeof sessionId === 'string' && sessionId !== '') recentGovernedSessions.add(sessionId); },
+        onPolicyResolved: ({ sessionId, at, source }) => {
+          a2AuditSink('policy-resolved', { sessionId, at, source });
+        },
+      });
       if (key !== null) {
         policyCache.set(key, state);
+        policyTemplateSignatures.set(key, projectTemplateSignature(rootForSignature));
         policyConfigs.set(key, rootConfig);
       }
       return state;
@@ -1211,6 +1236,14 @@ let policyState = buildPolicyState(mergeSettingsAt(config), {
         reinjection: { maxFailures: config.reinjection.maxFailures },
         // D-MGMT-021 回滚开关：false 时整段 surface 重建跳过（改 patch 后重启生效）。
         rebuildEnabled: config.protection?.rebuild?.enabled !== false,
+        // C36 裁定 3：guard 在每个压缩 cycle 首次解析时写 policy-resolved（source/at）。
+        resolvePolicy: (session) => {
+          try {
+            return policyForEntry(entry).resolve(session?.id ?? null);
+          } catch {
+            return null;
+          }
+        },
         // D-MGMT-021 v3b：重启恢复扫描 per-root audit（补 pending 终态）。
         auditFile: path.join(resources.store.rootDir, 'audit.jsonl'),
         startWaitMs: resources.startWaitMs,
