@@ -5,6 +5,8 @@
  * during the previous render），组件 = `conversation.input.overlay`（`client.js` 的 `createBubble`）。
  * 根因：`87794f2` 里 `if (!open) return null`（`L662`）在 `const [layout] = useState`（`L669`）之前
  *   → 关闭态 14 hook、打开态 16 hook → 首次点 chip 崩、chip/气泡齐哑。
+ *   ⚠️ hook 绝对值**随迷你运行时实现变化**（开发探针 14/16、本门 16/18，差值都是 +2）；
+ *   断言只看"各次渲染 hook 数是否相等"，**绝不写死 16/18**——写死会在换运行时/加 hook 时假红。
  *
  * 本门 v1/v2 的教训：迷你运行时若把所有组件塞进同一个 hooks 数组，hook 数永远"稳定"，测不出；
  *   且必须**同一组件实例**先 closed 再 open（新 mount 一帧 open 永远不触发 #310）。

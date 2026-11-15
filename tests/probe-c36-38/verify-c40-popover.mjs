@@ -6,10 +6,16 @@
  *   ③ 主视图**不得出现** `source=`、`session:A1/A2` 层级代码、"本次修改写入"流程短语；
  *   ④ 保存成功主视图须含「已保存」+「重启后（仍生效|保留）」，不得含「重启失效」；
  *   ⑤ reset 后主视图须含「已恢复全局」或「已清除本会话覆盖」；
- *   ⑥ 几何：`getBoundingClientRect` 定位 + 向上/翻转/贴边/输入框避让（离线 rect 断言的前提）。
- * 真机：三档截图（宽>1200 / 窄≈800 / 矮<700）+ 关闭动作，见 INFO 行，不在离线门内。
+ *   ⑥ 几何：`getBoundingClientRect` 定位 + 向上/翻转/贴边/输入框避让（离线 rect 断言的前提）；
+ *   ⑦ 三档窗口 rect（宽/窄/矮）+ 不遮输入框 + 中心偏差 ≤8 + 边距 ≥8 + 高 ≤260；
+ *   ⑧ **状态切换维度**（2026-11-15 审核补，B5 根因）：同一 bubble 实例 closed→open→closed→open，
+ *      全程不抛、hook 数不变、open 态仍渲染出 dialog——否则 C40 自己也会在下次 hook 放错时假绿。
  *
- * 手法：vm 载 `lib/client.js`，取导出的 `renderBubbleText` 渲染主视图；几何按源码存在性判。
+ * ⚠️ hook 数是**相对量**：断言只看"各次渲染是否相等"，**绝不写死绝对值 16/18**——它随迷你运行时
+ *    实现（是否计入 extra hook）变化；写死会在换运行时/加 hook 时假红。
+ *
+ * 手法：vm 载 `lib/client.js`；`renderBubbleText` 渲染主视图，`computePopoverRect` 算三档几何，
+ *   mini-hooks 运行时挂 `createBubble` 做状态切换。不装、不启用、不重启、不碰真实 profile。
  * 用法：node tests\probe-c36-38\verify-c40-popover.mjs
  */
 import fs from 'node:fs';
@@ -22,14 +28,112 @@ function check(id, ok, detail) { results.push({ id, ok }); console.log(`${ok ? '
 const pkg = path.resolve(import.meta.dirname, '..', '..', 'packages', 'dsh-context-governance');
 const src = fs.readFileSync(path.join(pkg, 'lib', 'client.js'), 'utf8');
 const cjkCount = (line) => (String(line).match(/[\u4e00-\u9fff]/g) ?? []).length;
+const flush = () => new Promise((resolve) => setTimeout(resolve, 25));
+
+function findAll(node, predicate, out = []) {
+  if (node === null || node === undefined) return out;
+  if (Array.isArray(node)) { for (const item of node) findAll(item, predicate, out); return out; }
+  if (typeof node !== 'object') return out;
+  if (predicate(node)) out.push(node);
+  findAll(node.children ?? [], predicate, out);
+  if (node.props?.children !== undefined) findAll(node.props.children, predicate, out);
+  return out;
+}
 
 try {
   let spec = null;
-  const sandbox = { window: { __ModuleLoader__: { load: (value) => { spec = value; } } }, console, setTimeout, clearTimeout };
+  const fakeFetch = async (url) => {
+    if (String(url).includes('policy-snapshot')) {
+      return { ok: true, json: async () => ({ at: 0.45, source: 'session:A1', sessionOverride: 0.45, effectiveAt: '本会话有效，重启后失效', native: 0.6785, defaultAt: 0.6 }) };
+    }
+    return { ok: true, json: async () => ({ ok: true }) };
+  };
+  const listeners = { pointerdown: new Set(), keydown: new Set(), focus: new Set() };
+  const fakeDocument = {
+    documentElement: { clientWidth: 1200, clientHeight: 800 },
+    querySelector: () => null,
+    addEventListener: (type, fn) => { if (listeners[type]) listeners[type].add(fn); },
+    removeEventListener: (type, fn) => { if (listeners[type]) listeners[type].delete(fn); },
+  };
+  const fakeWindow = {
+    __ModuleLoader__: { load: (value) => { spec = value; } },
+    innerWidth: 1200,
+    innerHeight: 800,
+    addEventListener: (type, fn) => { if (listeners[type]) listeners[type].add(fn); },
+    removeEventListener: (type, fn) => { if (listeners[type]) listeners[type].delete(fn); },
+  };
+  const sandbox = { window: fakeWindow, document: fakeDocument, innerWidth: 1200, innerHeight: 800, console, setTimeout, clearTimeout, fetch: fakeFetch };
+  sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
   vm.runInContext(src, sandbox);
-  const fakeReact = { createElement: () => null, useState: (v) => [v, () => {}], useEffect: () => {}, useRef: (v) => ({ current: v }), useMemo: (fn) => fn(), useCallback: (fn) => fn };
-  const client = typeof spec?.factory === 'function' ? spec.factory((name) => (name === 'react' ? fakeReact : {})) : null;
+
+  // 迷你 hooks 运行时：每组件实例独立 hooks；setState 微任务重渲染。
+  let active = null;
+  const enqueue = (fn) => { queueMicrotask(() => { try { fn(); } catch { /* ignore */ } }); };
+  const react = {
+    createElement: (type, props, ...children) => ({ type, props: props ?? {}, children: children.flat() }),
+    useState(initial) {
+      const inst = active;
+      const index = inst.cursor;
+      inst.cursor += 1;
+      if (inst.hooks[index] === undefined) inst.hooks[index] = typeof initial === 'function' ? initial() : initial;
+      const set = (value) => {
+        const next = typeof value === 'function' ? value(inst.hooks[index]) : value;
+        if (Object.is(next, inst.hooks[index])) return;
+        inst.hooks[index] = next;
+        enqueue(() => inst.render(inst.props));
+      };
+      return [inst.hooks[index], set];
+    },
+    useEffect(fn, deps) {
+      const inst = active;
+      const index = inst.cursor;
+      inst.cursor += 1;
+      const previousDeps = inst.deps.get(index);
+      const changed = deps === undefined || previousDeps === undefined
+        || deps.length !== previousDeps.length
+        || deps.some((value, position) => !Object.is(value, previousDeps[position]));
+      if (!changed) return;
+      inst.deps.set(index, Array.isArray(deps) ? [...deps] : undefined);
+      enqueue(() => {
+        const previous = inst.cleanups.get(index);
+        if (typeof previous === 'function') { try { previous(); } catch { /* ignore */ } }
+        const cleanup = fn();
+        if (typeof cleanup === 'function') inst.cleanups.set(index, cleanup);
+      });
+    },
+    useRef(initial) {
+      const inst = active;
+      const index = inst.cursor;
+      inst.cursor += 1;
+      if (inst.hooks[index] === undefined) inst.hooks[index] = { current: initial };
+      return inst.hooks[index];
+    },
+    useMemo(fn) { return fn(); },
+    useCallback(fn) { return fn; },
+    Component: class Base { constructor(props) { this.props = props; } },
+  };
+  const client = typeof spec?.factory === 'function' ? spec.factory((name) => (name === 'react' ? react : {})) : null;
+
+  function mount(Component) {
+    const inst = {
+      hooks: [], deps: new Map(), cleanups: new Map(), cursor: 0, props: null, last: { tree: null, error: null, hookCount: 0 },
+      render(props) {
+        inst.props = props;
+        active = inst;
+        inst.cursor = 0;
+        let tree = null;
+        let error = null;
+        try { tree = Component(props); } catch (thrown) { error = thrown; }
+        const hookCount = inst.cursor;
+        active = null;
+        inst.last = { tree, error, hookCount };
+        return inst.last;
+      },
+    };
+    return inst;
+  }
+
   const render = client?.renderBubbleText;
   check('C40-render-entry-loadable', typeof render === 'function', `renderBubbleText=${typeof render}`);
 
@@ -105,6 +209,45 @@ try {
     }
     check('C40-geometry-three-viewports', problems.length === 0,
       `fn=${geometryName} problems=${JSON.stringify(problems)}（三档：宽/窄/矮，翻转向下 + 不遮输入框）`);
+  }
+
+  // ⑧ 状态切换维度（B5 根因）：同一实例 closed→open→closed→open，不抛且 hook 数一致
+  if (typeof client?.createBubble !== 'function') {
+    check('C40-state-switch-open-close-stable', false, 'client 未导出 createBubble');
+  } else {
+    const sessionId = 'session-c40switch-1111-2222-3333-444455556666';
+    const state = { open: false, snapshot: { at: 0.45, source: 'session:A1', sessionOverride: 0.45, effectiveAt: '本会话有效，重启后失效' } };
+    const store = {
+      set(next) { Object.assign(state, next); for (const listener of store.listeners) listener(state); },
+      listeners: new Set(),
+      subscribe(listener) { store.listeners.add(listener); return () => store.listeners.delete(listener); },
+    };
+    const pluginCtx = { locale: { language: 'zh' }, sessionId };
+    const bubble = mount(client.createBubble(state, store, pluginCtx));
+    const props = { sessionId, ctx: pluginCtx };
+    const counts = [];
+    const errors = [];
+    const snapshot = () => ({ hookCount: bubble.last.hookCount, error: bubble.last.error });
+    bubble.render(props);
+    await flush();
+    counts.push(snapshot().hookCount);
+    if (snapshot().error !== null) errors.push(String(snapshot().error.message).slice(0, 120));
+    store.set({ open: true });
+    await flush();
+    counts.push(snapshot().hookCount);
+    if (snapshot().error !== null) errors.push(String(snapshot().error.message).slice(0, 120));
+    store.set({ open: false });
+    await flush();
+    counts.push(snapshot().hookCount);
+    store.set({ open: true });
+    await flush();
+    counts.push(snapshot().hookCount);
+    if (snapshot().error !== null) errors.push(String(snapshot().error.message).slice(0, 120));
+    const dialog = findAll(bubble.last.tree ?? null, (node) => node.props?.role === 'dialog')[0];
+    const stable = errors.length === 0 && counts.every((count) => count === counts[0]);
+    check('C40-state-switch-open-close-stable', stable && dialog !== undefined,
+      `hookCounts(closed,open,closed,open)=${JSON.stringify(counts)} errors=${JSON.stringify(errors)} dialog=${dialog !== undefined}`
+      + `（只比相等、不写死绝对值；不等＝模拟 React #310 "Rendered more hooks than during the previous render"）`);
   }
 
   console.log('INFO C40-real-machine :: 三档截图（宽>1200 / 窄≈800 / 矮<700 触发向下翻转）+ 关闭动作（点外部/Esc/再点 chip）需真机取数');
