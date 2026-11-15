@@ -63,8 +63,11 @@ export const AUDIT_FIELD_WHITELIST = Object.freeze({
   acceptedCount: 'number',
   /** accepted 汇总 seq 列表（number-array，上限 30）。 */
   acceptedSeqs: 'number-array',
-  /** a/b 判定的内容证据：同 kind 副本文本 sha256 是否与压缩前快照一致（hash 本身不入审计）。 */
-  hashMatch: 'boolean',
+  /** 审核签发 v4：baseline digest 观察结论——match / mismatch / unreadable（文本，不参与判定）。 */
+  hashMatch: 'text',
+  /** 审核签发 v4：宿主节点 digest 与读盘复算 digest（sha1(raw content)）。 */
+  expected: 'text',
+  actual: 'text',
   /** D-MGMT-021 v3b：pending 对账字段。 */
   contentSha256: 'text',
   match: 'text',
@@ -84,9 +87,8 @@ export const AUDIT_FIELD_WHITELIST = Object.freeze({
   form: 'text',
   plugin: 'text',
   digest: 'text',
-  /** C35③：digest 分档（baseline-digest / event-level）与复算用的展示路径。 */
+  /** C35③：digest 分档（event-level）——复算用的展示路径已在上方 `path` 定义，不重复声明。 */
   mode: 'text',
-  path: 'text',
   manual: 'boolean',
   count: 'number',
   moved: 'number',
@@ -211,6 +213,8 @@ export const AUDIT_EVENTS = Object.freeze([
   'self-heal-pending',
   'self-heal-verified',
   'self-heal-unverified',
+  /** 审核签发 v4：digest 观察为 mismatch 的 suspect warn（不判 fail）。 */
+  'self-heal-suspect',
   'self-heal-missing',
   /** rc.2：启动时回收了陈旧写者锁（不静默）。 */
   'stale-lock-reclaimed',
@@ -518,4 +522,5 @@ export function createRootAudit(identity, { maxBytes, now } = {}) {
     return null;
   }
 }
+
 

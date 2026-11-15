@@ -983,48 +983,43 @@ export class CompressionGuard {
         plugin: source.plugin ?? null,
       };
       if (kind === 'agent-instructions') {
-        // baseline：changes[].path + digest 逐 path 读盘复算；不一致 fail(baseline-stale)，
-        // 读盘失败/字段缺失 → unverified warn + 仍 pass。
-        const check = this.#verifyBaselineDigests(session, source);
-        if (check.state === 'stale') {
-          this.#auditEvent('self-heal-missing', {
+        // 审核签发 v4：baseline 走事件级主判——窗口内出现非治理新节点即 pass。
+        // digest 只做观察（raw 复算，不 trim），match/mismatch/unreadable **一律 pass**；
+        // 禁止未经审核改成 fail，也禁止再用 reason=baseline-stale 产 loss。
+        const observed = this.#observeBaselineDigests(session, source);
+        if (observed.hashMatch === 'mismatch') {
+          this.#auditEvent('self-heal-suspect', {
             ...base,
-            path: check.path ?? null,
-            digest: check.expected ?? null,
-            reason: 'baseline-stale',
-            disposition: 'unacceptable',
+            path: observed.path ?? null,
+            expected: observed.expected ?? null,
+            actual: observed.actual ?? null,
+            hashMatch: 'mismatch',
+            mode: 'event-level',
+            reason: 'baseline-digest-mismatch',
+            disposition: 'warn',
             dispositionRule: 'v1',
           });
-          this.#auditEvent('compaction-loss', {
-            sessionId,
-            compactionId: item.compactionId,
-            manual: item.manual === true,
-            trigger: item.manual === true ? 'manual' : 'auto',
-            failures: ['rule-injection'],
-            entries: 0,
-            lossClass: 'b-class-loss',
-            disposition: 'unacceptable',
-            dispositionRule: 'v1',
-            reason: 'baseline-stale',
-            auditVersion: 'loss-v1.0',
-          });
-          if (list.length === 0) this.#pendingHeals.delete(sessionId);
-          return;
-        }
-        if (check.state === 'unverified') {
+        } else if (observed.hashMatch === 'unreadable') {
           this.#auditEvent('self-heal-unverified', {
             ...base,
-            digest: null,
+            path: observed.path ?? null,
+            expected: observed.expected ?? null,
+            actual: null,
+            hashMatch: 'unreadable',
             mode: 'event-level',
-            reason: check.reason ?? 'digest-unverified',
+            reason: observed.reason ?? 'digest-unreadable',
             disposition: 'warn',
             dispositionRule: 'v1',
           });
         }
         this.#auditEvent('self-heal-verified', {
           ...base,
-          digest: check.digest ?? null,
-          mode: check.state === 'match' ? 'baseline-digest' : 'event-level',
+          path: observed.path ?? null,
+          expected: observed.expected ?? null,
+          actual: observed.actual ?? null,
+          hashMatch: observed.hashMatch,
+          mode: 'event-level',
+          reason: 'baseline-event-level',
           disposition: 'accepted',
           dispositionRule: 'v1',
         });
@@ -1044,36 +1039,51 @@ export class CompressionGuard {
   }
 
   /**
-   * C35③ baseline 自校验：`source.changes[]` 有 path+digest 时逐 path 读盘算
-   * sha1(trim(content)) 比对。返回 match（全一致）/ stale（任一不一致）/ unverified（读盘失败或字段缺失）。
+   * 审核签发 v4：baseline digest **观察器**——只复算、不判定。
+   *
+   * 复算口径必须与宿主一致：`sha1(raw content)`，**不 trim**（宿主 `instructionContentSha1(content)`
+   * = `createHash('sha1').update(content)`，`changes[].digest` 取 `instructionContentSha1(file.content)`）。
+   * 返回 `hashMatch ∈ {match, mismatch, unreadable}` + `expected`/`actual`，三种结果都不影响 pass。
    */
-  #verifyBaselineDigests(session, source) {
+  #observeBaselineDigests(session, source) {
     const changes = Array.isArray(source.changes) ? source.changes : null;
-    if (changes === null || changes.length === 0) return { state: 'unverified', reason: 'no-changes-field' };
+    if (changes === null || changes.length === 0) {
+      return { hashMatch: 'unreadable', reason: 'no-changes-field', path: null, expected: null, actual: null };
+    }
     const cwd = this.#sessionCwd(session);
     const matched = [];
+    const mismatched = [];
+    let lastPath = null;
+    let lastExpected = null;
     for (const change of changes) {
       const displayPath = change?.path;
       const expected = change?.digest;
       if (typeof displayPath !== 'string' || displayPath === ''
         || typeof expected !== 'string' || expected === '') {
-        return { state: 'unverified', reason: 'change-path-or-digest-missing' };
+        return { hashMatch: 'unreadable', reason: 'change-path-or-digest-missing', path: lastPath, expected: lastExpected, actual: null };
       }
+      lastPath = displayPath;
+      lastExpected = expected;
       const resolved = resolveInstructionPath(displayPath, cwd);
-      if (resolved === null) return { state: 'unverified', reason: 'path-unresolvable' };
+      if (resolved === null) {
+        return { hashMatch: 'unreadable', reason: 'path-unresolvable', path: displayPath, expected, actual: null };
+      }
       let content;
       try {
         content = fs.readFileSync(resolved, 'utf8');
       } catch {
-        return { state: 'unverified', reason: 'read-failed' };
+        return { hashMatch: 'unreadable', reason: 'read-failed', path: displayPath, expected, actual: null };
       }
-      const actual = createHash('sha1').update(content.trim()).digest('hex');
-      if (actual !== expected) {
-        return { state: 'stale', path: displayPath, expected, actual };
-      }
-      matched.push(expected);
+      const actual = createHash('sha1').update(content).digest('hex');
+      if (actual === expected) matched.push({ path: displayPath, expected, actual });
+      else mismatched.push({ path: displayPath, expected, actual });
     }
-    return { state: 'match', digest: matched.join(',') };
+    if (mismatched.length > 0) {
+      const first = mismatched[0];
+      return { hashMatch: 'mismatch', path: first.path, expected: first.expected, actual: first.actual };
+    }
+    const first = matched[0] ?? { path: null, expected: null, actual: null };
+    return { hashMatch: 'match', path: first.path, expected: first.expected, actual: first.actual };
   }
 
   /** C35③：窗口到期/会话结束/重启 → 未自愈类别各自 fail + compaction-loss。 */

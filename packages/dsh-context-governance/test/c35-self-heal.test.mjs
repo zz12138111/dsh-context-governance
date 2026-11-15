@@ -231,30 +231,34 @@ test('C35③ 窗口外节点不补判：结算后再出现自愈节点不产生 
 
 const sha1 = (text) => createHash('sha1').update(text).digest('hex');
 
-test('C35③ baseline digest 一致：self-heal-verified(baseline-digest)，无 loss', async () => {
+test('C35③ 签发 v4：digest match → self-heal-verified(event-level, hashMatch=match)，无 loss', async () => {
   const g = await runGuard();
   try {
     g.session.cwd = g.base;
+    // raw 口径：宿主 digest = sha1(raw content)，含尾随换行，不 trim。
     const content = 'baseline instructions\nsecond line\n';
     await fs.writeFile(path.join(g.base, 'AGENTS.md'), content, 'utf8');
     g.handler(g.session, hostHeal(g.session, g.maxSurfaceSeq + 1, {
       kind: 'agent-instructions',
-      changes: [{ path: 'AGENTS.md', digest: sha1(content.trim()) }],
+      changes: [{ path: 'AGENTS.md', digest: sha1(content) }],
     }));
     const verified = g.audits.filter((item) => item.event === 'self-heal-verified'
       && item.details.kind === 'agent-instructions');
     assert.equal(verified.length, 1);
-    assert.equal(verified[0].details.mode, 'baseline-digest');
-    assert.equal(verified[0].details.digest, sha1(content.trim()));
+    assert.equal(verified[0].details.mode, 'event-level');
+    assert.equal(verified[0].details.hashMatch, 'match');
+    assert.equal(verified[0].details.expected, sha1(content));
+    assert.equal(verified[0].details.actual, sha1(content));
+    assert.equal(verified[0].details.reason, 'baseline-event-level');
+    assert.equal(g.audits.filter((item) => item.event === 'self-heal-suspect').length, 0);
     assert.equal(g.audits.filter((item) => item.event === 'self-heal-unverified').length, 0);
-    assert.equal(g.audits.filter((item) => item.event === 'compaction-loss'
-      && item.details.reason === 'baseline-stale').length, 0);
+    assert.equal(g.audits.filter((item) => item.event === 'compaction-loss').length, 0);
   } finally {
     await g.cleanup();
   }
 });
 
-test('C35③ baseline digest 不一致：baseline-stale fail + compaction-loss(unacceptable)', async () => {
+test('C35③ 签发 v4：digest mismatch → self-heal-suspect(warn) + verified pass + 0 loss', async () => {
   const g = await runGuard();
   try {
     g.session.cwd = g.base;
@@ -262,25 +266,50 @@ test('C35③ baseline digest 不一致：baseline-stale fail + compaction-loss(u
     await fs.writeFile(path.join(g.base, 'AGENTS.md'), content, 'utf8');
     g.handler(g.session, hostHeal(g.session, g.maxSurfaceSeq + 1, {
       kind: 'agent-instructions',
-      // 宿主校验的是修复前那份（已过期）的摘要
+      // 宿主记的是另一版内容（历史节点），复算必然不一致——v4 只 warn，不 fail。
       changes: [{ path: 'AGENTS.md', digest: sha1('old baseline that is no longer on disk') }],
     }));
-    const missing = g.audits.filter((item) => item.event === 'self-heal-missing'
+    const suspect = g.audits.filter((item) => item.event === 'self-heal-suspect');
+    assert.equal(suspect.length, 1);
+    assert.equal(suspect[0].details.kind, 'agent-instructions');
+    assert.equal(suspect[0].details.hashMatch, 'mismatch');
+    assert.equal(suspect[0].details.path, 'AGENTS.md');
+    assert.equal(suspect[0].details.expected, sha1('old baseline that is no longer on disk'));
+    assert.equal(suspect[0].details.actual, sha1(content));
+    assert.equal(suspect[0].details.disposition, 'warn');
+    const verified = g.audits.filter((item) => item.event === 'self-heal-verified'
       && item.details.kind === 'agent-instructions');
-    assert.equal(missing.length, 1);
-    assert.equal(missing[0].details.reason, 'baseline-stale');
-    assert.equal(missing[0].details.path, 'AGENTS.md');
-    const loss = g.audits.filter((item) => item.event === 'compaction-loss'
-      && item.details.reason === 'baseline-stale');
-    assert.equal(loss.length, 1);
-    assert.equal(loss[0].details.disposition, 'unacceptable');
-    assert.equal(g.audits.filter((item) => item.event === 'self-heal-verified'
-      && item.details.kind === 'agent-instructions').length, 0);
+    assert.equal(verified.length, 1, '事件级主判仍 pass');
+    assert.equal(verified[0].details.hashMatch, 'mismatch');
+    assert.equal(verified[0].details.mode, 'event-level');
+    assert.equal(g.audits.filter((item) => item.event === 'self-heal-missing').length, 0, '不得产 missing');
+    assert.equal(g.audits.filter((item) => item.event === 'compaction-loss').length, 0, '不得产 loss');
   } finally {
     await g.cleanup();
   }
 });
 
+test('C35③ 签发 v4：raw 与 trim 口径差异不再导致 fail（尾随空白）', async () => {
+  const g = await runGuard();
+  try {
+    g.session.cwd = g.base;
+    const content = 'line one\nline two\n\n';
+    await fs.writeFile(path.join(g.base, 'AGENTS.md'), content, 'utf8');
+    assert.notEqual(sha1(content), sha1(content.trim()), '前提：raw 与 trim 的 digest 不同');
+    g.handler(g.session, hostHeal(g.session, g.maxSurfaceSeq + 1, {
+      kind: 'agent-instructions',
+      changes: [{ path: 'AGENTS.md', digest: sha1(content) }],
+    }));
+    const verified = g.audits.filter((item) => item.event === 'self-heal-verified'
+      && item.details.kind === 'agent-instructions');
+    assert.equal(verified.length, 1);
+    assert.equal(verified[0].details.hashMatch, 'match', 'raw 复算才对得上宿主');
+    assert.equal(g.audits.filter((item) => item.event === 'self-heal-suspect').length, 0);
+    assert.equal(g.audits.filter((item) => item.event === 'compaction-loss').length, 0);
+  } finally {
+    await g.cleanup();
+  }
+});
 test('C35③ baseline 无法核对（读盘失败/字段缺失）：self-heal-unverified warn 且仍 pass', async () => {
   const g = await runGuard();
   try {
@@ -445,3 +474,29 @@ test('rc.2 同类别多份规则只登记一条 pending，命中只产一条 ver
 });
 
 
+
+
+test('C35③ 签发 v4：窗口内已自愈则 settle 不产 missing/loss，全库无 baseline-stale', async () => {
+  const g = await runGuard();
+  try {
+    g.session.cwd = g.base;
+    const content = 'x\n';
+    await fs.writeFile(path.join(g.base, 'AGENTS.md'), content, 'utf8');
+    g.handler(g.session, hostHeal(g.session, g.maxSurfaceSeq + 1, {
+      kind: 'agent-instructions',
+      changes: [{ path: 'AGENTS.md', digest: sha1('mismatch-but-only-warn') }],
+    }));
+    g.handler(g.session, { type: 'turn/start', seq: g.maxSurfaceSeq + 10, data: { turn: 2 } });
+    g.handler(g.session, { type: 'turn/end', seq: g.maxSurfaceSeq + 11, data: { turn: 2, reason: { kind: 'completed' } } });
+    for (const name of ['agent-instructions']) {
+      assert.equal(g.audits.filter((item) => item.event === 'self-heal-missing'
+        && item.details.kind === name).length, 0);
+    }
+    assert.equal(g.audits.filter((item) => item.event === 'compaction-loss'
+      && item.details.reason === 'baseline-stale').length, 0);
+    assert.equal(g.audits.some((item) => JSON.stringify(item.details ?? {}).includes('baseline-stale')), false,
+      '任何审计细节都不应再出现 baseline-stale');
+  } finally {
+    await g.cleanup();
+  }
+});
