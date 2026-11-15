@@ -402,12 +402,37 @@ export class RootRegistry {
   }
 
   /**
+   * P4（rc.11）：根被删/不可读时**不得假装纳管，也不得重建目录**。
+   *
+   * rc.10 缺陷：根目录被删后，已登记的 active 根仍判 `managed` → 后续记忆路径经
+   * `<root>/memory/governance` 开 store 时把目录**静默重建**；且不写 `root-unresolved`。
+   * 现在：目录不存在（或不是目录）→ 降为 `no-root` + `reason: 'root-missing'`，
+   * **保留 entry** 供诊断；上层据此写 `root-unresolved{sessionId,cwd,reason}` 并拒绝开 store。
+   */
+  #rootPresence(resolved) {
+    if (resolved === null || resolved === undefined) return resolved;
+    if (resolved.status !== 'managed' || resolved.entry === null || resolved.entry === undefined) return resolved;
+    let present = false;
+    try {
+      present = fs.statSync(resolved.entry.root).isDirectory();
+    } catch {
+      present = false;
+    }
+    if (present) return resolved;
+    return { ...resolved, status: 'no-root', reason: 'root-missing' };
+  }
+
+  /**
    * 唯一会话→根入口。
    * @returns {{status:'managed'|'unmanaged'|'no-root', entry:object|null,
    *   source:'config'|'persisted'|'inferred'|'parent'|null, isSubagent:boolean,
    *   cwd:string, reason?:string, drift?:{from:string,cwd:string}|null}}
    */
   resolveSessionRoot(session) {
+    return this.#rootPresence(this.#resolveSessionRootInner(session));
+  }
+
+  #resolveSessionRootInner(session) {
     const sid = sessionIdOf(session);
     const cwd = sessionCwd(session);
     const isSubagent = isSubagentSession(session);

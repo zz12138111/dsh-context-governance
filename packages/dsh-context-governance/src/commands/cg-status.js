@@ -446,10 +446,14 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
     const homeDir = typeof home === 'function' ? (home() ?? os.homedir()) : (typeof home === 'string' && home !== '' ? home : os.homedir());
     let projectRoot = '';
     let rootId = null;
-    // ① 权威：该会话解析出的根（registry 的 entry）。
+    // P4：根被删（`root-missing`）时不得回落到附加根——那会显示伪根。
+    let rootMissing = false;
+    // ① 权威：该会话解析出的根（registry 的 entry）——**仅当纳管**。
     try {
       const resolved = typeof resolveSessionRoot === 'function' ? resolveSessionRoot(sessionId) : null;
-      const entry = resolved?.entry ?? null;
+      rootMissing = resolved?.reason === 'root-missing';
+      // rc.10 修回的 entry 在根真正可用时才显示；根目录已删（root-missing）时它是"伪根"。
+      const entry = rootMissing === true ? null : (resolved?.entry ?? null);
       const candidate = typeof entry?.root === 'string' && entry.root !== ''
         ? { root: entry.root, rootId: entry.rootId }
         : (typeof resolved?.root === 'string' && resolved.root !== '' ? { root: resolved.root, rootId: resolved.rootId } : null);
@@ -458,8 +462,8 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
         rootId = typeof candidate.rootId === 'string' && candidate.rootId !== '' ? candidate.rootId : rootIdOf(candidate.root);
       }
     } catch { /* 回落 getRootInfo */ }
-    // ② 回落：当前附加根（单根/无法归根时）。
-    if (projectRoot === '') {
+    // ② 回落：当前附加根（单根/无法归根时）。根已被删 → 不回落，保持 root-unresolved。
+    if (projectRoot === '' && rootMissing !== true) {
       try {
         const info = typeof getRootInfo === 'function' ? getRootInfo() : null;
         if (typeof info?.root === 'string' && info.root !== '') {
