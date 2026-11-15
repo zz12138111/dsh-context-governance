@@ -762,7 +762,8 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
     definitionId: CG_COMMAND_DEFINITION_ID,
     name: CG_COMMAND_NAME,
     description: '上下文治理状态：后端/能力、策略链、记忆、上次压缩与回注、prune 成本、写盘 p50/p95、审计、纳管根清单',
-    input: { hint: 'status | status last-cost | policy show | set <key>=<value> | set reset | header on|off | profile <batch|coding|review|research>|reset' },
+    // C37⑥：`project-template` 必须在本命令的可见帮助里出现（不强制 client UI）；与 :945 的 fallback usage 同字面。
+    input: { hint: 'status | status last-cost | policy show | set <key>=<value> | set reset | header on|off | profile <batch|coding|review|research>|reset | project-template [show|create compact.at=0.5|clear]（项目模板：显式创建/清除）' },
     handler: async (invocation = {}) => {
       const raw = String(invocation.rawInput ?? '').trim();
       const resolvedSessionId = typeof sessionIdOf === 'function' ? sessionIdOf(invocation) : null;
@@ -944,6 +945,7 @@ export function createStatusCommand({ store = null, guard = null, getGuard = nul
           kind: 'error',
           text: 'Usage: /cg status [last-cost] | /cg roots | /cg policy show | /cg set <key>=<value> | /cg set reset' +
             ' | /cg header [status|on|off] | /cg compact [status|arm|disarm] | /cg profile [status|reset|<name>]' +
+            ' | /cg project-template [show|create compact.at=0.5|clear]（项目模板：显式创建/清除）' +
             '   (未指定参数时等价于 /cg status)',
         };
       }

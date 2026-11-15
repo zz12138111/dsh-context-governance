@@ -7,6 +7,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { buildPolicyState, resolveConfig } from '../src/index.js';
+import { createStatusCommand } from '../src/commands/cg-status.js';
 import { parseProjectTemplate, serializeProjectTemplate } from '../src/project-template.js';
 import { tempDir } from './helpers.mjs';
 
@@ -67,4 +68,16 @@ test('D：显式创建/清除项目模板——写 version=1、可读回、清�
   } finally {
     await fs.rm(dir, { recursive: true, force: true, maxRetries: 5 });
   }
+});
+
+test('C37⑥：/cg 帮助可见项目模板创建/清除入口（不强制 client UI）', async () => {
+  const expected = 'project-template [show|create compact.at=0.5|clear]';
+  const command = createStatusCommand({});
+  assert.ok(
+    String(command.input?.hint ?? '').includes(expected),
+    `input.hint 必须列出 ${expected}（用户可见的 help）`,
+  );
+  const unknown = await command.handler({ rawInput: 'no-such-subcommand' });
+  assert.equal(unknown.kind, 'error');
+  assert.ok(String(unknown.text).includes(expected), 'fallback usage 与 hint 同字面');
 });
