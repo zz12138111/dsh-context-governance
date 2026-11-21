@@ -1,9 +1,0 @@
-PASS C11-5-precondition-session-value :: sessionAt=0.45 source=session:A2
-PASS C11-5-resolver-honours-session :: resolver({sessionId})→at=0.45 source=session:A2（期望 0.45/session）
-PASS C11-5-resolver-switch-sessions :: resolver({sessionId:sid2})→at=0.62 source=session:A2（期望 0.62/session）
-PASS C11-5-client-sends-session-context :: fetch 带会话上下文=false 快照 URL 带 session=true
-PASS C11-5-chip-bubble-same-source :: chip 用 snapshot=true bubble 用 snapshot=true
-PASS C11-5-no-hardcoded-60 :: client 硬编码 60%=false
-PASS C11-5-snapshot-refreshes-after-rebuild :: before={"at":0.6,"source":"builtin","sessionOverride":null,"effectiveAt":"保存后生效、重启仍有效","native":0.6785,"defaultAt":0.6} after={"at":0.58,"source":"plugin","sessionOverride":null,"effectiveAt":"保存后生效、重启仍有效","native":0.6785,"defaultAt":0.6}（期望 after.at=0.58）
-
-C11③ UI 跟随会话 TOTAL 7/7 PASS

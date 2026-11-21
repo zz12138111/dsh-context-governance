@@ -40,3 +40,6 @@ desktop.ini
 
 # 记忆备份（真实内容，禁止入库）
 memory/governance.bak-*
+
+# 跑测派生输出（可由 tests\probe-*/run-at-commit.mjs 按 commit 重跑；报告证据见 TEST-*.md）
+tests/probe-*/out-*.txt

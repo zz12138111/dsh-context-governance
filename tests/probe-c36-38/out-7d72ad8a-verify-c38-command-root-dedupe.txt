@@ -1,9 +1,0 @@
-PASS C38-rc10-show-root-resolved :: rootLine="root: eb7e788f68ae908d" expected=eb7e788f68ae908d
-PASS C38-rc10-miss-marked-with-id :: show1Head=["- MEM-rc101111-20261115-0001 · [test] rc10 dedupe [miss]","count: 1"]
-PASS C38-rc10-dedupe-across-two-shows :: missRows=1（期望 1）
-PASS C38-rc10-shared-usable :: text=["shared: 0 pointer(s)"]
-PASS C38-rc10-promote-usable :: text=["context-governance memory","promoted: 1","shared: C:\\Users\\19091\\AppData\\Local\\Temp\\cg-c38rc10-aEUMJb\\home\\context-governance\\shared\\eb7e788f68ae908d"]
-PASS C38-rc10-import-legacy-usable :: text=["[context-governance] import legacy failed: no-topics"]
-PASS C38-rc10-dedupe-across-tool-path :: missRows=1（期望 1，跨命令/工具路径共享）
-
-C38 rc.10 缺口回归 TOTAL 7/7 PASS

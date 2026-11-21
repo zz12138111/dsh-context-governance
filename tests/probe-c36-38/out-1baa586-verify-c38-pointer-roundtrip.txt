@@ -1,5 +1,0 @@
-PASS C38-P2-same-open-index-has-type-status :: indexLines=["- MEM-roundtri-20261115-0001 · proposed · fact · A · C:\\Users\\19091\\AppData\\Local\\Temp\\cg-ptr-rt-IgemtX\\body.md:1","- MEM-roundtri-20261115-0002 · proposed · criterion · B · C:\\Users\\19091\\AppData\\Local\\Temp\\cg-ptr-rt-IgemtX\\body.md:2"]
-PASS C38-P2-reopen-keeps-type-status :: A={"type":"fact","status":"proposed"} B={"type":"criterion","status":"proposed"}
-PASS C38-P2-old-entries-keep-type-status-after-append :: oldLines=["- MEM-roundtri-20261115-0002 · proposed · criterion · B · C:\\Users\\19091\\AppData\\Local\\Temp\\cg-ptr-rt-IgemtX\\body.md:2","- MEM-roundtri-20261115-0001 · proposed · fact · A · C:\\Users\\19091\\AppData\\Local\\Temp\\cg-ptr-rt-IgemtX\\body.md:1"]
-
-C38 P2 指针 type/status 持久 TOTAL 3/3 PASS
